@@ -43,3 +43,8 @@ def get_weather(location: str, date: str):
         cache.set(cache_key, result, expire=60 * 60 * 24)  # 24h expiration
 
     return result
+
+# For local testing
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
