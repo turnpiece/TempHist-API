@@ -1,6 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import os
 import requests
@@ -12,7 +11,6 @@ app = FastAPI()
 
 load_dotenv()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
-print(f"Loaded API key: {API_KEY}")
 
 app = FastAPI()
 cache = Cache("weather_cache")  # directory to store cache files
@@ -78,38 +76,22 @@ def get_weather(location: str, date: str):
 
 # get a text summary
 @app.get("/summary/{location}/{month_day}")
-def get_summary(location: str, month_day: str):
-    month, day = month_day.split("-")
-    years = range(current_year - 50, current_year + 1)
-    temps = []
+async def summary(location: str, month_day: str, request: Request):
+    try:
+        month, day = map(int, month_day.split("-"))
+        today = datetime.now()
+        current_year = today.year
+        years = list(range(current_year - 50, current_year + 1))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
-    for year in years:
-        file_path = f"data/{location}/{year}.json"
-        if not os.path.exists(file_path):
-            continue
+    data = get_temperature_series(location, month, day)
 
-        with open(file_path) as f:
-            data = json.load(f)
-            for entry in data.get("days", []):
-                if entry["datetime"] == f"{year}-{month}-{day}":
-                    temp = entry.get("temp")
-                    if temp is not None:
-                        temps.append(temp)
-                    break
+    if len(data) < 2:
+        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
-    if not temps:
-        return JSONResponse(
-            content={"summary": f"No reliable historical data available for {location} on {month_day}."},
-            headers={"Access-Control-Allow-Origin": "*"}
-        )
-
-    avg = sum(temps) / len(temps)
-    summary = f"The average temperature in {location} on {month_day} over the past {len(temps)} years is {avg:.1f}°C."
-
-    return JSONResponse(
-        content={"summary": summary},
-        headers={"Access-Control-Allow-Origin": "*"}
-    )
+    summary_text = get_summary(data, f"{current_year}-{month:02d}-{day:02d}")
+    return {"summary": summary_text}
 
 def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
     def get_friendly_date(date: datetime) -> str:
@@ -176,40 +158,22 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
 
 # get the warming/cooling trend
 @app.get("/trend/{location}/{month_day}")
-def get_trend(location: str, month_day: str):
-    month, day = month_day.split("-")
-    years = range(current_year - 50, current_year + 1)
-    temps = []
+async def trend(location: str, month_day: str):
+    try:
+        month, day = map(int, month_day.split("-"))
+        today = datetime.now()
+        current_year = today.year
+        years = list(range(current_year - 50, current_year + 1))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
-    for year in years:
-        file_path = f"data/{location}/{year}.json"
-        if not os.path.exists(file_path):
-            continue
+    data = get_temperature_series(location, month, day)
 
-        with open(file_path) as f:
-            data = json.load(f)
-            for entry in data.get("days", []):
-                if entry["datetime"] == f"{year}-{month}-{day}":
-                    temp = entry.get("temp")
-                    if temp is not None:
-                        temps.append((year, temp))
-                    break
+    if len(data) < 2:
+        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
-    if not temps:
-        return JSONResponse(
-            content={"error": f"No valid temperature data found for {location} on {month_day}."},
-            status_code=404,
-            headers={"Access-Control-Allow-Origin": "*"}
-        )
-
-    x = [year for year, _ in temps]
-    y = [temp for _, temp in temps]
-    slope, intercept = linear_regression(x, y)
-
-    return JSONResponse(
-        content={"slope": slope, "units": "°C/year"},
-        headers={"Access-Control-Allow-Origin": "*"}
-    )
+    slope = calculate_trend_slope(data)
+    return {"slope": slope, "units": "°C/year"}
 
 def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     n = len(data)
