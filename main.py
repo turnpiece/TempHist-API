@@ -174,7 +174,7 @@ async def trend(location: str, month_day: str):
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
     slope = calculate_trend_slope(data)
-    return {"slope": slope, "units": "°C/year"}
+    return {"slope": slope * 10, "units": "°C/decade"}
 
 def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     n = len(data)
