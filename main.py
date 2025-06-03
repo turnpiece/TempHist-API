@@ -31,6 +31,32 @@ def fetch_weather_from_api(location: str, date: str):
         return response.json()
     return {"error": response.text, "status": response.status_code}
 
+def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str, float]]:
+    today = datetime.now()
+    current_year = today.year
+    years = list(range(current_year - 50, current_year + 1))
+
+    data = []
+    for year in years:
+        date_str = f"{year}-{month:02d}-{day:02d}"
+        cache_key = f"{location.lower()}_{date_str}"
+        if cache_key in cache:
+            weather = cache[cache_key]
+        else:
+            weather = fetch_weather_from_api(location, date_str)
+            if "error" not in weather:
+                cache.set(cache_key, weather, expire=60 * 60 * 24)
+            else:
+                continue
+
+        try:
+            temp = weather["days"][0]["temp"]
+            data.append({"x": year, "y": temp})
+        except (KeyError, IndexError, TypeError):
+            continue
+
+    return data
+
 @app.get("/weather/{location}/{date}")
 def get_weather(location: str, date: str):
     cache_key = f"{location.lower()}_{date}"
@@ -60,31 +86,7 @@ async def summary(location: str, month_day: str, request: Request):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
-    data = []
-    failed_years = []
-
-    for year in years:
-        date_str = f"{year}-{month:02d}-{day:02d}"
-        cache_key = f"{location.lower()}_{date_str}"
-        if cache_key in cache:
-            weather = cache[cache_key]
-        else:
-            weather = fetch_weather_from_api(location, date_str)
-            if "error" not in weather:
-                cache.set(cache_key, weather, expire=60 * 60 * 24)
-            else:
-                failed_years.append((year, "API error"))
-                continue
-
-        try:
-            temp = weather["days"][0]["temp"]
-            data.append({"x": year, "y": temp})
-        except (KeyError, IndexError, TypeError):
-            failed_years.append((year, "missing temperature"))
-            continue
-
-    print(f"Successfully loaded {len(data)} years of data.")
-    print("Skipped years:", failed_years)
+    data = get_temperature_series(location, month, day)
 
     if len(data) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
@@ -166,31 +168,7 @@ async def trend(location: str, month_day: str):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
-    data = []
-    failed_years = []
-
-    for year in years:
-        date_str = f"{year}-{month:02d}-{day:02d}"
-        cache_key = f"{location.lower()}_{date_str}"
-        if cache_key in cache:
-            weather = cache[cache_key]
-        else:
-            weather = fetch_weather_from_api(location, date_str)
-            if "error" not in weather:
-                cache.set(cache_key, weather, expire=60 * 60 * 24)
-            else:
-                failed_years.append((year, "API error"))
-                continue
-
-        try:
-            temp = weather["days"][0]["temp"]
-            data.append({"x": year, "y": temp})
-        except (KeyError, IndexError, TypeError):
-            failed_years.append((year, "missing temperature"))
-            continue
-
-    print(f"Successfully loaded {len(data)} years of data.")
-    print("Skipped years:", failed_years)
+    data = get_temperature_series(location, month, day)
 
     if len(data) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
