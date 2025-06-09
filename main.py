@@ -11,6 +11,7 @@ app = FastAPI()
 
 load_dotenv()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 
 app = FastAPI()
 cache = Cache("weather_cache")  # directory to store cache files
@@ -161,9 +162,6 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
 async def trend(location: str, month_day: str):
     try:
         month, day = map(int, month_day.split("-"))
-        today = datetime.now()
-        current_year = today.year
-        years = list(range(current_year - 50, current_year + 1))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
@@ -188,6 +186,43 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     numerator = n * sum_xy - sum_x * sum_y
     denominator = n * sum_xx - sum_x ** 2
     return round(numerator / denominator, 3) if denominator != 0 else 0.0
+
+@app.get("/forecast/{location}")
+async def get_forecast(location: str):
+    if not OPENWEATHER_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenWeatherMap API key not configured")
+    
+    url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Get today's date
+        today = datetime.now().date()
+        
+        # Filter forecasts for today
+        today_forecasts = [
+            item for item in data['list']
+            if datetime.fromtimestamp(item['dt']).date() == today
+        ]
+        
+        if not today_forecasts:
+            raise HTTPException(status_code=404, detail="No forecast data available for today")
+        
+        # Calculate average temperature
+        avg_temp = sum(item['main']['temp'] for item in today_forecasts) / len(today_forecasts)
+        
+        return {
+            "location": location,
+            "date": today.strftime("%Y-%m-%d"),
+            "average_temperature": round(avg_temp, 1),
+            "unit": "celsius"
+        }
+        
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching forecast data: {str(e)}")
 
 # For local testing
 if __name__ == "__main__":
