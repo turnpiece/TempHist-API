@@ -31,6 +31,57 @@ def fetch_weather_from_api(location: str, date: str):
         return response.json()
     return {"error": response.text, "status": response.status_code}
 
+def get_forecast_data(location: str, date: datetime.date) -> Dict:
+    """
+    Get forecast data for a specific location and date.
+    Returns cached data if available, otherwise fetches from OpenWeatherMap API.
+    """
+    if not OPENWEATHER_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenWeatherMap API key not configured")
+    
+    date_str = date.strftime("%Y-%m-%d")
+    cache_key = f"forecast_{location.lower()}_{date_str}"
+    
+    # Check cache first
+    if cache_key in cache:
+        print(f"Cache hit: {cache_key}")
+        return cache[cache_key]
+    
+    print(f"Cache miss: {cache_key} — fetching from API")
+    url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Filter forecasts for the specified date
+        date_forecasts = [
+            item for item in data['list']
+            if datetime.fromtimestamp(item['dt']).date() == date
+        ]
+        
+        if not date_forecasts:
+            raise HTTPException(status_code=404, detail=f"No forecast data available for {date_str}")
+        
+        # Calculate average temperature
+        avg_temp = sum(item['main']['temp'] for item in date_forecasts) / len(date_forecasts)
+        
+        result = {
+            "location": location,
+            "date": date_str,
+            "average_temperature": round(avg_temp, 1),
+            "unit": "celsius"
+        }
+        
+        # Cache the result for 24 hours
+        cache.set(cache_key, result, expire=60 * 60 * 24)
+        
+        return result
+        
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching forecast data: {str(e)}")
+
 def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str, float]]:
     today = datetime.now()
     current_year = today.year
@@ -40,6 +91,18 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
     for year in years:
         date_str = f"{year}-{month:02d}-{day:02d}"
         cache_key = f"{location.lower()}_{date_str}"
+        
+        # If this is today's date, use the forecast data
+        if year == current_year and month == today.month and day == today.day:
+            try:
+                forecast_data = get_forecast_data(location, today.date())
+                data.append({"x": year, "y": forecast_data["average_temperature"]})
+                continue
+            except Exception as e:
+                print(f"Error fetching forecast: {str(e)}")
+                # Fall back to historical data if forecast fails
+        
+        # Use historical data for all other dates
         if cache_key in cache:
             weather = cache[cache_key]
         else:
@@ -189,52 +252,8 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
 
 @app.get("/forecast/{location}")
 async def get_forecast(location: str):
-    if not OPENWEATHER_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenWeatherMap API key not configured")
-    
-    # Create cache key using location and today's date
     today = datetime.now().date()
-    cache_key = f"forecast_{location.lower()}_{today.strftime('%Y-%m-%d')}"
-    
-    # Check cache first
-    if cache_key in cache:
-        print(f"Cache hit: {cache_key}")
-        return cache[cache_key]
-    
-    print(f"Cache miss: {cache_key} — fetching from API")
-    url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
-    
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Filter forecasts for today
-        today_forecasts = [
-            item for item in data['list']
-            if datetime.fromtimestamp(item['dt']).date() == today
-        ]
-        
-        if not today_forecasts:
-            raise HTTPException(status_code=404, detail="No forecast data available for today")
-        
-        # Calculate average temperature
-        avg_temp = sum(item['main']['temp'] for item in today_forecasts) / len(today_forecasts)
-        
-        result = {
-            "location": location,
-            "date": today.strftime("%Y-%m-%d"),
-            "average_temperature": round(avg_temp, 1),
-            "unit": "celsius"
-        }
-        
-        # Cache the result for 24 hours
-        cache.set(cache_key, result, expire=60 * 60 * 24)
-        
-        return result
-        
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching forecast data: {str(e)}")
+    return get_forecast_data(location, today)
 
 # For local testing
 if __name__ == "__main__":
