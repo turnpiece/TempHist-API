@@ -192,15 +192,22 @@ async def get_forecast(location: str):
     if not OPENWEATHER_API_KEY:
         raise HTTPException(status_code=500, detail="OpenWeatherMap API key not configured")
     
+    # Create cache key using location and today's date
+    today = datetime.now().date()
+    cache_key = f"forecast_{location.lower()}_{today.strftime('%Y-%m-%d')}"
+    
+    # Check cache first
+    if cache_key in cache:
+        print(f"Cache hit: {cache_key}")
+        return cache[cache_key]
+    
+    print(f"Cache miss: {cache_key} — fetching from API")
     url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
     
     try:
         response = requests.get(url)
         response.raise_for_status()
         data = response.json()
-        
-        # Get today's date
-        today = datetime.now().date()
         
         # Filter forecasts for today
         today_forecasts = [
@@ -214,12 +221,17 @@ async def get_forecast(location: str):
         # Calculate average temperature
         avg_temp = sum(item['main']['temp'] for item in today_forecasts) / len(today_forecasts)
         
-        return {
+        result = {
             "location": location,
             "date": today.strftime("%Y-%m-%d"),
             "average_temperature": round(avg_temp, 1),
             "unit": "celsius"
         }
+        
+        # Cache the result for 24 hours
+        cache.set(cache_key, result, expire=60 * 60 * 24)
+        
+        return result
         
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Error fetching forecast data: {str(e)}")
