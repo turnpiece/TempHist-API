@@ -16,9 +16,17 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 app = FastAPI()
 cache = Cache("weather_cache")  # directory to store cache files
 
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",  # Local development
+        "http://localhost:5173",  # Vite default port
+        "https://temphist.onrender.com",  # Render frontend
+        "https://*.onrender.com",  # Any Render subdomain
+        "https://temphist.com",  # Main domain
+        "https://www.temphist.com",  # www subdomain
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
