@@ -151,6 +151,8 @@ def get_weather(location: str, date: str):
 async def summary(location: str, month_day: str, request: Request):
     try:
         month, day = map(int, month_day.split("-"))
+        today = datetime.now()
+        current_year = today.year
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
