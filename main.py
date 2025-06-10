@@ -143,9 +143,6 @@ def get_weather(location: str, date: str):
 async def summary(location: str, month_day: str, request: Request):
     try:
         month, day = map(int, month_day.split("-"))
-        today = datetime.now()
-        current_year = today.year
-        years = list(range(current_year - 50, current_year + 1))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
@@ -187,7 +184,9 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
             if last_warmer:
                 years_since = int(latest['x'] - last_warmer)
                 if years_since > 1:
-                    if years_since <= 10:
+                    if years_since <= 2:
+                        warm_summary = f"It's not as warm as {last_warmer}."
+                    elif years_since <= 10:
                         warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
                     else:
                         warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
@@ -199,6 +198,8 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
             if last_colder:
                 years_since = int(latest['x'] - last_colder)
                 if years_since > 1:
+                    if years_since <= 2:
+                        cold_summary = f"It's not as cold as {last_colder}."
                     if years_since <= 10:
                         cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
                     else:
@@ -235,6 +236,32 @@ async def trend(location: str, month_day: str):
 
     slope = calculate_trend_slope(data)
     return {"slope": slope, "units": "°C/year"}
+
+# get the average temperature
+@app.get("/average/{location}/{month_day}")
+async def average(location: str, month_day: str):
+    try:
+        month, day = map(int, month_day.split("-"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
+
+    data = get_temperature_series(location, month, day)
+
+    if len(data) < 2:
+        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
+
+    # Calculate average temperature
+    avg_temp = sum(point['y'] for point in data) / len(data)
+    
+    return {
+        "average": round(avg_temp, 1),
+        "unit": "celsius",
+        "data_points": len(data),
+        "year_range": {
+            "start": data[0]['x'],
+            "end": data[-1]['x']
+        }
+    }
 
 def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     n = len(data)
