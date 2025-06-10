@@ -175,15 +175,17 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
             return "Not enough data to generate summary."
 
         latest = data[-1]
-        previous = data[:-1]
-        avg_prev = sum(p['y'] for p in previous) / len(previous)
-        diff = latest['y'] - avg_prev
+        # Calculate average using all data points
+        avg_temp = sum(p['y'] for p in data) / len(data)
+        diff = latest['y'] - avg_temp
         rounded_diff = round(diff, 1)
 
         friendly_date = get_friendly_date(date)
         warm_summary = ''
         cold_summary = ''
 
+        # For historical comparisons, use all previous years
+        previous = data[:-1]
         is_warmest = all(latest['y'] > p['y'] for p in previous)
         is_coldest = all(latest['y'] < p['y'] for p in previous)
 
