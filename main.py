@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
 import requests
-from diskcache import Cache
-from datetime import datetime
+import redis
+import json
+from datetime import datetime, timedelta
 from typing import List, Dict
 
 app = FastAPI()
@@ -12,9 +13,10 @@ app = FastAPI()
 load_dotenv()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 app = FastAPI()
-cache = Cache("weather_cache")  # directory to store cache files
+redis_client = redis.from_url(REDIS_URL)
 
 # Configure CORS
 app.add_middleware(
@@ -51,9 +53,10 @@ def get_forecast_data(location: str, date: datetime.date) -> Dict:
     cache_key = f"forecast_{location.lower()}_{date_str}"
     
     # Check cache first
-    if cache_key in cache:
+    cached_data = redis_client.get(cache_key)
+    if cached_data:
         print(f"Cache hit: {cache_key}")
-        return cache[cache_key]
+        return json.loads(cached_data)
     
     print(f"Cache miss: {cache_key} — fetching from API")
     url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
@@ -83,7 +86,7 @@ def get_forecast_data(location: str, date: datetime.date) -> Dict:
         }
         
         # Cache the result for 24 hours
-        cache.set(cache_key, result, expire=60 * 60 * 24)
+        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
         
         return result
         
@@ -111,12 +114,13 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
                 # Fall back to historical data if forecast fails
         
         # Use historical data for all other dates
-        if cache_key in cache:
-            weather = cache[cache_key]
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            weather = json.loads(cached_data)
         else:
             weather = fetch_weather_from_api(location, date_str)
             if "error" not in weather:
-                cache.set(cache_key, weather, expire=60 * 60 * 24)
+                redis_client.setex(cache_key, timedelta(hours=24), json.dumps(weather))
             else:
                 continue
 
@@ -133,16 +137,17 @@ def get_weather(location: str, date: str):
     cache_key = f"{location.lower()}_{date}"
 
     # Check cache first
-    if cache_key in cache:
+    cached_data = redis_client.get(cache_key)
+    if cached_data:
         print(f"Cache hit: {cache_key}")
-        return cache[cache_key]
+        return json.loads(cached_data)
 
     print(f"Cache miss: {cache_key} — fetching from API")
     result = fetch_weather_from_api(location, date)
 
     # Only cache successful results
     if "error" not in result:
-        cache.set(cache_key, result, expire=60 * 60 * 24)  # 24h expiration
+        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
 
     return result
 
@@ -293,6 +298,20 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
 async def get_forecast(location: str):
     today = datetime.now().date()
     return get_forecast_data(location, today)
+
+@app.get("/test-redis")
+async def test_redis():
+    try:
+        # Try to set a test value
+        redis_client.setex("test_key", timedelta(minutes=5), "test_value")
+        # Try to get the test value
+        test_value = redis_client.get("test_key")
+        if test_value and test_value.decode('utf-8') == "test_value":
+            return {"status": "success", "message": "Redis connection is working"}
+        else:
+            return {"status": "error", "message": "Redis connection test failed"}
+    except Exception as e:
+        return {"status": "error", "message": f"Redis connection error: {str(e)}"}
 
 # For local testing
 if __name__ == "__main__":

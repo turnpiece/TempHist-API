@@ -2,4 +2,4 @@ fastapi
 uvicorn
 requests
 python-dotenv
-diskcache
+redis
