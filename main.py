@@ -8,8 +8,6 @@ import json
 from datetime import datetime, timedelta
 from typing import List, Dict
 
-app = FastAPI()
-
 load_dotenv()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
@@ -31,9 +29,31 @@ app.add_middleware(
         "https://www.temphist.com",  # www subdomain
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,  # Cache preflight requests for 10 minutes
 )
+
+@app.api_route("/test-cors", methods=["GET", "OPTIONS"])
+async def test_cors():
+    """Test endpoint for CORS"""
+    return {"message": "CORS is working"}
+
+@app.api_route("/", methods=["GET", "OPTIONS"])
+async def root():
+    """Root endpoint that returns API information"""
+    return {
+        "name": "Temperature History API",
+        "version": "1.0.0",
+        "endpoints": [
+            "/average/{location}/{month_day}",
+            "/trend/{location}/{month_day}",
+            "/weather/{location}/{date}",
+            "/summary/{location}/{month_day}",
+            "/forecast/{location}"
+        ]
+    }
 
 def fetch_weather_from_api(location: str, date: str):
     url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date}?unitGroup=metric&include=days&key={API_KEY}"
@@ -108,6 +128,7 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
         if year == current_year and month == today.month and day == today.day:
             try:
                 forecast_data = get_forecast_data(location, today.date())
+                # Use the forecast temperature for the current day
                 data.append({"x": year, "y": forecast_data["average_temperature"]})
                 continue
             except Exception as e:
@@ -126,7 +147,9 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
                 continue
 
         try:
-            temp = weather["days"][0]["temp"]
+            # For historical data, use the maximum temperature of the day
+            # This gives us a better comparison with the forecast temperature
+            temp = weather["days"][0]["tempmax"]
             data.append({"x": year, "y": temp})
         except (KeyError, IndexError, TypeError):
             continue
@@ -164,9 +187,17 @@ async def summary(location: str, month_day: str, request: Request):
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
     data = get_temperature_series(location, month, day)
-
+    print(f"Summary data for {location} on {month_day}:")
+    print(f"Number of data points: {len(data)}")
+    print(f"Date range: {data[0]['x']} to {data[-1]['x']}")
+    print(f"Current temperature: {data[-1]['y']}°C")
+    
     if len(data) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
+
+    avg_temp = calculate_historical_average(data)
+    print(f"Calculated average: {avg_temp}°C")
+    print(f"Temperature difference: {round(data[-1]['y'] - avg_temp, 1)}°C")
 
     summary_text = get_summary(data, f"{current_year}-{month:02d}-{day:02d}")
     return {"summary": summary_text}
@@ -258,8 +289,18 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
 async def trend(location: str, month_day: str):
     try:
         month, day = map(int, month_day.split("-"))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
+        # Validate month and day
+        if not (1 <= month <= 12):
+            raise ValueError("Month must be between 1 and 12")
+        if not (1 <= day <= 31):
+            raise ValueError("Day must be between 1 and 31")
+        # Additional validation for specific months
+        if month in [4, 6, 9, 11] and day > 30:
+            raise ValueError(f"Month {month} has only 30 days")
+        if month == 2 and day > 29:
+            raise ValueError("February has only 29 days")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Create cache key for the trend
     cache_key = f"trend_{location.lower()}_{month:02d}_{day:02d}"
@@ -287,12 +328,22 @@ async def trend(location: str, month_day: str):
     return result
 
 # get the average temperature
-@app.get("/average/{location}/{month_day}")
+@app.api_route("/average/{location}/{month_day}", methods=["GET", "OPTIONS"])
 async def average(location: str, month_day: str):
     try:
         month, day = map(int, month_day.split("-"))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
+        # Validate month and day
+        if not (1 <= month <= 12):
+            raise ValueError("Month must be between 1 and 12")
+        if not (1 <= day <= 31):
+            raise ValueError("Day must be between 1 and 31")
+        # Additional validation for specific months
+        if month in [4, 6, 9, 11] and day > 30:
+            raise ValueError(f"Month {month} has only 30 days")
+        if month == 2 and day > 29:
+            raise ValueError("February has only 29 days")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Create cache key for the average
     cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
