@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 *.pyc
 weather_cache/
+app.js
