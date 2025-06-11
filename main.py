@@ -73,13 +73,14 @@ def get_forecast_data(location: str, date: datetime.date) -> Dict:
     date_str = date.strftime("%Y-%m-%d")
     cache_key = f"forecast_{location.lower()}_{date_str}"
     
-    # Check cache first
-    cached_data = redis_client.get(cache_key)
-    if cached_data:
-        print(f"Cache hit: {cache_key}")
-        return json.loads(cached_data)
+    # Check cache first if caching is enabled
+    if CACHE_ENABLED:
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            print(f"Cache hit: {cache_key}")
+            return json.loads(cached_data)
+        print(f"Cache miss: {cache_key} — fetching from API")
     
-    print(f"Cache miss: {cache_key} — fetching from API")
     url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
     
     try:
@@ -106,8 +107,9 @@ def get_forecast_data(location: str, date: datetime.date) -> Dict:
             "unit": "celsius"
         }
         
-        # Cache the result for 24 hours
-        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+        # Cache the result if caching is enabled
+        if CACHE_ENABLED:
+            redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
         
         return result
         
@@ -136,14 +138,19 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
                 # Fall back to historical data if forecast fails
         
         # Use historical data for all other dates
-        cached_data = redis_client.get(cache_key)
-        if cached_data:
-            weather = json.loads(cached_data)
+        if CACHE_ENABLED:
+            cached_data = redis_client.get(cache_key)
+            if cached_data:
+                weather = json.loads(cached_data)
+            else:
+                weather = fetch_weather_from_api(location, date_str)
+                if "error" not in weather:
+                    redis_client.setex(cache_key, timedelta(hours=24), json.dumps(weather))
+                else:
+                    continue
         else:
             weather = fetch_weather_from_api(location, date_str)
-            if "error" not in weather:
-                redis_client.setex(cache_key, timedelta(hours=24), json.dumps(weather))
-            else:
+            if "error" in weather:
                 continue
 
         try:
