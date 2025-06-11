@@ -169,6 +169,19 @@ async def summary(location: str, month_day: str, request: Request):
     summary_text = get_summary(data, f"{current_year}-{month:02d}-{day:02d}")
     return {"summary": summary_text}
 
+def calculate_historical_average(data: List[Dict[str, float]]) -> float:
+    """
+    Calculate the average temperature using only historical data (excluding current year).
+    Returns the average temperature rounded to 1 decimal place.
+    """
+    if not data or len(data) < 2:
+        return 0.0
+    
+    # Use all data except the most recent (current year)
+    historical_data = data[:-1]
+    avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
+    return round(avg_temp, 1)
+
 def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
     def get_friendly_date(date: datetime) -> str:
         day = date.day
@@ -180,9 +193,8 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
             return "Not enough data to generate summary."
 
         latest = data[-1]
-        # Calculate average using only historical data (excluding current year)
-        historical_data = data[:-1]
-        avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
+        # Use the new function to calculate average
+        avg_temp = calculate_historical_average(data)
         diff = latest['y'] - avg_temp
         rounded_diff = round(diff, 1)
 
@@ -263,16 +275,26 @@ async def average(location: str, month_day: str):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
+    # Create cache key for the average
+    cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
+    
+    # Check cache first
+    cached_data = redis_client.get(cache_key)
+    if cached_data:
+        print(f"Cache hit: {cache_key}")
+        return json.loads(cached_data)
+
+    print(f"Cache miss: {cache_key} — calculating average")
     data = get_temperature_series(location, month, day)
 
     if len(data) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
-    # Calculate average temperature
-    avg_temp = sum(point['y'] for point in data) / len(data)
+    # Calculate average temperature using the new function
+    avg_temp = calculate_historical_average(data)
     
-    return {
-        "average": round(avg_temp, 1),
+    result = {
+        "average": avg_temp,
         "unit": "celsius",
         "data_points": len(data),
         "year_range": {
@@ -280,6 +302,11 @@ async def average(location: str, month_day: str):
             "end": data[-1]['x']
         }
     }
+    
+    # Cache the result for 24 hours
+    redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+    
+    return result
 
 def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     n = len(data)
