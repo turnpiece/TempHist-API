@@ -97,13 +97,13 @@ def get_forecast_data(location: str, date: datetime.date) -> Dict:
         if not date_forecasts:
             raise HTTPException(status_code=404, detail=f"No forecast data available for {date_str}")
         
-        # Calculate maximum temperature for the day
-        max_temp = max(item['main']['temp'] for item in date_forecasts)
+        # Calculate average temperature for the day
+        avg_temp = sum(item['main']['temp'] for item in date_forecasts) / len(date_forecasts)
         
         result = {
             "location": location,
             "date": date_str,
-            "average_temperature": round(max_temp, 1),  # Using max_temp instead of average
+            "average_temperature": round(avg_temp, 1),  # Using average temperature
             "unit": "celsius"
         }
         
