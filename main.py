@@ -62,7 +62,7 @@ def fetch_weather_from_api(location: str, date: str):
         return response.json()
     return {"error": response.text, "status": response.status_code}
 
-def get_forecast_data(location: str, date: datetime.date) -> Dict:
+def get_forecast_data(location: str, date: str) -> Dict:
     """
     Get forecast data for a specific location and date.
     Returns cached data if available, otherwise fetches from OpenWeatherMap API.
@@ -88,17 +88,33 @@ def get_forecast_data(location: str, date: datetime.date) -> Dict:
         response.raise_for_status()
         data = response.json()
         
+        print("\nOpenWeatherMap API response:")
+        print(f"Number of forecast items: {len(data['list'])}")
+        print(f"First forecast time: {datetime.fromtimestamp(data['list'][0]['dt'])}")
+        print(f"Last forecast time: {datetime.fromtimestamp(data['list'][-1]['dt'])}")
+        
         # Filter forecasts for the specified date
         date_forecasts = [
             item for item in data['list']
             if datetime.fromtimestamp(item['dt']).date() == date
+            and datetime.fromtimestamp(item['dt']) <= datetime.now()
         ]
         
         if not date_forecasts:
+            print(f"No forecasts found for {date_str}")
+            print("Available dates:")
+            for item in data['list']:
+                print(f"- {datetime.fromtimestamp(item['dt'])}")
             raise HTTPException(status_code=404, detail=f"No forecast data available for {date_str}")
         
-        # Calculate average temperature for the day
+        # Debug print all forecast temperatures
+        print("\nOpenWeatherMap forecast temperatures:")
+        for item in date_forecasts:
+            print(f"Time: {datetime.fromtimestamp(item['dt'])}, Temp: {item['main']['temp']}°C")
+        
+        # Calculate average temperature for the day up to now
         avg_temp = sum(item['main']['temp'] for item in date_forecasts) / len(date_forecasts)
+        print(f"Calculated average up to now: {avg_temp}°C")
         
         result = {
             "location": location,
@@ -129,7 +145,7 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
         # If this is today's date, use the forecast data
         if year == current_year and month == today.month and day == today.day:
             try:
-                forecast_data = get_forecast_data(location, today.date())
+                forecast_data = get_forecast_data(location, datetime(year, month, day).date())
                 # Use the forecast temperature for the current day
                 data.append({"x": year, "y": forecast_data["average_temperature"]})
                 continue
