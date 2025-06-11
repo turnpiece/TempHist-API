@@ -14,6 +14,7 @@ load_dotenv()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 
 app = FastAPI()
 redis_client = redis.from_url(REDIS_URL)
@@ -136,17 +137,18 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
 def get_weather(location: str, date: str):
     cache_key = f"{location.lower()}_{date}"
 
-    # Check cache first
-    cached_data = redis_client.get(cache_key)
-    if cached_data:
-        print(f"Cache hit: {cache_key}")
-        return json.loads(cached_data)
+    # Check cache first if caching is enabled
+    if CACHE_ENABLED:
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            print(f"Cache hit: {cache_key}")
+            return json.loads(cached_data)
+        print(f"Cache miss: {cache_key} — fetching from API")
 
-    print(f"Cache miss: {cache_key} — fetching from API")
     result = fetch_weather_from_api(location, date)
 
-    # Only cache successful results
-    if "error" not in result:
+    # Only cache successful results if caching is enabled
+    if CACHE_ENABLED and "error" not in result:
         redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
 
     return result
@@ -259,13 +261,30 @@ async def trend(location: str, month_day: str):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
+    # Create cache key for the trend
+    cache_key = f"trend_{location.lower()}_{month:02d}_{day:02d}"
+    
+    # Check cache first if caching is enabled
+    if CACHE_ENABLED:
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            print(f"Cache hit: {cache_key}")
+            return json.loads(cached_data)
+        print(f"Cache miss: {cache_key} — calculating trend")
+
     data = get_temperature_series(location, month, day)
 
     if len(data) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
     slope = calculate_trend_slope(data)
-    return {"slope": slope, "units": "°C/year"}
+    result = {"slope": slope, "units": "°C/year"}
+    
+    # Cache the result if caching is enabled
+    if CACHE_ENABLED:
+        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+    
+    return result
 
 # get the average temperature
 @app.get("/average/{location}/{month_day}")
@@ -278,13 +297,14 @@ async def average(location: str, month_day: str):
     # Create cache key for the average
     cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
     
-    # Check cache first
-    cached_data = redis_client.get(cache_key)
-    if cached_data:
-        print(f"Cache hit: {cache_key}")
-        return json.loads(cached_data)
+    # Check cache first if caching is enabled
+    if CACHE_ENABLED:
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            print(f"Cache hit: {cache_key}")
+            return json.loads(cached_data)
+        print(f"Cache miss: {cache_key} — calculating average")
 
-    print(f"Cache miss: {cache_key} — calculating average")
     data = get_temperature_series(location, month, day)
 
     if len(data) < 2:
@@ -303,8 +323,9 @@ async def average(location: str, month_day: str):
         }
     }
     
-    # Cache the result for 24 hours
-    redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+    # Cache the result if caching is enabled
+    if CACHE_ENABLED:
+        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
     
     return result
 
