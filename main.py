@@ -180,8 +180,9 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
             return "Not enough data to generate summary."
 
         latest = data[-1]
-        # Calculate average using all data points
-        avg_temp = sum(p['y'] for p in data) / len(data)
+        # Calculate average using only historical data (excluding current year)
+        historical_data = data[:-1]
+        avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
         diff = latest['y'] - avg_temp
         rounded_diff = round(diff, 1)
 
