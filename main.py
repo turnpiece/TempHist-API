@@ -150,10 +150,20 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
             # For historical data, use the maximum temperature of the day
             # This gives us a better comparison with the forecast temperature
             temp = weather["days"][0]["tempmax"]
+            print(f"Year {year}: temp={weather['days'][0]['temp']}, tempmax={temp}, tempmin={weather['days'][0]['tempmin']}")
             data.append({"x": year, "y": temp})
-        except (KeyError, IndexError, TypeError):
+        except (KeyError, IndexError, TypeError) as e:
+            print(f"Error processing data for {date_str}: {str(e)}")
             continue
 
+    # Print summary of collected data
+    print("\nData summary:")
+    print(f"Total data points: {len(data)}")
+    if data:
+        temps = [d['y'] for d in data]
+        print(f"Temperature range: {min(temps):.1f}°C to {max(temps):.1f}°C")
+        print(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
+    
     return data
 
 @app.get("/weather/{location}/{date}")
