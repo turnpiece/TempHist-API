@@ -64,11 +64,11 @@ def fetch_weather_from_api(location: str, date: str):
 
 def get_forecast_data(location: str, date: str) -> Dict:
     """
-    Get forecast data for a specific location and date.
-    Returns cached data if available, otherwise fetches from OpenWeatherMap API.
+    Get forecast data for a specific location and date using Visual Crossing API.
+    Returns cached data if available, otherwise fetches from Visual Crossing API.
     """
-    if not OPENWEATHER_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenWeatherMap API key not configured")
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="Visual Crossing API key not configured")
     
     date_str = date.strftime("%Y-%m-%d")
     cache_key = f"forecast_{location.lower()}_{date_str}"
@@ -81,45 +81,29 @@ def get_forecast_data(location: str, date: str) -> Dict:
             return json.loads(cached_data)
         print(f"Cache miss: {cache_key} — fetching from API")
     
-    url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&appid={OPENWEATHER_API_KEY}&units=metric"
+    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date_str}?unitGroup=metric&include=days&key={API_KEY}"
+    print(f"Fetching forecast from URL: {url}")
     
     try:
         response = requests.get(url)
+        print(f"API Response Status: {response.status_code}")
+        print(f"API Response Headers: {response.headers}")
         response.raise_for_status()
         data = response.json()
+        print(f"API Response Data: {json.dumps(data, indent=2)}")
         
-        print("\nOpenWeatherMap API response:")
-        print(f"Number of forecast items: {len(data['list'])}")
-        print(f"First forecast time: {datetime.fromtimestamp(data['list'][0]['dt'])}")
-        print(f"Last forecast time: {datetime.fromtimestamp(data['list'][-1]['dt'])}")
-        
-        # Filter forecasts for the specified date
-        date_forecasts = [
-            item for item in data['list']
-            if datetime.fromtimestamp(item['dt']).date() == date
-            and datetime.fromtimestamp(item['dt']) <= datetime.now()
-        ]
-        
-        if not date_forecasts:
-            print(f"No forecasts found for {date_str}")
-            print("Available dates:")
-            for item in data['list']:
-                print(f"- {datetime.fromtimestamp(item['dt'])}")
+        if not data.get('days'):
+            print(f"No days data found in response for {date_str}")
             raise HTTPException(status_code=404, detail=f"No forecast data available for {date_str}")
         
-        # Debug print all forecast temperatures
-        print("\nOpenWeatherMap forecast temperatures:")
-        for item in date_forecasts:
-            print(f"Time: {datetime.fromtimestamp(item['dt'])}, Temp: {item['main']['temp']}°C")
-        
-        # Calculate average temperature for the day up to now
-        avg_temp = sum(item['main']['temp'] for item in date_forecasts) / len(date_forecasts)
-        print(f"Calculated average up to now: {avg_temp}°C")
+        # Get the first day's data (since we're requesting a specific date)
+        day_data = data['days'][0]
+        print(f"Day data: {json.dumps(day_data, indent=2)}")
         
         result = {
             "location": location,
             "date": date_str,
-            "average_temperature": round(avg_temp, 1),  # Using average temperature
+            "average_temperature": round(day_data['temp'], 1),
             "unit": "celsius"
         }
         
@@ -130,7 +114,11 @@ def get_forecast_data(location: str, date: str) -> Dict:
         return result
         
     except requests.exceptions.RequestException as e:
+        print(f"Request error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching forecast data: {str(e)}")
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str, float]]:
     today = datetime.now()

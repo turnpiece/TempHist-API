@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 weather_cache/
 app.js
+server.js
