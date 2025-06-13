@@ -120,12 +120,13 @@ def get_forecast_data(location: str, date: str) -> Dict:
         print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str, float]]:
+def get_temperature_series(location: str, month: int, day: int) -> Dict:
     today = datetime.now()
     current_year = today.year
     years = list(range(current_year - 50, current_year + 1))
 
     data = []
+    missing_years = []
     for year in years:
         date_str = f"{year}-{month:02d}-{day:02d}"
         cache_key = f"{location.lower()}_{date_str}"
@@ -139,7 +140,8 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
                 continue
             except Exception as e:
                 print(f"Error fetching forecast: {str(e)}")
-                # Fall back to historical data if forecast fails
+                missing_years.append({"year": year, "reason": "forecast_failed"})
+                continue
         
         # Use historical data for all other dates
         if CACHE_ENABLED:
@@ -151,10 +153,12 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
                 if "error" not in weather:
                     redis_client.setex(cache_key, timedelta(hours=24), json.dumps(weather))
                 else:
+                    missing_years.append({"year": year, "reason": "api_error"})
                     continue
         else:
             weather = fetch_weather_from_api(location, date_str)
             if "error" in weather:
+                missing_years.append({"year": year, "reason": "api_error"})
                 continue
 
         try:
@@ -164,6 +168,7 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
             data.append({"x": year, "y": temp})
         except (KeyError, IndexError, TypeError) as e:
             print(f"Error processing data for {date_str}: {str(e)}")
+            missing_years.append({"year": year, "reason": "data_processing_error"})
             continue
 
     # Print summary of collected data
@@ -171,10 +176,19 @@ def get_temperature_series(location: str, month: int, day: int) -> List[Dict[str
     print(f"Total data points: {len(data)}")
     if data:
         temps = [d['y'] for d in data]
-        print(f"Temperature range: {min(temps):.1f}°C to {max(temps):.1f}°C")
-        print(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
+        if temps:  # Add check to ensure temps list is not empty
+            print(f"Temperature range: {min(temps):.1f}°C to {max(temps):.1f}°C")
+            print(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
     
-    return data
+    return {
+        "data": data,
+        "metadata": {
+            "total_years": len(years),
+            "available_years": len(data),
+            "missing_years": missing_years,
+            "completeness": round(len(data) / len(years) * 100, 1) if years else 0
+        }
+    }
 
 @app.get("/weather/{location}/{date}")
 def get_weather(location: str, date: str):
@@ -208,18 +222,18 @@ async def summary(location: str, month_day: str, request: Request):
 
     data = get_temperature_series(location, month, day)
     print(f"Summary data for {location} on {month_day}:")
-    print(f"Number of data points: {len(data)}")
-    print(f"Date range: {data[0]['x']} to {data[-1]['x']}")
-    print(f"Current temperature: {data[-1]['y']}°C")
+    print(f"Number of data points: {len(data['data'])}")
+    print(f"Date range: {data['data'][0]['x']} to {data['data'][-1]['x']}")
+    print(f"Current temperature: {data['data'][-1]['y']}°C")
     
-    if len(data) < 2:
+    if len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
-    avg_temp = calculate_historical_average(data)
+    avg_temp = calculate_historical_average(data['data'])
     print(f"Calculated average: {avg_temp}°C")
-    print(f"Temperature difference: {round(data[-1]['y'] - avg_temp, 1)}°C")
+    print(f"Temperature difference: {round(data['data'][-1]['y'] - avg_temp, 1)}°C")
 
-    summary_text = get_summary(data, f"{current_year}-{month:02d}-{day:02d}")
+    summary_text = get_summary(data['data'], f"{current_year}-{month:02d}-{day:02d}")
     return {"summary": summary_text}
 
 def calculate_historical_average(data: List[Dict[str, float]]) -> float:
@@ -255,10 +269,13 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
         warm_summary = ''
         cold_summary = ''
 
+        # Today's temperature
+        temperature = f"{latest['y']}°C."
+
         # For historical comparisons, use all previous years
         previous = data[:-1]
-        is_warmest = all(latest['y'] > p['y'] for p in previous)
-        is_coldest = all(latest['y'] < p['y'] for p in previous)
+        is_warmest = all(latest['y'] >= p['y'] for p in previous)
+        is_coldest = all(latest['y'] <= p['y'] for p in previous)
 
         if is_warmest:
             warm_summary = f"This is the warmest {friendly_date} on record."
@@ -267,8 +284,8 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
             if last_warmer:
                 years_since = int(latest['x'] - last_warmer)
                 if years_since > 1:
-                    if years_since <= 2:
-                        warm_summary = f"It's not as warm as {last_warmer}."
+                    if years_since == 2:
+                        warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
                     elif years_since <= 10:
                         warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
                     else:
@@ -281,8 +298,8 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
             if last_colder:
                 years_since = int(latest['x'] - last_colder)
                 if years_since > 1:
-                    if years_since <= 2:
-                        cold_summary = f"It's not as cold as {last_colder}."
+                    if years_since == 2:
+                        cold_summary = f"It's colder than last year but not as cold as {last_colder}."
                     if years_since <= 10:
                         cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
                     else:
@@ -291,11 +308,21 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
         if abs(diff) < 0.05:
             avg_summary = "It is about average for this date."
         elif diff > 0:
-            avg_summary = f"It is {rounded_diff}°C warmer than average today."
-        else:
-            avg_summary = f"It is {abs(rounded_diff)}°C cooler than average today."
+            if cold_summary == '':
+                avg_summary = "It is"
+            else:
+                avg_summary = "However, it is"
 
-        return " ".join(filter(None, [warm_summary, cold_summary, avg_summary]))
+            avg_summary += f" {rounded_diff}°C warmer than average today."
+        else:
+            if warm_summary == '':
+                avg_summary = "It is"
+            else:
+                avg_summary = "However, it is"
+
+            avg_summary += f" {abs(rounded_diff)}°C cooler than average today."
+
+        return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
     try:
         date = datetime.strptime(date_str, "%Y-%m-%d")
@@ -335,10 +362,10 @@ async def trend(location: str, month_day: str):
 
     data = get_temperature_series(location, month, day)
 
-    if len(data) < 2:
+    if len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
-    slope = calculate_trend_slope(data)
+    slope = calculate_trend_slope(data['data'])
     result = {"slope": slope, "units": "°C/decade"}
     
     # Cache the result if caching is enabled
@@ -378,20 +405,22 @@ async def average(location: str, month_day: str):
 
     data = get_temperature_series(location, month, day)
 
-    if len(data) < 2:
+    if len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
     # Calculate average temperature using the new function
-    avg_temp = calculate_historical_average(data)
+    avg_temp = calculate_historical_average(data['data'])
     
     result = {
         "average": avg_temp,
         "unit": "celsius",
-        "data_points": len(data),
+        "data_points": len(data['data']),
         "year_range": {
-            "start": data[0]['x'],
-            "end": data[-1]['x']
-        }
+            "start": data['data'][0]['x'],
+            "end": data['data'][-1]['x']
+        },
+        "missing_years": data['metadata']['missing_years'],
+        "completeness": data['metadata']['completeness']
     }
     
     # Cache the result if caching is enabled
