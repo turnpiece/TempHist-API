@@ -10,6 +10,7 @@ from typing import List, Dict
 
 load_dotenv()
 VC_API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+VC_API_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
@@ -60,7 +61,7 @@ async def root(_: None = Depends(verify_token)):
     }
 
 def fetch_weather_from_api(location: str, date: str):
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date}?unitGroup=metric&include=days&key={VC_API_KEY}"
+    url = f"{VC_API_BASE_URL}/{location}/{date}?unitGroup=metric&include=days&key={VC_API_KEY}"
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         return response.json()
@@ -85,7 +86,7 @@ def get_forecast_data(location: str, date: str) -> Dict:
             return json.loads(cached_data)
         print(f"Cache miss: {cache_key} — fetching from API")
     
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date_str}?unitGroup=metric&include=days&key={VC_API_KEY}"
+    url = f"{VC_API_BASE_URL}/{location}/{date_str}?unitGroup=metric&include=days&key={VC_API_KEY}"
     print(f"Fetching forecast from URL: {url}")
     
     try:
