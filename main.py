@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
@@ -9,10 +9,13 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 
 load_dotenv()
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+VC_API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
+
+# Token for this API
+API_TOKEN = os.getenv("API_ACCESS_TOKEN")
 
 app = FastAPI()
 redis_client = redis.from_url(REDIS_URL)
@@ -35,13 +38,15 @@ app.add_middleware(
     max_age=600,  # Cache preflight requests for 10 minutes
 )
 
-@app.api_route("/test-cors", methods=["GET", "OPTIONS"])
-async def test_cors():
-    """Test endpoint for CORS"""
-    return {"message": "CORS is working"}
+# Verify token for this API
+def verify_token(request: Request):
+    print("verify_token called")  # Add this line
+    token = request.headers.get("X-API-Token")
+    if token != API_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid or missing API token")
 
 @app.api_route("/", methods=["GET", "OPTIONS"])
-async def root():
+async def root(_: None = Depends(verify_token)):
     """Root endpoint that returns API information"""
     return {
         "name": "Temperature History API",
@@ -56,7 +61,7 @@ async def root():
     }
 
 def fetch_weather_from_api(location: str, date: str):
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date}?unitGroup=metric&include=days&key={API_KEY}"
+    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date}?unitGroup=metric&include=days&key={VC_API_KEY}"
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         return response.json()
@@ -67,7 +72,7 @@ def get_forecast_data(location: str, date: str) -> Dict:
     Get forecast data for a specific location and date using Visual Crossing API.
     Returns cached data if available, otherwise fetches from Visual Crossing API.
     """
-    if not API_KEY:
+    if not VC_API_KEY:
         raise HTTPException(status_code=500, detail="Visual Crossing API key not configured")
     
     date_str = date.strftime("%Y-%m-%d")
@@ -81,7 +86,7 @@ def get_forecast_data(location: str, date: str) -> Dict:
             return json.loads(cached_data)
         print(f"Cache miss: {cache_key} — fetching from API")
     
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date_str}?unitGroup=metric&include=days&key={API_KEY}"
+    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date_str}?unitGroup=metric&include=days&key={VC_API_KEY}"
     print(f"Fetching forecast from URL: {url}")
     
     try:
@@ -191,7 +196,7 @@ def get_temperature_series(location: str, month: int, day: int) -> Dict:
     }
 
 @app.get("/weather/{location}/{date}")
-def get_weather(location: str, date: str):
+def get_weather(location: str, date: str, _: None = Depends(verify_token)):
     cache_key = f"{location.lower()}_{date}"
 
     # Check cache first if caching is enabled
@@ -212,7 +217,7 @@ def get_weather(location: str, date: str):
 
 # get a text summary
 @app.get("/summary/{location}/{month_day}")
-async def summary(location: str, month_day: str, request: Request):
+async def summary(location: str, month_day: str, _: None = Depends(verify_token)):
     try:
         month, day = map(int, month_day.split("-"))
         today = datetime.now()
@@ -333,7 +338,7 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
 
 # get the warming/cooling trend
 @app.get("/trend/{location}/{month_day}")
-async def trend(location: str, month_day: str):
+async def trend(location: str, month_day: str, _: None = Depends(verify_token)):
     try:
         month, day = map(int, month_day.split("-"))
         # Validate month and day
@@ -376,7 +381,7 @@ async def trend(location: str, month_day: str):
 
 # get the average temperature
 @app.api_route("/average/{location}/{month_day}", methods=["GET", "OPTIONS"])
-async def average(location: str, month_day: str):
+async def average(location: str, month_day: str, _: None = Depends(verify_token)):
     try:
         month, day = map(int, month_day.split("-"))
         # Validate month and day
@@ -444,12 +449,12 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     return round(numerator / denominator, 2) * 10 if denominator != 0 else 0.0
 
 @app.get("/forecast/{location}")
-async def get_forecast(location: str):
+async def get_forecast(location: str, _: None = Depends(verify_token)):
     today = datetime.now().date()
     return get_forecast_data(location, today)
 
 @app.get("/test-redis")
-async def test_redis():
+async def test_redis(_: None = Depends(verify_token)):
     try:
         # Try to set a test value
         redis_client.setex("test_key", timedelta(minutes=5), "test_value")
