@@ -40,7 +40,6 @@ app.add_middleware(
 
 # Verify token for this API
 def verify_token(request: Request):
-    print("verify_token called")  # Add this line
     token = request.headers.get("X-API-Token")
     if token != API_TOKEN:
         raise HTTPException(status_code=403, detail="Invalid or missing API token")
