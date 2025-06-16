@@ -1,12 +1,15 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from dotenv import load_dotenv
 import os
-import requests
+import httpx
 import redis
 import json
 from datetime import datetime, timedelta
 from typing import List, Dict
+import asyncio
+from functools import lru_cache
 
 load_dotenv()
 VC_API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
@@ -20,6 +23,9 @@ API_TOKEN = os.getenv("API_ACCESS_TOKEN")
 
 app = FastAPI()
 redis_client = redis.from_url(REDIS_URL)
+
+# Add Gzip compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Configure CORS
 app.add_middleware(
@@ -60,14 +66,220 @@ async def root(_: None = Depends(verify_token)):
         ]
     }
 
-def fetch_weather_from_api(location: str, date: str):
-    url = f"{VC_API_BASE_URL}/{location}/{date}?unitGroup=metric&include=days&key={VC_API_KEY}"
-    response = requests.get(url)
-    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-        return response.json()
-    return {"error": response.text, "status": response.status_code}
+async def fetch_weather_batch(location: str, dates: List[str], max_retries: int = 3) -> Dict[str, Dict]:
+    """
+    Fetch weather data for specific dates by making individual requests.
+    """
+    if not VC_API_KEY:
+        print("Error: Visual Crossing API key not configured")
+        raise HTTPException(status_code=500, detail="Visual Crossing API key not configured")
+    
+    # Split dates into chunks of 10 to avoid overwhelming the API
+    chunk_size = 10
+    date_chunks = [dates[i:i + chunk_size] for i in range(0, len(dates), chunk_size)]
+    print(f"Split {len(dates)} dates into {len(date_chunks)} chunks")
+    
+    result = {}
+    for chunk in date_chunks:
+        print(f"Processing chunk with dates: {chunk}")
+        
+        # Process each date in the chunk
+        for date in chunk:
+            url = f"{VC_API_BASE_URL}/{location}/{date}?unitGroup=metric&include=days&key={VC_API_KEY}"
+            print(f"Fetching data for {location} on {date}")
+            
+            for attempt in range(max_retries):
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        print(f"Making request to: {url} (attempt {attempt + 1}/{max_retries})")
+                        response = await client.get(url)
+                        print(f"Response status: {response.status_code}")
+                        
+                        if response.status_code != 200:
+                            print(f"Error response: {response.text}")
+                            if response.status_code == 404:
+                                print(f"No data found for {date}")
+                                break  # Skip to next date
+                            if attempt < max_retries - 1:
+                                print(f"Retrying after error status {response.status_code}...")
+                                await asyncio.sleep(1)
+                                continue
+                            raise HTTPException(status_code=response.status_code, detail=f"Error from weather service: {response.text}")
+                        
+                        try:
+                            data = response.json()
+                        except json.JSONDecodeError as e:
+                            print(f"Failed to decode JSON response: {response.text}")
+                            if attempt < max_retries - 1:
+                                print("Retrying after JSON decode error...")
+                                await asyncio.sleep(1)
+                                continue
+                            raise HTTPException(status_code=500, detail="Invalid response from weather service")
+                        
+                        if not data.get('days'):
+                            print(f"No days data found in response for {date}")
+                            print(f"Response content: {data}")
+                            if attempt < max_retries - 1:
+                                print("Retrying after no days data...")
+                                await asyncio.sleep(1)
+                                continue
+                            break  # Skip to next date
+                        
+                        # Get the weather data for this date
+                        day_data = data['days'][0]
+                        result[date] = {
+                            "temp": day_data['temp'],
+                            "tempmax": day_data['tempmax'],
+                            "tempmin": day_data['tempmin']
+                        }
+                        print(f"Successfully fetched data for {date}")
+                        break  # Success, move to next date
+                        
+                except httpx.TimeoutException:
+                    print(f"Request timed out for {date} (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        print("Retrying after timeout...")
+                        await asyncio.sleep(1)
+                        continue
+                    print(f"Skipping {date} after timeout")
+                    break  # Skip to next date
+                except httpx.ConnectError as e:
+                    print(f"Connection error for {date}: {str(e)} (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        print("Retrying after connection error...")
+                        await asyncio.sleep(1)
+                        continue
+                    print(f"Skipping {date} after connection error")
+                    break  # Skip to next date
+                except httpx.RequestError as e:
+                    print(f"Request error for {date}: {str(e)} (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        print("Retrying after request error...")
+                        await asyncio.sleep(1)
+                        continue
+                    print(f"Skipping {date} after request error")
+                    break  # Skip to next date
+                except Exception as e:
+                    print(f"Unexpected error for {date}: {str(e)} (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        print("Retrying after unexpected error...")
+                        await asyncio.sleep(1)
+                        continue
+                    print(f"Skipping {date} after unexpected error")
+                    break  # Skip to next date
+            
+            # Add a small delay between requests to avoid rate limiting
+            await asyncio.sleep(0.1)
+    
+    print(f"Successfully fetched data for {len(result)} total dates")
+    return result
 
-def get_forecast_data(location: str, date: str) -> Dict:
+async def get_temperature_series(location: str, month: int, day: int) -> Dict:
+    try:
+        today = datetime.now()
+        current_year = today.year
+        years = list(range(current_year - 50, current_year + 1))
+        
+        # Prepare all dates for batch request
+        dates = [f"{year}-{month:02d}-{day:02d}" for year in years]
+        print(f"Getting temperature series for {location} on {month:02d}-{day:02d}")
+        print(f"Date range: {dates[0]} to {dates[-1]}")
+        
+        # Check cache for all dates
+        cache_keys = [f"{location.lower()}_{date}" for date in dates]
+        cached_data = {}
+        
+        if CACHE_ENABLED:
+            print("Checking cache for existing data...")
+            try:
+                # Use Redis pipeline for multiple gets
+                pipe = redis_client.pipeline()
+                for key in cache_keys:
+                    pipe.get(key)
+                cached_results = await asyncio.to_thread(pipe.execute)
+                
+                # Process cached results
+                for date, cached_result in zip(dates, cached_results):
+                    if cached_result:
+                        try:
+                            cached_data[date] = json.loads(cached_result)
+                        except json.JSONDecodeError:
+                            print(f"Failed to decode cached data for {date}")
+                            continue
+                
+                print(f"Found {len(cached_data)} dates in cache")
+            except Exception as e:
+                print(f"Error accessing Redis cache: {str(e)}")
+                print("Continuing without cache...")
+        
+        # Find dates that need to be fetched
+        dates_to_fetch = [date for date in dates if date not in cached_data]
+        print(f"Need to fetch {len(dates_to_fetch)} dates from API")
+        
+        # Fetch missing data in batch
+        if dates_to_fetch:
+            try:
+                batch_data = await fetch_weather_batch(location, dates_to_fetch)
+                
+                # Cache new data
+                if CACHE_ENABLED and batch_data:
+                    print(f"Caching {len(batch_data)} new data points")
+                    try:
+                        pipe = redis_client.pipeline()
+                        for date, data in batch_data.items():
+                            cache_key = f"{location.lower()}_{date}"
+                            pipe.setex(cache_key, timedelta(hours=24), json.dumps(data))
+                        await asyncio.to_thread(pipe.execute)
+                    except Exception as e:
+                        print(f"Error caching data: {str(e)}")
+                
+                cached_data.update(batch_data)
+            except HTTPException as e:
+                print(f"Error fetching batch data: {str(e)}")
+                # If we get a 404, return what we have from cache
+                if e.status_code == 404 and cached_data:
+                    print("Returning cached data after 404 error")
+                    pass
+                else:
+                    raise
+        
+        # Process the data
+        data = []
+        missing_years = []
+        
+        for year, date in zip(years, dates):
+            if date in cached_data:
+                try:
+                    temp = cached_data[date]['temp']
+                    data.append({"x": year, "y": temp})
+                except (KeyError, TypeError) as e:
+                    print(f"Error processing data for {date}: {str(e)}")
+                    missing_years.append({"year": year, "reason": "data_processing_error"})
+            else:
+                missing_years.append({"year": year, "reason": "no_data"})
+        
+        print(f"Processed {len(data)} data points")
+        print(f"Missing {len(missing_years)} years")
+        
+        if not data:
+            raise HTTPException(status_code=404, detail=f"No temperature data available for {location}")
+        
+        return {
+            "data": data,
+            "metadata": {
+                "total_years": len(years),
+                "available_years": len(data),
+                "missing_years": missing_years,
+                "completeness": round(len(data) / len(years) * 100, 1) if years else 0
+            }
+        }
+    except Exception as e:
+        print(f"Error in get_temperature_series: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error details: {e.__dict__}")
+        raise
+
+async def get_forecast_data(location: str, date: str) -> Dict:
     """
     Get forecast data for a specific location and date using Visual Crossing API.
     Returns cached data if available, otherwise fetches from Visual Crossing API.
@@ -82,140 +294,58 @@ def get_forecast_data(location: str, date: str) -> Dict:
     if CACHE_ENABLED:
         cached_data = redis_client.get(cache_key)
         if cached_data:
-            print(f"Cache hit: {cache_key}")
             return json.loads(cached_data)
-        print(f"Cache miss: {cache_key} — fetching from API")
     
     url = f"{VC_API_BASE_URL}/{location}/{date_str}?unitGroup=metric&include=days&key={VC_API_KEY}"
-    print(f"Fetching forecast from URL: {url}")
     
-    try:
-        response = requests.get(url)
-        print(f"API Response Status: {response.status_code}")
-        print(f"API Response Headers: {response.headers}")
-        response.raise_for_status()
-        data = response.json()
-        print(f"API Response Data: {json.dumps(data, indent=2)}")
-        
-        if not data.get('days'):
-            print(f"No days data found in response for {date_str}")
-            raise HTTPException(status_code=404, detail=f"No forecast data available for {date_str}")
-        
-        # Get the first day's data (since we're requesting a specific date)
-        day_data = data['days'][0]
-        print(f"Day data: {json.dumps(day_data, indent=2)}")
-        
-        result = {
-            "location": location,
-            "date": date_str,
-            "average_temperature": round(day_data['temp'], 1),
-            "unit": "celsius"
-        }
-        
-        # Cache the result if caching is enabled
-        if CACHE_ENABLED:
-            redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
-        
-        return result
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Request error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching forecast data: {str(e)}")
-    except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
-def get_temperature_series(location: str, month: int, day: int) -> Dict:
-    today = datetime.now()
-    current_year = today.year
-    years = list(range(current_year - 50, current_year + 1))
-
-    data = []
-    missing_years = []
-    for year in years:
-        date_str = f"{year}-{month:02d}-{day:02d}"
-        cache_key = f"{location.lower()}_{date_str}"
-        
-        # If this is today's date, use the forecast data
-        if year == current_year and month == today.month and day == today.day:
-            try:
-                forecast_data = get_forecast_data(location, datetime(year, month, day).date())
-                # Use the forecast temperature for the current day
-                data.append({"x": year, "y": forecast_data["average_temperature"]})
-                continue
-            except Exception as e:
-                print(f"Error fetching forecast: {str(e)}")
-                missing_years.append({"year": year, "reason": "forecast_failed"})
-                continue
-        
-        # Use historical data for all other dates
-        if CACHE_ENABLED:
-            cached_data = redis_client.get(cache_key)
-            if cached_data:
-                weather = json.loads(cached_data)
-            else:
-                weather = fetch_weather_from_api(location, date_str)
-                if "error" not in weather:
-                    redis_client.setex(cache_key, timedelta(hours=24), json.dumps(weather))
-                else:
-                    missing_years.append({"year": year, "reason": "api_error"})
-                    continue
-        else:
-            weather = fetch_weather_from_api(location, date_str)
-            if "error" in weather:
-                missing_years.append({"year": year, "reason": "api_error"})
-                continue
-
+    async with httpx.AsyncClient() as client:
         try:
-            # Use the average temperature for historical data
-            temp = weather["days"][0]["temp"]
-            print(f"Year {year}: temp={temp}, tempmax={weather['days'][0]['tempmax']}, tempmin={weather['days'][0]['tempmin']}")
-            data.append({"x": year, "y": temp})
-        except (KeyError, IndexError, TypeError) as e:
-            print(f"Error processing data for {date_str}: {str(e)}")
-            missing_years.append({"year": year, "reason": "data_processing_error"})
-            continue
-
-    # Print summary of collected data
-    print("\nData summary:")
-    print(f"Total data points: {len(data)}")
-    if data:
-        temps = [d['y'] for d in data]
-        if temps:  # Add check to ensure temps list is not empty
-            print(f"Temperature range: {min(temps):.1f}°C to {max(temps):.1f}°C")
-            print(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
-    
-    return {
-        "data": data,
-        "metadata": {
-            "total_years": len(years),
-            "available_years": len(data),
-            "missing_years": missing_years,
-            "completeness": round(len(data) / len(years) * 100, 1) if years else 0
-        }
-    }
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data.get('days'):
+                raise HTTPException(status_code=404, detail=f"No forecast data available for {date_str}")
+            
+            day_data = data['days'][0]
+            result = {
+                "location": location,
+                "date": date_str,
+                "average_temperature": round(day_data['temp'], 1),
+                "unit": "celsius"
+            }
+            
+            # Cache the result if caching is enabled
+            if CACHE_ENABLED:
+                redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+            
+            return result
+            
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=500, detail=f"Error fetching forecast data: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.get("/weather/{location}/{date}")
-def get_weather(location: str, date: str, _: None = Depends(verify_token)):
+async def get_weather(location: str, date: str, _: None = Depends(verify_token)):
     cache_key = f"{location.lower()}_{date}"
 
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
         cached_data = redis_client.get(cache_key)
         if cached_data:
-            print(f"Cache hit: {cache_key}")
             return json.loads(cached_data)
-        print(f"Cache miss: {cache_key} — fetching from API")
 
-    result = fetch_weather_from_api(location, date)
+    # Fetch single date using batch endpoint
+    batch_data = await fetch_weather_batch(location, [date])
+    if date in batch_data:
+        result = {"days": [{"temp": batch_data[date]["temp"]}]}
+        if CACHE_ENABLED:
+            redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+        return result
+    
+    raise HTTPException(status_code=404, detail="Weather data not found")
 
-    # Only cache successful results if caching is enabled
-    if CACHE_ENABLED and "error" not in result:
-        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
-
-    return result
-
-# get a text summary
 @app.get("/summary/{location}/{month_day}")
 async def summary(location: str, month_day: str, _: None = Depends(verify_token)):
     try:
@@ -225,18 +355,10 @@ async def summary(location: str, month_day: str, _: None = Depends(verify_token)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
-    data = get_temperature_series(location, month, day)
-    print(f"Summary data for {location} on {month_day}:")
-    print(f"Number of data points: {len(data['data'])}")
-    print(f"Date range: {data['data'][0]['x']} to {data['data'][-1]['x']}")
-    print(f"Current temperature: {data['data'][-1]['y']}°C")
+    data = await get_temperature_series(location, month, day)
     
-    if len(data['data']) < 2:
+    if not data or not data.get('data') or len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
-
-    avg_temp = calculate_historical_average(data['data'])
-    print(f"Calculated average: {avg_temp}°C")
-    print(f"Temperature difference: {round(data['data'][-1]['y'] - avg_temp, 1)}°C")
 
     summary_text = get_summary(data['data'], f"{current_year}-{month:02d}-{day:02d}")
     return {"summary": summary_text}
@@ -336,7 +458,6 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
 
     return generate_summary(data, date)
 
-# get the warming/cooling trend
 @app.get("/trend/{location}/{month_day}")
 async def trend(location: str, month_day: str, _: None = Depends(verify_token)):
     try:
@@ -359,15 +480,13 @@ async def trend(location: str, month_day: str, _: None = Depends(verify_token)):
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = redis_client.get(cache_key)
+        cached_data = await asyncio.to_thread(redis_client.get, cache_key)
         if cached_data:
-            print(f"Cache hit: {cache_key}")
             return json.loads(cached_data)
-        print(f"Cache miss: {cache_key} — calculating trend")
 
-    data = get_temperature_series(location, month, day)
-
-    if len(data['data']) < 2:
+    data = await get_temperature_series(location, month, day)
+    
+    if not data or not data.get('data') or len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
     slope = calculate_trend_slope(data['data'])
@@ -375,11 +494,10 @@ async def trend(location: str, month_day: str, _: None = Depends(verify_token)):
     
     # Cache the result if caching is enabled
     if CACHE_ENABLED:
-        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+        await asyncio.to_thread(redis_client.setex, cache_key, timedelta(hours=24), json.dumps(result))
     
     return result
 
-# get the average temperature
 @app.api_route("/average/{location}/{month_day}", methods=["GET", "OPTIONS"])
 async def average(location: str, month_day: str, _: None = Depends(verify_token)):
     try:
@@ -402,15 +520,13 @@ async def average(location: str, month_day: str, _: None = Depends(verify_token)
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = redis_client.get(cache_key)
+        cached_data = await asyncio.to_thread(redis_client.get, cache_key)
         if cached_data:
-            print(f"Cache hit: {cache_key}")
             return json.loads(cached_data)
-        print(f"Cache miss: {cache_key} — calculating average")
 
-    data = get_temperature_series(location, month, day)
-
-    if len(data['data']) < 2:
+    data = await get_temperature_series(location, month, day)
+    
+    if not data or not data.get('data') or len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
     # Calculate average temperature using the new function
@@ -430,7 +546,7 @@ async def average(location: str, month_day: str, _: None = Depends(verify_token)
     
     # Cache the result if caching is enabled
     if CACHE_ENABLED:
-        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+        await asyncio.to_thread(redis_client.setex, cache_key, timedelta(hours=24), json.dumps(result))
     
     return result
 
@@ -451,7 +567,7 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
 @app.get("/forecast/{location}")
 async def get_forecast(location: str, _: None = Depends(verify_token)):
     today = datetime.now().date()
-    return get_forecast_data(location, today)
+    return await get_forecast_data(location, today)
 
 @app.get("/test-redis")
 async def test_redis(_: None = Depends(verify_token)):

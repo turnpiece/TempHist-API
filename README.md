@@ -20,6 +20,7 @@ A FastAPI backend for historical temperature data using Visual Crossing.
   OPENWEATHER_API_KEY=your_key_here
   REDIS_URL=redis://localhost:6379  # Optional, defaults to localhost
   CACHE_ENABLED=true  # Optional, defaults to true
+  API_ACCESS_TOKEN=your_key_here
   ```
 
 ## Installation
