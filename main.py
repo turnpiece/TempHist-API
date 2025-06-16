@@ -247,12 +247,17 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         # Process the data
         data = []
         missing_years = []
+        valid_years = 0
         
         for year, date in zip(years, dates):
             if date in cached_data:
                 try:
                     temp = cached_data[date]['temp']
-                    data.append({"x": year, "y": temp})
+                    if temp is not None:  # Only add if temperature is not null
+                        data.append({"x": year, "y": temp})
+                        valid_years += 1
+                    else:
+                        missing_years.append({"year": year, "reason": "null_temperature"})
                 except (KeyError, TypeError) as e:
                     print(f"Error processing data for {date}: {str(e)}")
                     missing_years.append({"year": year, "reason": "data_processing_error"})
@@ -267,9 +272,9 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
             "data": data,
             "metadata": {
                 "total_years": len(years),
-                "available_years": len(data),
+                "available_years": valid_years,  # Use valid_years instead of len(data)
                 "missing_years": missing_years,
-                "completeness": round(len(data) / len(years) * 100, 1) if years else 0
+                "completeness": round(valid_years / len(years) * 100, 1) if years else 0
             }
         }
     except Exception as e:
