@@ -58,6 +58,7 @@ async def root(_: None = Depends(verify_token)):
         "name": "Temperature History API",
         "version": "1.0.0",
         "endpoints": [
+            "/data/{location}/{month_day}",
             "/average/{location}/{month_day}",
             "/trend/{location}/{month_day}",
             "/weather/{location}/{date}",
@@ -261,9 +262,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         print(f"Processed {len(data)} data points")
         print(f"Missing {len(missing_years)} years")
         
-        if not data:
-            raise HTTPException(status_code=404, detail=f"No temperature data available for {location}")
-        
+        # Return data even if incomplete, but with metadata about missing data
         return {
             "data": data,
             "metadata": {
@@ -371,8 +370,12 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     if not data or len(data) < 2:
         return 0.0
     
-    # Use all data except the most recent (current year)
-    historical_data = data[:-1]
+    # Filter out any None values and use all data except the most recent (current year)
+    historical_data = [p for p in data[:-1] if p.get('y') is not None]
+    
+    if not historical_data:
+        return 0.0
+        
     avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
     return round(avg_temp, 1)
 
@@ -386,9 +389,14 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
         if not data or len(data) < 2:
             return "Not enough data to generate summary."
 
-        latest = data[-1]
+        # Filter out None values
+        valid_data = [p for p in data if p.get('y') is not None]
+        if not valid_data:
+            return "No valid temperature data available."
+
+        latest = valid_data[-1]
         # Use the new function to calculate average
-        avg_temp = calculate_historical_average(data)
+        avg_temp = calculate_historical_average(valid_data)
         diff = latest['y'] - avg_temp
         rounded_diff = round(diff, 1)
 
@@ -400,7 +408,10 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
         temperature = f"{latest['y']}°C."
 
         # For historical comparisons, use all previous years
-        previous = data[:-1]
+        previous = valid_data[:-1]
+        if not previous:
+            return f"{temperature} No historical data available for comparison."
+
         is_warmest = all(latest['y'] >= p['y'] for p in previous)
         is_coldest = all(latest['y'] <= p['y'] for p in previous)
 
@@ -458,6 +469,31 @@ def get_summary(data: List[Dict[str, float]], date_str: str) -> str:
 
     return generate_summary(data, date)
 
+def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
+    """
+    Calculate the trend slope using linear regression.
+    Returns the slope in °C/decade.
+    """
+    # Filter out None values
+    valid_data = [p for p in data if p.get('y') is not None]
+    
+    n = len(valid_data)
+    if n < 2:
+        return 0.0
+
+    sum_x = sum(p['x'] for p in valid_data)
+    sum_y = sum(p['y'] for p in valid_data)
+    sum_xy = sum(p['x'] * p['y'] for p in valid_data)
+    sum_xx = sum(p['x'] ** 2 for p in valid_data)
+
+    numerator = n * sum_xy - sum_x * sum_y
+    denominator = n * sum_xx - sum_x ** 2
+    
+    if denominator == 0:
+        return 0.0
+        
+    return round(numerator / denominator, 2) * 10
+
 @app.get("/trend/{location}/{month_day}")
 async def trend(location: str, month_day: str, _: None = Depends(verify_token)):
     try:
@@ -484,19 +520,35 @@ async def trend(location: str, month_day: str, _: None = Depends(verify_token)):
         if cached_data:
             return json.loads(cached_data)
 
-    data = await get_temperature_series(location, month, day)
-    
-    if not data or not data.get('data') or len(data['data']) < 2:
-        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
-
-    slope = calculate_trend_slope(data['data'])
-    result = {"slope": slope, "units": "°C/decade"}
-    
-    # Cache the result if caching is enabled
-    if CACHE_ENABLED:
-        await asyncio.to_thread(redis_client.setex, cache_key, timedelta(hours=24), json.dumps(result))
-    
-    return result
+    try:
+        data = await get_temperature_series(location, month, day)
+        
+        # Check if we have any data at all
+        if not data or not data.get('data'):
+            raise HTTPException(status_code=404, detail=f"No temperature data available for {location}")
+        
+        # Calculate trend
+        slope = calculate_trend_slope(data['data'])
+        
+        result = {
+            "slope": slope,
+            "units": "°C/decade",
+            "data_points": len(data['data']),
+            "completeness": data['metadata']['completeness'],
+            "missing_years": data['metadata']['missing_years']
+        }
+        
+        # Cache the result if caching is enabled
+        if CACHE_ENABLED:
+            await asyncio.to_thread(redis_client.setex, cache_key, timedelta(hours=24), json.dumps(result))
+        
+        return result
+    except HTTPException as e:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        print(f"Error in trend endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error calculating trend: {str(e)}")
 
 @app.api_route("/average/{location}/{month_day}", methods=["GET", "OPTIONS"])
 async def average(location: str, month_day: str, _: None = Depends(verify_token)):
@@ -524,45 +576,39 @@ async def average(location: str, month_day: str, _: None = Depends(verify_token)
         if cached_data:
             return json.loads(cached_data)
 
-    data = await get_temperature_series(location, month, day)
-    
-    if not data or not data.get('data') or len(data['data']) < 2:
-        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
-
-    # Calculate average temperature using the new function
-    avg_temp = calculate_historical_average(data['data'])
-    
-    result = {
-        "average": avg_temp,
-        "unit": "celsius",
-        "data_points": len(data['data']),
-        "year_range": {
-            "start": data['data'][0]['x'],
-            "end": data['data'][-1]['x']
-        },
-        "missing_years": data['metadata']['missing_years'],
-        "completeness": data['metadata']['completeness']
-    }
-    
-    # Cache the result if caching is enabled
-    if CACHE_ENABLED:
-        await asyncio.to_thread(redis_client.setex, cache_key, timedelta(hours=24), json.dumps(result))
-    
-    return result
-
-def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
-    n = len(data)
-    if n < 2:
-        return 0.0
-
-    sum_x = sum(p['x'] for p in data)
-    sum_y = sum(p['y'] for p in data)
-    sum_xy = sum(p['x'] * p['y'] for p in data)
-    sum_xx = sum(p['x'] ** 2 for p in data)
-
-    numerator = n * sum_xy - sum_x * sum_y
-    denominator = n * sum_xx - sum_x ** 2
-    return round(numerator / denominator, 2) * 10 if denominator != 0 else 0.0
+    try:
+        data = await get_temperature_series(location, month, day)
+        
+        # Check if we have any data at all
+        if not data or not data.get('data'):
+            raise HTTPException(status_code=404, detail=f"No temperature data available for {location}")
+        
+        # Calculate average temperature using the new function
+        avg_temp = calculate_historical_average(data['data'])
+        
+        result = {
+            "average": avg_temp,
+            "unit": "celsius",
+            "data_points": len(data['data']),
+            "year_range": {
+                "start": data['data'][0]['x'] if data['data'] else None,
+                "end": data['data'][-1]['x'] if data['data'] else None
+            },
+            "missing_years": data['metadata']['missing_years'],
+            "completeness": data['metadata']['completeness']
+        }
+        
+        # Cache the result if caching is enabled
+        if CACHE_ENABLED:
+            await asyncio.to_thread(redis_client.setex, cache_key, timedelta(hours=24), json.dumps(result))
+        
+        return result
+    except HTTPException as e:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        print(f"Error in average endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error calculating average: {str(e)}")
 
 @app.get("/forecast/{location}")
 async def get_forecast(location: str, _: None = Depends(verify_token)):
@@ -582,6 +628,105 @@ async def test_redis(_: None = Depends(verify_token)):
             return {"status": "error", "message": "Redis connection test failed"}
     except Exception as e:
         return {"status": "error", "message": f"Redis connection error: {str(e)}"}
+
+@app.get("/data/{location}/{month_day}")
+async def get_all_data(location: str, month_day: str, _: None = Depends(verify_token)):
+    """
+    Get all data needed for a specific date in a single request.
+    Returns average, trend, summary, and weather data.
+    """
+    try:
+        month, day = map(int, month_day.split("-"))
+        # Validate month and day
+        if not (1 <= month <= 12):
+            raise ValueError("Month must be between 1 and 12")
+        if not (1 <= day <= 31):
+            raise ValueError("Day must be between 1 and 31")
+        # Additional validation for specific months
+        if month in [4, 6, 9, 11] and day > 30:
+            raise ValueError(f"Month {month} has only 30 days")
+        if month == 2 and day > 29:
+            raise ValueError("February has only 29 days")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Create cache key for the combined data
+    cache_key = f"all_data_{location.lower()}_{month:02d}_{day:02d}"
+    
+    # Check cache first if caching is enabled
+    if CACHE_ENABLED:
+        cached_data = await asyncio.to_thread(redis_client.get, cache_key)
+        if cached_data:
+            return json.loads(cached_data)
+
+    # Get temperature series data (used by average, trend, and summary)
+    data = await get_temperature_series(location, month, day)
+    
+    if not data or not data.get('data') or len(data['data']) < 2:
+        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
+
+    # Calculate all the required data
+    today = datetime.now()
+    current_year = today.year
+    current_date = f"{current_year}-{month:02d}-{day:02d}"
+    
+    # Get average temperature
+    avg_temp = calculate_historical_average(data['data'])
+    
+    # Calculate trend
+    slope = calculate_trend_slope(data['data'])
+    
+    # Generate summary
+    summary_text = get_summary(data['data'], current_date)
+    
+    # Get current year's weather
+    current_weather = None
+    if current_date in data['data']:
+        current_weather = {
+            "temp": data['data'][-1]['y'],
+            "year": current_year
+        }
+    
+    # Combine all data
+    result = {
+        "average": {
+            "temperature": avg_temp,
+            "unit": "celsius",
+            "data_points": len(data['data']),
+            "year_range": {
+                "start": data['data'][0]['x'],
+                "end": data['data'][-1]['x']
+            },
+            "missing_years": data['metadata']['missing_years'],
+            "completeness": data['metadata']['completeness']
+        },
+        "trend": {
+            "slope": slope,
+            "units": "°C/decade"
+        },
+        "summary": summary_text,
+        "current_weather": current_weather,
+        "series": {
+            "data": data['data'],  # Include the full temperature series
+            "metadata": {
+                "location": location,
+                "date": current_date,
+                "total_years": data['metadata']['total_years'],
+                "available_years": data['metadata']['available_years']
+            }
+        }
+    }
+    
+    # Cache the result if caching is enabled
+    if CACHE_ENABLED:
+        await asyncio.to_thread(
+            redis_client.setex,
+            cache_key,
+            timedelta(hours=24),
+            json.dumps(result)
+        )
+    
+    return result
 
 # For local testing
 if __name__ == "__main__":
