@@ -521,9 +521,34 @@ async def get_all_data(location: str, month_day: str):
     try:
         month, day = map(int, month_day.split("-"))
         weather_data = await get_temperature_series(location, month, day)
-        summary_data = await get_summary(location, month_day)
+
+        # Check cache for summary
+        summary_cache_key = f"summary_{location.lower()}_{month:02d}_{day:02d}"
+        summary_data = None
+        if CACHE_ENABLED:
+            cached_summary = redis_client.get(summary_cache_key)
+            if cached_summary:
+                print(f"Cache hit: {summary_cache_key}")
+                summary_data = json.loads(cached_summary)
+        if not summary_data:
+            summary_data = await get_summary(location, month_day)
+            if CACHE_ENABLED:
+                redis_client.setex(summary_cache_key, timedelta(hours=24), json.dumps(summary_data))
+
+        # Check cache for average
+        average_cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
+        average_data = None
+        if CACHE_ENABLED:
+            cached_average = redis_client.get(average_cache_key)
+            if cached_average:
+                print(f"Cache hit: {average_cache_key}")
+                average_data = json.loads(cached_average)
+        if not average_data:
+            average_data = get_average_dict(weather_data)
+            if CACHE_ENABLED:
+                redis_client.setex(average_cache_key, timedelta(hours=24), json.dumps(average_data))
+
         trend_data = await get_trend(location, month_day, weather_data)
-        average_data = get_average_dict(weather_data)
 
         return JSONResponse(
             content={
