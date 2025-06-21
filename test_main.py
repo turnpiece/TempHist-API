@@ -11,32 +11,13 @@ from main import (
     calculate_trend_slope, 
     CACHE_ENABLED, 
     get_temperature_series,
-    verify_token,
     app as main_app
 )
 
 @pytest.fixture
-def test_app():
-    """Create a test-specific FastAPI app without GZip middleware"""
-    app = FastAPI()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    # Copy all routes from main app to test app
-    for route in main_app.routes:
-        app.routes.append(route)
-    
-    return app
-
-@pytest.fixture
-def client(test_app):
-    """Create a test client using the test app"""
-    with TestClient(test_app) as test_client:
+def client():
+    """Create a test client using the main app instance."""
+    with TestClient(main_app) as test_client:
         yield test_client
 
 # Sample temperature data for testing
@@ -115,6 +96,12 @@ def test_average_endpoint(client, location, month_day, expected_status):
             assert "completeness" in data
             assert "missing_years" in data
 
+def test_average_endpoint_no_token(client):
+    """Test the average endpoint without an API token"""
+    response = client.get("/average/London/05-15")
+    assert response.status_code == 401
+    assert "Invalid or missing API token" in response.json()["detail"]
+
 @pytest.mark.parametrize("location,month_day,expected_status", [
     ("London", "05-15", 200),  # Valid date
     ("London", "13-15", 400),  # Invalid month
@@ -173,9 +160,11 @@ def test_summary_endpoint(client):
 async def test_get_temperature_series_success():
     """Test successful temperature series retrieval"""
     mock_weather_data = {
-        "temp": 15.5,
-        "tempmax": 16.0,
-        "tempmin": 15.0
+        "days": [{
+            "temp": 15.5,
+            "tempmax": 16.0,
+            "tempmin": 15.0
+        }]
     }
     
     with patch('main.fetch_weather_batch', new_callable=AsyncMock) as mock_fetch:
@@ -192,8 +181,8 @@ async def test_get_temperature_series_success():
 async def test_get_temperature_series_partial_failures():
     """Test temperature series retrieval with partial failures"""
     mock_weather_data = {
-        "2024-06-02": {"temp": 15.5, "tempmax": 16.0, "tempmin": 15.0},
-        "2023-06-02": {"temp": 15.0, "tempmax": 15.5, "tempmin": 14.5}
+        "2024-06-02": {"days": [{"temp": 15.5, "tempmax": 16.0, "tempmin": 15.0}]},
+        "2023-06-02": {"days": [{"temp": 15.0, "tempmax": 15.5, "tempmin": 14.5}]}
     }
     
     with patch('main.fetch_weather_batch', new_callable=AsyncMock) as mock_fetch:
@@ -206,7 +195,8 @@ async def test_get_temperature_series_partial_failures():
         assert all("x" in item and "y" in item for item in result["data"])
         assert "missing_years" in result["metadata"]
 
-def test_average_vs_current_temperature():
+@pytest.mark.asyncio
+async def test_average_vs_current_temperature():
     """Test that average temperature and current temperature comparison is accurate"""
     test_data = SAMPLE_TEMPERATURE_DATA["data"]
     
@@ -217,14 +207,15 @@ def test_average_vs_current_temperature():
     
     # Test summary text generation
     from main import get_summary
-    summary = get_summary(test_data, "2024-05-15")
+    summary = await get_summary(location="London", month_day="05-15", weather_data=test_data)
     current_temp = test_data[-1]["y"]  # 17.0
     temp_diff = round(current_temp - avg, 1)
     
     # Verify the summary text contains the correct temperature difference
     assert f"{temp_diff}°C warmer than average" in summary
 
-def test_summary_text_accuracy():
+@pytest.mark.asyncio
+async def test_summary_text_accuracy():
     """Test that summary text accurately reflects temperature differences"""
     test_cases = [
         {
@@ -253,7 +244,7 @@ def test_summary_text_accuracy():
     
     from main import get_summary
     for case in test_cases:
-        summary = get_summary(case["data"], "2024-05-15")
+        summary = await get_summary(location="London", month_day="05-15", weather_data=case["data"])
         if case["expected_diff"] > 0:
             assert f"{case['expected_diff']}°C warmer than average" in summary
         else:

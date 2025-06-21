@@ -14,11 +14,40 @@ import aiohttp
 load_dotenv()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 
 app = FastAPI()
 redis_client = redis.from_url(REDIS_URL)
+
+@app.middleware("http")
+async def verify_token_middleware(request: Request, call_next):
+    # Allow OPTIONS requests for CORS preflight
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # Public paths that don't require a token
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis"]
+    if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
+        return await call_next(request)
+    
+    # All other paths require a token
+    if not API_ACCESS_TOKEN:
+        return JSONResponse(
+            status_code=500, 
+            content={"detail": "API access token is not configured on the server."}
+        )
+
+    token = request.headers.get("X-API-Token")
+    if token != API_ACCESS_TOKEN:
+        return JSONResponse(
+            status_code=401, 
+            content={"detail": "Invalid or missing API token."}
+        )
+        
+    response = await call_next(request)
+    return response
 
 # Configure CORS
 app.add_middleware(
@@ -413,7 +442,13 @@ async def trend(location: str, month_day: str):
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
     slope = calculate_trend_slope(data['data'])
-    result = {"slope": slope, "units": "°C/decade"}
+    result = {
+        "slope": slope, 
+        "units": "°C/decade",
+        "data_points": len(data['data']),
+        "completeness": data['metadata']['completeness'],
+        "missing_years": data['metadata']['missing_years']
+    }
     
     # Cache the result if caching is enabled
     if CACHE_ENABLED:
