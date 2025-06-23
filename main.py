@@ -585,7 +585,6 @@ def get_average_dict(weather_data):
     }
 
 async def get_temperature_series(location: str, month: int, day: int) -> Dict:
-    debug_print(f"CACHE_ENABLED is {CACHE_ENABLED} but the environment variable is {os.getenv("CACHE_ENABLED")}")
     debug_print(f"get_temperature_series for {location} on {day}/{month}")
     today = datetime.now()
     current_year = today.year
@@ -645,7 +644,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         batch_results = await fetch_weather_batch(location, uncached_date_strs)
         for year, date_str in zip(uncached_years, uncached_date_strs):
             weather = batch_results.get(date_str)
-            debug_print(f"get_temperature_series weather: {weather}")
+            #debug_print(f"get_temperature_series weather: {weather}")
             if weather and "error" not in weather:
                 try:
                     temp = weather["days"][0]["temp"]
