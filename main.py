@@ -100,7 +100,7 @@ def fetch_weather_from_api(location: str, date: str):
         return response.json()
     return {"error": response.text, "status": response.status_code}
 
-async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: int = 2) -> dict:
+async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: int = 1) -> dict:
     """
     Fetch weather data for multiple dates in parallel using aiohttp, with limited concurrency.
     Returns a dict mapping date_str to weather data.
