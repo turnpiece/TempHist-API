@@ -466,9 +466,7 @@ async def get_all_data(location: str, month_day: str):
     try:
         month, day = map(int, month_day.split("-"))
         weather_data = await get_temperature_series(location, month, day)
-
         debug_print(f"weather_data for {location} on {month_day}: {weather_data}")
-
         if not weather_data['data']:
             return JSONResponse(
                 content={
@@ -478,7 +476,6 @@ async def get_all_data(location: str, month_day: str):
                 headers={"Cache-Control": "public, max-age=60"},
                 status_code=404
             )
-
         is_complete = weather_data['metadata']['completeness'] == 100
         headers = {"Cache-Control": CACHE_CONTROL_HEADER if is_complete else "no-store"}
         
@@ -520,6 +517,15 @@ async def get_all_data(location: str, month_day: str):
                 "average": average_data
             },
             headers=headers
+        )
+    except HTTPException as e:
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": str(e.detail)
+            },
+            headers={"Cache-Control": "public, max-age=60"},
+            status_code=e.status_code
         )
     except Exception as e:
         return JSONResponse(
@@ -584,7 +590,18 @@ def get_average_dict(weather_data):
         "completeness": weather_data['metadata']['completeness']
     }
 
+def is_valid_location(location: str) -> bool:
+    today = datetime.now().strftime("%Y-%m-%d")
+    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{today}?unitGroup=metric&include=days&key={API_KEY}"
+    response = requests.get(url)
+    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
+        return True
+    return False
+
 async def get_temperature_series(location: str, month: int, day: int) -> Dict:
+    if not is_valid_location(location):
+        debug_print(f"Invalid location: {location}")
+        raise HTTPException(status_code=400, detail=f"Invalid location: {location}")
     debug_print(f"get_temperature_series for {location} on {day}/{month}")
     today = datetime.now()
     current_year = today.year
@@ -683,7 +700,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                 "available_years": 0,
                 "missing_years": years,
                 "completeness": 0.0
-            }
+            },
+            "error": f"Invalid location: {location}"
         }
 
     return {
