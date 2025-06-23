@@ -142,7 +142,7 @@ def get_forecast_data(location: str, date: str) -> Dict:
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = redis_client.get(cache_key)
+        cached_data = get_cache(cache_key)
         if cached_data:
             debug_print(f"Cache hit: {cache_key}")
             return json.loads(cached_data)
@@ -176,7 +176,7 @@ def get_forecast_data(location: str, date: str) -> Dict:
 
         # Cache the result if caching is enabled
         if CACHE_ENABLED:
-            redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+            set_cache(cache_key, timedelta(hours=24), json.dumps(result))
         
         return result
         
@@ -213,7 +213,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                 continue
         # Use historical data for all other dates
         if CACHE_ENABLED:
-            cached_data = redis_client.get(cache_key)
+            cached_data = get_cache(cache_key)
             if cached_data:
                 weather = json.loads(cached_data)
                 try:
@@ -242,7 +242,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                     # Cache the result if caching is enabled
                     if CACHE_ENABLED:
                         cache_key = f"{location.lower()}_{date_str}"
-                        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(weather))
+                        set_cache(cache_key, timedelta(hours=24), json.dumps(weather))
                 except (KeyError, IndexError, TypeError) as e:
                     debug_print(f"Error processing batch data for {date_str}: {str(e)}")
                     missing_years.append({"year": year, "reason": "data_processing_error"})
@@ -276,7 +276,7 @@ def get_weather(location: str, date: str):
 
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = redis_client.get(cache_key)
+        cached_data = get_cache(cache_key)
         if cached_data:
             debug_print(f"Cache hit: {cache_key}")
             return json.loads(cached_data)
@@ -286,7 +286,7 @@ def get_weather(location: str, date: str):
 
     # Only cache successful results if caching is enabled
     if CACHE_ENABLED and "error" not in result:
-        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+        set_cache(cache_key, timedelta(hours=24), json.dumps(result))
 
     return result
 
@@ -436,7 +436,7 @@ async def trend(location: str, month_day: str):
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = redis_client.get(cache_key)
+        cached_data = get_cache(cache_key)
         if cached_data:
             debug_print(f"Cache hit: {cache_key}")
             return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
@@ -462,7 +462,7 @@ async def trend(location: str, month_day: str):
 
     # Cache the result if caching is enabled and data is complete
     if CACHE_ENABLED and is_complete:
-        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+        set_cache(cache_key, timedelta(hours=24), json.dumps(result))
     
     return JSONResponse(content=result, headers=headers)
 
@@ -489,7 +489,7 @@ async def average(location: str, month_day: str):
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = redis_client.get(cache_key)
+        cached_data = get_cache(cache_key)
         if cached_data:
             debug_print(f"Cache hit: {cache_key}")
             return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
@@ -522,7 +522,7 @@ async def average(location: str, month_day: str):
 
     # Cache the result if caching is enabled and data is complete
     if CACHE_ENABLED and is_complete:
-        redis_client.setex(cache_key, timedelta(hours=24), json.dumps(result))
+        set_cache(cache_key, timedelta(hours=24), json.dumps(result))
     
     return JSONResponse(content=result, headers=headers)
 
@@ -549,9 +549,9 @@ async def get_forecast(location: str):
 async def test_redis():
     try:
         # Try to set a test value
-        redis_client.setex("test_key", timedelta(minutes=5), "test_value")
+        set_cache("test_key", timedelta(minutes=5), "test_value")
         # Try to get the test value
-        test_value = redis_client.get("test_key")
+        test_value = get_cache("test_key")
         if test_value and test_value.decode('utf-8') == "test_value":
             return JSONResponse(content={"status": "success", "message": "Redis connection is working"}, headers={"Cache-Control": CACHE_CONTROL_HEADER})
         else:
@@ -580,23 +580,23 @@ async def get_all_data(location: str, month_day: str):
         if is_complete and CACHE_ENABLED:
             # Check cache for summary
             summary_cache_key = f"summary_{location.lower()}_{month:02d}_{day:02d}"
-            cached_summary = redis_client.get(summary_cache_key)
+            cached_summary = get_cache(summary_cache_key)
             if cached_summary:
                 debug_print(f"Cache hit: {summary_cache_key}")
                 summary_data = json.loads(cached_summary)
             else:
                 summary_data = await get_summary(location, month_day, weather_data)
-                redis_client.setex(summary_cache_key, timedelta(hours=24), json.dumps(summary_data))
+                set_cache(summary_cache_key, timedelta(hours=24), json.dumps(summary_data))
 
             # Check cache for average
             average_cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
-            cached_average = redis_client.get(average_cache_key)
+            cached_average = get_cache(average_cache_key)
             if cached_average:
                 debug_print(f"Cache hit: {average_cache_key}")
                 average_data = json.loads(cached_average)
             else:
                 average_data = get_average_dict(weather_data)
-                redis_client.setex(average_cache_key, timedelta(hours=24), json.dumps(average_data))
+                set_cache(average_cache_key, timedelta(hours=24), json.dumps(average_data))
         else:
             # If data is incomplete or cache is disabled, compute without caching
             summary_data = await get_summary(location, month_day, weather_data)
@@ -666,6 +666,16 @@ def get_average_dict(weather_data):
         "missing_years": weather_data['metadata']['missing_years'],
         "completeness": weather_data['metadata']['completeness']
     }
+
+# get a value from the cache
+def get_cache(cache_key):
+    debug_print(f"Get cache for {cache_key }")
+    redis_client.get(cache_key)
+
+# set a value in the cache
+def set_cache(cache_key, lifetime, value):
+    debug_print(f"Set cache for {cache_key }")
+    redis_client.setex(cache_key, lifetime, value)
 
 # For local testing
 if __name__ == "__main__":
