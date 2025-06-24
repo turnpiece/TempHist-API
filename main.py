@@ -57,21 +57,26 @@ async def verify_token_middleware(request: Request, call_next):
     public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
         return await call_next(request)
-    
-    # All other paths require a token
-    if not API_ACCESS_TOKEN:
+
+    # All other paths require a Firebase token
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
         return JSONResponse(
-            status_code=500, 
-            content={"detail": "API access token is not configured on the server."}
+            status_code=401,
+            content={"detail": "Missing or invalid Authorization header."}
         )
 
-    token = request.headers.get("X-API-Token")
-    if token != API_ACCESS_TOKEN:
+    id_token = auth_header.split(" ")[1]
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        # Optionally, attach user info to request.state
+        request.state.user = decoded_token
+    except Exception:
         return JSONResponse(
-            status_code=401, 
-            content={"detail": "Invalid or missing API token."}
+            status_code=403,
+            content={"detail": "Invalid Firebase token."}
         )
-        
+
     response = await call_next(request)
     return response
 
@@ -88,7 +93,12 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=[
+        "authorization",
+        "content-type",
+        "accept",
+        "x-requested-with",
+    ],
     expose_headers=["*"],
     max_age=600,  # Cache preflight requests for 10 minutes
 )
