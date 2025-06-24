@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import asyncio
@@ -13,6 +13,8 @@ import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import aiohttp
+import firebase_admin
+from firebase_admin import auth, credentials
 
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
@@ -28,6 +30,22 @@ def debug_print(*args, **kwargs):
 
 app = FastAPI()
 redis_client = redis.from_url(REDIS_URL)
+
+# check Firebase credentials
+cred = credentials.Certificate("firebase-service-account.json")  # Download from Firebase Console
+firebase_admin.initialize_app(cred)
+
+def verify_firebase_token(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    id_token = auth_header.split(" ")[1]
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        return decoded_token  # Can use user ID, etc.
+    except Exception as e:
+        raise HTTPException(status_code=403, detail="Invalid token")
 
 @app.middleware("http")
 async def verify_token_middleware(request: Request, call_next):
@@ -750,6 +768,10 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
         date_str, result = await fut
         results[date_str] = result
     return results
+
+@app.get("/protected-endpoint")
+def protected_route(user=Depends(verify_firebase_token)):
+    return {"message": "You are authenticated!", "user": user}
 
 # For local testing
 if __name__ == "__main__":

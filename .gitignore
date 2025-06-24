@@ -5,3 +5,4 @@ __pycache__/
 weather_cache/
 app.js
 server.js
+firebase-service-account.json
