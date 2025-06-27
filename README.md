@@ -49,6 +49,42 @@ A FastAPI backend for historical temperature data using Visual Crossing.
 - `GET /trend/{location}/{month_day}` - Get temperature trend over time
 - `GET /summary/{location}/{month_day}` - Get a text summary of temperature data
 - `GET /forecast/{location}` - Get current weather forecast
+- `GET /data/{location}/{month_day}` - Get all temperature data, summary, trend, and average for a specific date (format: MM-DD)
+
+### Example response for `/data/{location}/{month_day}`
+
+```json
+{
+  "weather": {
+    "data": [
+      { "x": 1970, "y": 15.0 },
+      { "x": 1971, "y": 15.5 },
+      { "x": 1972, "y": 16.0 },
+      // ... more years ...
+      { "x": 2024, "y": 17.0 }
+    ],
+    "metadata": {
+      "total_years": 55,
+      "available_years": 55,
+      "missing_years": [],
+      "completeness": 100.0
+    }
+  },
+  "summary": "17.0°C. This is the warmest 15th May on record. It is 2.0°C warmer than average today.",
+  "trend": {
+    "slope": 0.3,
+    "units": "°C/decade"
+  },
+  "average": {
+    "average": 15.0,
+    "unit": "celsius",
+    "data_points": 55,
+    "year_range": { "start": 1970, "end": 2024 },
+    "missing_years": [],
+    "completeness": 100.0
+  }
+}
+```
 
 ## Deployment
 

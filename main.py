@@ -115,6 +115,7 @@ async def root():
         "name": "Temperature History API",
         "version": "1.0.0",
         "endpoints": [
+            "/data/{location}/{month_day}"
             "/average/{location}/{month_day}",
             "/trend/{location}/{month_day}",
             "/weather/{location}/{date}",
