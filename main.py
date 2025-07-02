@@ -10,7 +10,7 @@ import asyncio
 import requests
 import redis
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as dt_date
 from typing import List, Dict, Optional
 import aiohttp
 import firebase_admin
@@ -23,6 +23,10 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 CACHE_CONTROL_HEADER = "public, max-age=14400, immutable"
+
+# Cache durations
+SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
+LONG_CACHE_DURATION = timedelta(hours=168)  # 1 week for historical data
 
 def debug_print(*args, **kwargs):
     if DEBUG:
@@ -489,6 +493,11 @@ async def test_redis():
     headers={"Cache-Control": CACHE_CONTROL_HEADER}
 )
 
+# Helper to check if a given year, month, day is today
+def is_today(year: int, month: int, day: int) -> bool:
+    today = dt_date.today()
+    return year == today.year and month == today.month and day == today.day
+
 @app.get("/data/{location}/{month_day}")
 async def get_all_data(location: str, month_day: str):
     debug_print(f"get_all_data for {location} on {month_day}")
@@ -511,6 +520,16 @@ async def get_all_data(location: str, month_day: str):
         summary_data = None
         average_data = None
 
+        # Determine if the latest data point is today
+        latest_year = None
+        if weather_data['data']:
+            latest_year = weather_data['data'][-1]['x']
+        cache_is_today = False
+        if latest_year is not None:
+            cache_is_today = is_today(latest_year, month, day)
+        # Set cache durations using global constants
+        cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
+
         if is_complete and CACHE_ENABLED:
             # Check cache for summary
             summary_cache_key = f"summary_{location.lower()}_{month:02d}_{day:02d}"
@@ -520,7 +539,7 @@ async def get_all_data(location: str, month_day: str):
                 summary_data = json.loads(cached_summary)
             else:
                 summary_data = await get_summary(location, month_day, weather_data)
-                set_cache(summary_cache_key, timedelta(hours=24), json.dumps(summary_data))
+                set_cache(summary_cache_key, cache_duration, json.dumps(summary_data))
 
             # Check cache for average
             average_cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
@@ -530,7 +549,7 @@ async def get_all_data(location: str, month_day: str):
                 average_data = json.loads(cached_average)
             else:
                 average_data = get_average_dict(weather_data)
-                set_cache(average_cache_key, timedelta(hours=24), json.dumps(average_data))
+                set_cache(average_cache_key, cache_duration, json.dumps(average_data))
         else:
             # If data is incomplete or cache is disabled, compute without caching
             summary_data = await get_summary(location, month_day, weather_data)
