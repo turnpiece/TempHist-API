@@ -172,7 +172,13 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                     if days is not None:
                         to_cache = {"days": days}
                         if CACHE_ENABLED:
-                            set_cache(cache_key, timedelta(hours=24), json.dumps(to_cache))
+                            # Determine cache duration
+                            try:
+                                year, month, day = map(int, date_str.split("-")[:3])
+                                cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
+                            except Exception:
+                                cache_duration = LONG_CACHE_DURATION
+                            set_cache(cache_key, cache_duration, json.dumps(to_cache))
                         return to_cache
                     else:
                         return {"error": "No 'days' data in response", "status": resp.status}
@@ -198,7 +204,12 @@ def get_weather(location: str, date: str):
     result = asyncio.run(get_weather_for_date(location, date))
     # Only cache successful results if caching is enabled and not already cached
     if CACHE_ENABLED and "error" not in result:
-        set_cache(cache_key, timedelta(hours=24), json.dumps(result))
+        try:
+            year, month, day = map(int, date.split("-")[:3])
+            cache_duration = SHORT_CACHE_DURATION if is_today_or_future(year, month, day) else LONG_CACHE_DURATION
+        except Exception:
+            cache_duration = LONG_CACHE_DURATION
+        set_cache(cache_key, cache_duration, json.dumps(result))
     return result
 
 # get a text summary
@@ -388,7 +399,7 @@ async def trend(location: str, month_day: str):
 
     # Cache the result if caching is enabled and data is complete
     if CACHE_ENABLED and is_complete:
-        set_cache(cache_key, timedelta(hours=24), json.dumps(result))
+        set_cache(cache_key, SHORT_CACHE_DURATION, json.dumps(result))
     
     return JSONResponse(content=result, headers=headers)
 
@@ -448,7 +459,7 @@ async def average(location: str, month_day: str):
 
     # Cache the result if caching is enabled and data is complete
     if CACHE_ENABLED and is_complete:
-        set_cache(cache_key, timedelta(hours=24), json.dumps(result))
+        set_cache(cache_key, SHORT_CACHE_DURATION, json.dumps(result))
     
     return JSONResponse(content=result, headers=headers)
 
@@ -497,6 +508,11 @@ async def test_redis():
 def is_today(year: int, month: int, day: int) -> bool:
     today = dt_date.today()
     return year == today.year and month == today.month and day == today.day
+
+def is_today_or_future(year: int, month: int, day: int) -> bool:
+    today = dt_date.today()
+    date = dt_date(year, month, day)
+    return date >= today
 
 @app.get("/data/{location}/{month_day}")
 async def get_all_data(location: str, month_day: str):
@@ -647,6 +663,16 @@ def is_valid_location(location: str) -> bool:
     return False
 
 async def get_temperature_series(location: str, month: int, day: int) -> Dict:
+    # Check for cached series first
+    series_cache_key = f"series_{location.lower()}_{month:02d}_{day:02d}"
+    if CACHE_ENABLED:
+        cached_series = get_cache(series_cache_key)
+        if cached_series:
+            debug_print(f"Cache hit: {series_cache_key}")
+            try:
+                return json.loads(cached_series)
+            except Exception as e:
+                debug_print(f"Error decoding cached series for {series_cache_key}: {e}")
     if not is_valid_location(location):
         debug_print(f"Invalid location: {location}")
         raise HTTPException(status_code=400, detail=f"Invalid location: {location}")
@@ -689,7 +715,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                         # Cache the result if caching is enabled
                         if CACHE_ENABLED:
                             cache_key = f"{location.lower()}_{date_str}"
-                            set_cache(cache_key, timedelta(hours=24), json.dumps(weather))
+                            cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
+                            set_cache(cache_key, cache_duration, json.dumps(weather))
                     else:
                         debug_print(f"Temperature is None for {year}, marking as missing.")
                         missing_years.append({"year": year, "reason": "no_temperature_data"})
@@ -719,7 +746,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                         # Cache the result if caching is enabled
                         if CACHE_ENABLED:
                             cache_key = f"{location.lower()}_{date_str}"
-                            set_cache(cache_key, timedelta(hours=24), json.dumps(weather))
+                            cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
+                            set_cache(cache_key, cache_duration, json.dumps(weather))
                     else:
                         debug_print(f"Temperature is None for {year}, marking as missing.")
                         missing_years.append({"year": year, "reason": "no_temperature_data"})
@@ -751,6 +779,18 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
             },
             "error": f"Invalid location: {location}"
         }
+
+    # Cache the entire series for a short duration
+    if CACHE_ENABLED:
+        set_cache(series_cache_key, SHORT_CACHE_DURATION, json.dumps({
+            "data": data_list,
+            "metadata": {
+                "total_years": len(years),
+                "available_years": len(data),
+                "missing_years": missing_years,
+                "completeness": round(len(data) / len(years) * 100, 1) if years else 0
+            }
+        }))
 
     return {
         "data": data_list,

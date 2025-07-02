@@ -28,7 +28,7 @@ SAMPLE_TEMPERATURE_DATA = {
         {"x": 1972, "y": 16.0},
         {"x": 1973, "y": 15.8},
         {"x": 1974, "y": 16.2},
-        {"x": 2024, "y": 17.0}  # Current year
+        {"x": datetime.now().year, "y": 17.0}  # Current year
     ],
     "metadata": {
         "total_years": 6,
@@ -47,6 +47,11 @@ def mock_env_vars():
         'CACHE_ENABLED': 'true',
         'API_ACCESS_TOKEN': 'testing'  # Add the API token
     }):
+        yield
+
+@pytest.fixture(autouse=True)
+def mock_firebase_verify_id_token():
+    with patch("firebase_admin.auth.verify_id_token", return_value={"uid": "testuser"}):
         yield
 
 def test_calculate_historical_average():
@@ -83,7 +88,7 @@ def test_average_endpoint(client, location, month_day, expected_status):
     with patch('main.get_temperature_series', return_value=SAMPLE_TEMPERATURE_DATA):
         response = client.get(
             f"/average/{location}/{month_day}",
-            headers={"X-API-Token": "testing"}
+            headers={"Authorization": "Bearer test_token"}
         )
         assert response.status_code == expected_status
         if expected_status == 200:
@@ -100,7 +105,7 @@ def test_average_endpoint_no_token(client):
     """Test the average endpoint without an API token"""
     response = client.get("/average/London/05-15")
     assert response.status_code == 401
-    assert "Invalid or missing API token" in response.json()["detail"]
+    assert "Missing or invalid Authorization header." in response.json()["detail"]
 
 @pytest.mark.parametrize("location,month_day,expected_status", [
     ("London", "05-15", 200),  # Valid date
@@ -113,7 +118,7 @@ def test_trend_endpoint(client, location, month_day, expected_status):
     with patch('main.get_temperature_series', return_value=SAMPLE_TEMPERATURE_DATA):
         response = client.get(
             f"/trend/{location}/{month_day}",
-            headers={"X-API-Token": "testing"}
+            headers={"Authorization": "Bearer test_token"}
         )
         assert response.status_code == expected_status
         if expected_status == 200:
@@ -135,7 +140,7 @@ def test_weather_endpoint(client):
     with patch('main.fetch_weather_batch', return_value={"2024-05-15": mock_weather_data}):
         response = client.get(
             "/weather/London/2024-05-15",
-            headers={"X-API-Token": "testing"}
+            headers={"Authorization": "Bearer test_token"}
         )
         assert response.status_code == 200
         data = response.json()
@@ -148,7 +153,7 @@ def test_summary_endpoint(client):
     with patch('main.get_temperature_series', return_value=SAMPLE_TEMPERATURE_DATA):
         response = client.get(
             "/summary/London/05-15",
-            headers={"X-API-Token": "testing"}
+            headers={"Authorization": "Bearer test_token"}
         )
         assert response.status_code == 200
         data = response.json()
@@ -207,6 +212,15 @@ async def test_average_vs_current_temperature():
     
     # Test summary text generation
     from main import get_summary
+    # Patch the last year to be current year
+    test_data = [
+        {"x": 1970, "y": 15.0},
+        {"x": 1971, "y": 15.5},
+        {"x": 1972, "y": 16.0},
+        {"x": 1973, "y": 15.8},
+        {"x": 1974, "y": 16.2},
+        {"x": datetime.now().year, "y": 17.0}
+    ]
     summary = await get_summary(location="London", month_day="05-15", weather_data=test_data)
     current_temp = test_data[-1]["y"]  # 17.0
     temp_diff = round(current_temp - avg, 1)
@@ -225,7 +239,7 @@ async def test_summary_text_accuracy():
                 {"x": 1972, "y": 15.0},
                 {"x": 1973, "y": 15.0},
                 {"x": 1974, "y": 15.0},
-                {"x": 2024, "y": 17.0}  # 2.0°C warmer
+                {"x": datetime.now().year, "y": 17.0}  # 2.0°C warmer
             ],
             "expected_diff": 2.0
         },
@@ -236,7 +250,7 @@ async def test_summary_text_accuracy():
                 {"x": 1972, "y": 15.0},
                 {"x": 1973, "y": 15.0},
                 {"x": 1974, "y": 15.0},
-                {"x": 2024, "y": 13.0}  # 2.0°C cooler
+                {"x": datetime.now().year, "y": 13.0}  # 2.0°C cooler
             ],
             "expected_diff": -2.0
         }
