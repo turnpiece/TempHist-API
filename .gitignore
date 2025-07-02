@@ -6,5 +6,5 @@ weather_cache/
 app.js
 server.js
 firebase-service-account.json
-.venv/
+venv/
 .python-version
