@@ -1,6 +1,7 @@
 # Standard library imports
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timedelta, date as dt_date
 from typing import List, Dict, Optional
@@ -27,6 +28,17 @@ CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 CACHE_CONTROL_HEADER = "public, max-age=14400, immutable"
 
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG if DEBUG else logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler('temphist.log') if DEBUG else logging.NullHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # API Configuration
 VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
 VISUAL_CROSSING_UNIT_GROUP = "metric"
@@ -40,10 +52,7 @@ def build_visual_crossing_url(location: str, date: str) -> str:
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
 LONG_CACHE_DURATION = timedelta(hours=168)  # 1 week for historical data
 
-def debug_print(*args, **kwargs):
-    """Print debug messages if DEBUG is enabled."""
-    if DEBUG:
-        print(*args, **kwargs)
+# Remove the old debug_print function - we'll use logger.debug() instead
 
 app = FastAPI()
 redis_client = redis.from_url(REDIS_URL)
@@ -158,13 +167,13 @@ def fetch_weather_from_api(location: str, date: str):
 # get a value from the cache
 def get_cache(cache_key):
     """Get a value from the cache."""
-    debug_print(f"Get cache for {cache_key}")
+    logger.debug(f"Get cache for {cache_key}")
     return redis_client.get(cache_key)
 
 # set a value in the cache
 def set_cache(cache_key, lifetime, value):
     """Set a value in the cache with specified lifetime."""
-    debug_print(f"Set cache for {cache_key}")
+    logger.debug(f"Set cache for {cache_key}")
     redis_client.setex(cache_key, lifetime, value)
 
 # Shared async function for fetching and caching weather data for a single date
@@ -174,18 +183,18 @@ def get_weather_cache_key(location: str, date_str: str) -> str:
 
 async def get_weather_for_date(location: str, date_str: str) -> dict:
     """Fetch and cache weather data for a specific date."""
-    debug_print(f"get_weather_for_date for {location} on {date_str}")
+    logger.debug(f"get_weather_for_date for {location} on {date_str}")
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
         cached_data = get_cache(cache_key)
         if cached_data:
-            debug_print(f"Cache hit: {cache_key}")
+            logger.debug(f"Cache hit: {cache_key}")
             try:
                 return json.loads(cached_data)
             except Exception as e:
-                debug_print(f"Error decoding cached data for {cache_key}: {e}")
+                logger.error(f"Error decoding cached data for {cache_key}: {e}")
 
-    debug_print(f"Cache miss: {cache_key} — fetching from API")
+    logger.debug(f"Cache miss: {cache_key} — fetching from API")
     url = build_visual_crossing_url(location, date_str)
     try:
         async with aiohttp.ClientSession() as session:
@@ -220,9 +229,9 @@ def get_weather(location: str, date: str):
     if CACHE_ENABLED:
         cached_data = get_cache(cache_key)
         if cached_data:
-            debug_print(f"Cache hit: {cache_key}")
+            logger.debug(f"Cache hit: {cache_key}")
             return json.loads(cached_data)
-        debug_print(f"Cache miss: {cache_key} — fetching from API")
+        logger.debug(f"Cache miss: {cache_key} — fetching from API")
     # Use the shared async function for consistency
     # Since this is a sync endpoint, run the async function in the event loop
     result = asyncio.run(get_weather_for_date(location, date))
@@ -248,18 +257,18 @@ async def summary(location: str, month_day: str, request: Request):
         raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
 
     data = await get_temperature_series(location, month, day)
-    debug_print(f"Summary data for {location} on {month_day}:")
-    debug_print(f"Number of data points: {len(data['data'])}")
-    debug_print(f"Date range: {data['data'][0]['x']} to {data['data'][-1]['x']}")
-    debug_print(f"Current temperature: {data['data'][-1]['y']}°C")
+    logger.debug(f"Summary data for {location} on {month_day}:")
+    logger.debug(f"Number of data points: {len(data['data'])}")
+    logger.debug(f"Date range: {data['data'][0]['x']} to {data['data'][-1]['x']}")
+    logger.debug(f"Current temperature: {data['data'][-1]['y']}°C")
     
     if len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
 
     data_list = sorted(data['data'], key=lambda d: d['x'])
     avg_temp = calculate_historical_average(data_list)
-    debug_print(f"Calculated average: {avg_temp}°C")
-    debug_print(f"Temperature difference: {round(data_list[-1]['y'] - avg_temp, 1)}°C")
+    logger.debug(f"Calculated average: {avg_temp}°C")
+    logger.debug(f"Temperature difference: {round(data_list[-1]['y'] - avg_temp, 1)}°C")
 
     summary_text = await get_summary(location, month_day, data)
     return JSONResponse(content={"summary": summary_text}, headers={"Cache-Control": CACHE_CONTROL_HEADER})
@@ -372,7 +381,7 @@ async def get_summary(location: str, month_day: str, weather_data: Optional[List
         return generate_summary(weather_data, date)
 
     except Exception as e:
-        debug_print(f"Error in get_summary: {e}")
+        logger.error(f"Error in get_summary: {e}")
         return "Error generating summary."
 
 # get the warming/cooling trend
@@ -401,9 +410,9 @@ async def trend(location: str, month_day: str):
     if CACHE_ENABLED:
         cached_data = get_cache(cache_key)
         if cached_data:
-            debug_print(f"Cache hit: {cache_key}")
+            logger.debug(f"Cache hit: {cache_key}")
             return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
-        debug_print(f"Cache miss: {cache_key} — calculating trend")
+        logger.debug(f"Cache miss: {cache_key} — calculating trend")
 
     data = await get_temperature_series(location, month, day)
 
@@ -455,9 +464,9 @@ async def average(location: str, month_day: str):
     if CACHE_ENABLED:
         cached_data = get_cache(cache_key)
         if cached_data:
-            debug_print(f"Cache hit: {cache_key}")
+            logger.debug(f"Cache hit: {cache_key}")
             return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
-        debug_print(f"Cache miss: {cache_key} — calculating average")
+        logger.debug(f"Cache miss: {cache_key} — calculating average")
 
     data = await get_temperature_series(location, month, day)
 
@@ -548,11 +557,11 @@ def is_today_or_future(year: int, month: int, day: int) -> bool:
 @app.get("/data/{location}/{month_day}")
 async def get_all_data(location: str, month_day: str):
     """Get all temperature data, summary, trend, and average for a location and date."""
-    debug_print(f"get_all_data for {location} on {month_day}")
+    logger.debug(f"get_all_data for {location} on {month_day}")
     try:
         month, day = map(int, month_day.split("-"))
         weather_data = await get_temperature_series(location, month, day)
-        debug_print(f"weather_data for {location} on {month_day}: {weather_data}")
+        logger.debug(f"weather_data for {location} on {month_day}: {weather_data}")
         if not weather_data['data']:
             return JSONResponse(
                 content={
@@ -583,7 +592,7 @@ async def get_all_data(location: str, month_day: str):
             summary_cache_key = f"summary_{location.lower()}_{month:02d}_{day:02d}"
             cached_summary = get_cache(summary_cache_key)
             if cached_summary:
-                debug_print(f"Cache hit: {summary_cache_key}")
+                logger.debug(f"Cache hit: {summary_cache_key}")
                 summary_data = json.loads(cached_summary)
             else:
                 summary_data = await get_summary(location, month_day, weather_data)
@@ -593,7 +602,7 @@ async def get_all_data(location: str, month_day: str):
             average_cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
             cached_average = get_cache(average_cache_key)
             if cached_average:
-                debug_print(f"Cache hit: {average_cache_key}")
+                logger.debug(f"Cache hit: {average_cache_key}")
                 average_data = json.loads(cached_average)
             else:
                 average_data = get_average_dict(weather_data)
@@ -705,15 +714,15 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     if CACHE_ENABLED:
         cached_series = get_cache(series_cache_key)
         if cached_series:
-            debug_print(f"Cache hit: {series_cache_key}")
+            logger.debug(f"Cache hit: {series_cache_key}")
             try:
                 return json.loads(cached_series)
             except Exception as e:
-                debug_print(f"Error decoding cached series for {series_cache_key}: {e}")
+                logger.error(f"Error decoding cached series for {series_cache_key}: {e}")
     if not is_valid_location(location):
-        debug_print(f"Invalid location: {location}")
+        logger.warning(f"Invalid location: {location}")
         raise HTTPException(status_code=400, detail=f"Invalid location: {location}")
-    debug_print(f"get_temperature_series for {location} on {day}/{month}")
+    logger.debug(f"get_temperature_series for {location} on {day}/{month}")
     today = datetime.now()
     current_year = today.year
     years = list(range(current_year - 50, current_year + 1))
@@ -724,20 +733,20 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     uncached_date_strs = []
     year_to_date_str = {}
     for year in years:
-        debug_print(f"get_temperature_series year: {year}")
+        logger.debug(f"get_temperature_series year: {year}")
         date_str = f"{year}-{month:02d}-{day:02d}"
         cache_key = f"{location.lower()}_{date_str}"
         year_to_date_str[year] = date_str
         # If this is today's date, use the forecast data
         if year == current_year and month == today.month and day == today.day:
-            debug_print("get_temperature_series forecast for today")
+            logger.debug("get_temperature_series forecast for today")
             try:
                 forecast_data = get_forecast_data(location, datetime(year, month, day).date())
-                debug_print(f"Got forecast data {forecast_data}")
+                logger.debug(f"Got forecast data {forecast_data}")
                 data.append({"x": year, "y": forecast_data["average_temperature"]})
                 continue
             except Exception as e:
-                debug_print(f"Error fetching forecast: {str(e)}")
+                logger.error(f"Error fetching forecast: {str(e)}")
                 missing_years.append({"year": year, "reason": "forecast_failed"})
                 continue
         # Use historical data for all other dates
@@ -755,10 +764,10 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                             cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
                             set_cache(cache_key, cache_duration, json.dumps(weather))
                     else:
-                        debug_print(f"Temperature is None for {year}, marking as missing.")
+                        logger.debug(f"Temperature is None for {year}, marking as missing.")
                         missing_years.append({"year": year, "reason": "no_temperature_data"})
                 except (KeyError, IndexError, TypeError) as e:
-                    debug_print(f"Error processing cached data for {date_str}: {str(e)}")
+                    logger.error(f"Error processing cached data for {date_str}: {str(e)}")
                     missing_years.append({"year": year, "reason": "data_processing_error"})
                 continue
             else:
@@ -773,11 +782,11 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         batch_results = await fetch_weather_batch(location, uncached_date_strs)
         for year, date_str in zip(uncached_years, uncached_date_strs):
             weather = batch_results.get(date_str)
-            #debug_print(f"get_temperature_series weather: {weather}")
+            #logger.debug(f"get_temperature_series weather: {weather}")
             if weather and "error" not in weather:
                 try:
                     temp = weather["days"][0]["temp"]
-                    debug_print(f"Got {year} temperature = {temp}")
+                    logger.debug(f"Got {year} temperature = {temp}")
                     if temp is not None:
                         data.append({"x": year, "y": temp})
                         # Cache the result if caching is enabled
@@ -786,26 +795,26 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                             cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
                             set_cache(cache_key, cache_duration, json.dumps(weather))
                     else:
-                        debug_print(f"Temperature is None for {year}, marking as missing.")
+                        logger.debug(f"Temperature is None for {year}, marking as missing.")
                         missing_years.append({"year": year, "reason": "no_temperature_data"})
                 except (KeyError, IndexError, TypeError) as e:
-                    debug_print(f"Error processing batch data for {date_str}: {str(e)}")
+                    logger.error(f"Error processing batch data for {date_str}: {str(e)}")
                     missing_years.append({"year": year, "reason": "data_processing_error"})
             else:
                 missing_years.append({"year": year, "reason": weather.get("error", "api_error") if weather else "api_error"})
 
     # Print summary of collected data
-    debug_print("\nData summary:")
-    debug_print(f"Total data points: {len(data)}")
+    logger.debug("Data summary:")
+    logger.debug(f"Total data points: {len(data)}")
     if data:
         temps = [d['y'] for d in data]
         if temps:  # Add check to ensure temps list is not empty
-            debug_print(f"Temperature range: {min(temps):.1f}°C to {max(temps):.1f}°C")
-            debug_print(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
+            logger.debug(f"Temperature range: {min(temps):.1f}°C to {max(temps):.1f}°C")
+            logger.debug(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
 
     data_list = sorted(data, key=lambda d: d['x'])
     if not data_list:
-        debug_print(f"No valid temperature data found for {location} on {month}-{day}")
+        logger.warning(f"No valid temperature data found for {location} on {month}-{day}")
         return {
             "data": [],
             "metadata": {
@@ -863,7 +872,7 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
     Returns a dict mapping date_str to weather data.
     Now uses caching for each date.
     """
-    debug_print(f"fetch_weather_batch for {location}")
+    logger.debug(f"fetch_weather_batch for {location}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="Visual Crossing API key not configured")
     results = {}

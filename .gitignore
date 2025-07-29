@@ -15,3 +15,7 @@ venv/
 *.svg
 profile_*.py
 *.speedscope
+
+# Log files
+*.log
+temphist.log
