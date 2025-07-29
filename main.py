@@ -49,8 +49,12 @@ app = FastAPI()
 redis_client = redis.from_url(REDIS_URL)
 
 # check Firebase credentials
-cred = credentials.Certificate("firebase-service-account.json")  # Download from Firebase Console
-firebase_admin.initialize_app(cred)
+try:
+    cred = credentials.Certificate("firebase-service-account.json")  # Download from Firebase Console
+    firebase_admin.initialize_app(cred)
+except ValueError:
+    # Firebase app already initialized, skip
+    pass
 
 def verify_firebase_token(request: Request):
     """Verify Firebase authentication token."""
