@@ -1,21 +1,24 @@
+# Standard library imports
+import asyncio
+import json
 import os
+from datetime import datetime, timedelta, date as dt_date
+from typing import List, Dict, Optional
+
+# Third-party imports
+import aiohttp
+import firebase_admin
+import redis
+import requests
 from dotenv import load_dotenv
-
-load_dotenv()
-
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import asyncio
-import requests
-import redis
-import json
-from datetime import datetime, timedelta, date as dt_date
-from typing import List, Dict, Optional
-import aiohttp
-import firebase_admin
 from firebase_admin import auth, credentials
 
+load_dotenv()
+
+# Environment variables
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")
@@ -24,11 +27,21 @@ CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 CACHE_CONTROL_HEADER = "public, max-age=14400, immutable"
 
+# API Configuration
+VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
+VISUAL_CROSSING_UNIT_GROUP = "metric"
+VISUAL_CROSSING_INCLUDE_PARAMS = "days"
+
+def build_visual_crossing_url(location: str, date: str) -> str:
+    """Build Visual Crossing API URL with consistent parameters."""
+    return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
+
 # Cache durations
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
 LONG_CACHE_DURATION = timedelta(hours=168)  # 1 week for historical data
 
 def debug_print(*args, **kwargs):
+    """Print debug messages if DEBUG is enabled."""
     if DEBUG:
         print(*args, **kwargs)
 
@@ -40,6 +53,7 @@ cred = credentials.Certificate("firebase-service-account.json")  # Download from
 firebase_admin.initialize_app(cred)
 
 def verify_firebase_token(request: Request):
+    """Verify Firebase authentication token."""
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
@@ -53,6 +67,7 @@ def verify_firebase_token(request: Request):
 
 @app.middleware("http")
 async def verify_token_middleware(request: Request, call_next):
+    """Middleware to verify Firebase tokens for protected routes."""
     # Allow OPTIONS requests for CORS preflight
     if request.method == "OPTIONS":
         return await call_next(request)
@@ -119,7 +134,7 @@ async def root():
         "name": "Temperature History API",
         "version": "1.0.0",
         "endpoints": [
-            "/data/{location}/{month_day}"
+            "/data/{location}/{month_day}",
             "/average/{location}/{month_day}",
             "/trend/{location}/{month_day}",
             "/weather/{location}/{date}",
@@ -129,7 +144,8 @@ async def root():
     }
 
 def fetch_weather_from_api(location: str, date: str):
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date}?unitGroup=metric&include=days&key={API_KEY}"
+    """Fetch weather data from Visual Crossing API."""
+    url = build_visual_crossing_url(location, date)
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         return response.json()
@@ -137,19 +153,23 @@ def fetch_weather_from_api(location: str, date: str):
 
 # get a value from the cache
 def get_cache(cache_key):
-    debug_print(f"Get cache for {cache_key }")
+    """Get a value from the cache."""
+    debug_print(f"Get cache for {cache_key}")
     return redis_client.get(cache_key)
 
 # set a value in the cache
 def set_cache(cache_key, lifetime, value):
-    debug_print(f"Set cache for {cache_key }")
+    """Set a value in the cache with specified lifetime."""
+    debug_print(f"Set cache for {cache_key}")
     redis_client.setex(cache_key, lifetime, value)
 
 # Shared async function for fetching and caching weather data for a single date
 def get_weather_cache_key(location: str, date_str: str) -> str:
+    """Generate cache key for weather data."""
     return f"{location.lower()}_{date_str}"
 
 async def get_weather_for_date(location: str, date_str: str) -> dict:
+    """Fetch and cache weather data for a specific date."""
     debug_print(f"get_weather_for_date for {location} on {date_str}")
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
@@ -162,7 +182,7 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                 debug_print(f"Error decoding cached data for {cache_key}: {e}")
 
     debug_print(f"Cache miss: {cache_key} — fetching from API")
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date_str}?unitGroup=metric&include=days&key={API_KEY}"
+    url = build_visual_crossing_url(location, date_str)
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
@@ -190,6 +210,7 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
 
 @app.get("/weather/{location}/{date}")
 def get_weather(location: str, date: str):
+    """Get weather data for a specific location and date."""
     cache_key = f"{location.lower()}_{date}"
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
@@ -200,7 +221,6 @@ def get_weather(location: str, date: str):
         debug_print(f"Cache miss: {cache_key} — fetching from API")
     # Use the shared async function for consistency
     # Since this is a sync endpoint, run the async function in the event loop
-    import asyncio
     result = asyncio.run(get_weather_for_date(location, date))
     # Only cache successful results if caching is enabled and not already cached
     if CACHE_ENABLED and "error" not in result:
@@ -215,6 +235,7 @@ def get_weather(location: str, date: str):
 # get a text summary
 @app.get("/summary/{location}/{month_day}")
 async def summary(location: str, month_day: str, request: Request):
+    """Get a text summary of temperature data for a location and date."""
     try:
         month, day = map(int, month_day.split("-"))
         today = datetime.now()
@@ -353,6 +374,7 @@ async def get_summary(location: str, month_day: str, weather_data: Optional[List
 # get the warming/cooling trend
 @app.get("/trend/{location}/{month_day}")
 async def trend(location: str, month_day: str):
+    """Get the temperature trend (warming/cooling) for a location and date."""
     try:
         month, day = map(int, month_day.split("-"))
         # Validate month and day
@@ -406,6 +428,7 @@ async def trend(location: str, month_day: str):
 # get the average temperature
 @app.api_route("/average/{location}/{month_day}", methods=["GET", "OPTIONS"])
 async def average(location: str, month_day: str):
+    """Get the historical average temperature for a location and date."""
     try:
         month, day = map(int, month_day.split("-"))
         # Validate month and day
@@ -481,11 +504,13 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
 
 @app.get("/forecast/{location}")
 async def get_forecast(location: str):
+    """Get weather forecast for a location."""
     today = datetime.now().date()
     return get_forecast_data(location, today)
 
 @app.get("/test-redis")
 async def test_redis():
+    """Test Redis connection."""
     try:
         # Try to set a test value
         set_cache("test_key", timedelta(minutes=5), "test_value")
@@ -506,16 +531,19 @@ async def test_redis():
 
 # Helper to check if a given year, month, day is today
 def is_today(year: int, month: int, day: int) -> bool:
+    """Check if the given date is today."""
     today = dt_date.today()
     return year == today.year and month == today.month and day == today.day
 
 def is_today_or_future(year: int, month: int, day: int) -> bool:
+    """Check if the given date is today or in the future."""
     today = dt_date.today()
     date = dt_date(year, month, day)
     return date >= today
 
 @app.get("/data/{location}/{month_day}")
 async def get_all_data(location: str, month_day: str):
+    """Get all temperature data, summary, trend, and average for a location and date."""
     debug_print(f"get_all_data for {location} on {month_day}")
     try:
         month, day = map(int, month_day.split("-"))
@@ -602,6 +630,7 @@ async def get_all_data(location: str, month_day: str):
         )
     
 async def get_trend(location: str, month_day: str, weather_data: Optional[List[Dict]] = None) -> dict:
+    """Calculate temperature trend for a location and date."""
     if weather_data is None:
         month, day = map(int, month_day.split("-"))
         weather_data = await get_temperature_series(location, month, day)
@@ -616,6 +645,7 @@ async def get_trend(location: str, month_day: str, weather_data: Optional[List[D
     }
 
 def validate_month_day(month_day: str):
+    """Validate month-day format and return month, day integers."""
     try:
         month, day = map(int, month_day.split("-"))
     except Exception:
@@ -631,6 +661,7 @@ def validate_month_day(month_day: str):
     return month, day
 
 def get_average_dict(weather_data):
+    """Create average temperature dictionary from weather data."""
     data_list = sorted([d for d in weather_data['data'] if d.get('y') is not None], key=lambda d: d['x'])
     if not data_list:
         return {
@@ -655,14 +686,16 @@ def get_average_dict(weather_data):
     }
 
 def is_valid_location(location: str) -> bool:
+    """Check if a location is valid by testing the API."""
     today = datetime.now().strftime("%Y-%m-%d")
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{today}?unitGroup=metric&include=days&key={API_KEY}"
+    url = build_visual_crossing_url(location, today)
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         return True
     return False
 
 async def get_temperature_series(location: str, month: int, day: int) -> Dict:
+    """Get temperature series data for a location and date over multiple years."""
     # Check for cached series first
     series_cache_key = f"series_{location.lower()}_{month:02d}_{day:02d}"
     if CACHE_ENABLED:
@@ -803,7 +836,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     }
 
 def get_forecast_data(location: str, date: str) -> Dict:
-    url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{location}/{date}?unitGroup=metric&include=days&key={API_KEY}"
+    """Get forecast data for a location and date."""
+    url = build_visual_crossing_url(location, date)
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         data = response.json()
@@ -841,6 +875,7 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
 
 @app.get("/protected-endpoint")
 def protected_route(user=Depends(verify_firebase_token)):
+    """Protected endpoint that requires Firebase authentication."""
     return {"message": "You are authenticated!", "user": user}
 
 # For local testing
