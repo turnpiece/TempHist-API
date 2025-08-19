@@ -27,6 +27,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 CACHE_CONTROL_HEADER = "public, max-age=14400, immutable"
+FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
 # Configure logging
 logging.basicConfig(
@@ -298,7 +299,22 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                         
                         if temp is not None:
                             # Success! Cache and return the data
-                            to_cache = {"days": days}
+                            if FILTER_WEATHER_DATA:
+                                # Filter to only essential temperature data
+                                filtered_days = []
+                                for day_data in days:
+                                    filtered_day = {
+                                        'datetime': day_data.get('datetime'),
+                                        'temp': day_data.get('temp'),
+                                        'tempmin': day_data.get('tempmin'),
+                                        'tempmax': day_data.get('tempmax')
+                                    }
+                                    filtered_days.append(filtered_day)
+                                to_cache = {"days": filtered_days}
+                            else:
+                                # Return full data if filtering is disabled
+                                to_cache = {"days": days}
+
                             if CACHE_ENABLED:
                                 cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
                                 set_cache(cache_key, cache_duration, json.dumps(to_cache))
