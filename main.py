@@ -43,10 +43,21 @@ logger = logging.getLogger(__name__)
 VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
 VISUAL_CROSSING_UNIT_GROUP = "metric"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
+VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 
-def build_visual_crossing_url(location: str, date: str) -> str:
-    """Build Visual Crossing API URL with consistent parameters."""
-    return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
+def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
+    """Build Visual Crossing API URL with consistent parameters.
+    
+    Args:
+        location: The location to get weather data for
+        date: The date in YYYY-MM-DD format
+        remote: Whether to include remote data parameters (default: True)
+    """
+    base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
+    if remote:
+        return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
+    else:
+        return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?{base_params}"
 
 # Cache durations
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
@@ -157,12 +168,72 @@ async def root():
     }
 
 def fetch_weather_from_api(location: str, date: str):
-    """Fetch weather data from Visual Crossing API."""
-    url = build_visual_crossing_url(location, date)
+    """Fetch weather data from Visual Crossing API with fallback logic.
+    
+    Implements fallback logic for remote data:
+    1. First tries without remote data parameters
+    2. If no temperature data and year >= 2005, retries with remote data parameters
+    3. Never uses remote data for today's data
+    """
+    # Parse the date to determine the year
+    try:
+        year, month, day = map(int, date.split("-")[:3])
+        is_today_date = is_today(year, month, day)
+    except Exception:
+        year = 2000  # Default fallback
+        is_today_date = False
+    
+    # First attempt: without remote data parameters
+    url = build_visual_crossing_url(location, date, remote=False)
+    logger.debug(f"fetch_weather_from_api first attempt (no remote data): {url}")
+    
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-        return response.json()
-    return {"error": response.text, "status": response.status_code}
+        data = response.json()
+        days = data.get('days')
+        if days is not None and len(days) > 0:
+            # Check if we got valid temperature data
+            day_data = days[0]
+            temp = day_data.get('temp')
+            
+            if temp is not None:
+                # Success! Return the data
+                logger.debug(f"fetch_weather_from_api successful without remote data for {date}")
+                return data
+            else:
+                logger.debug(f"No temperature data in first attempt for {date}")
+        else:
+            logger.debug(f"No 'days' data in first attempt for {date}")
+    else:
+        logger.debug(f"First attempt failed with status {response.status_code}")
+    
+    # If we reach here, the first attempt didn't provide valid temperature data
+    # Check if we should try with remote data parameters
+    if not is_today_date and year >= 2005:
+        logger.debug(f"Trying fallback with remote data for {date} (year {year})")
+        url_with_remote = build_visual_crossing_url(location, date, remote=True)
+        
+        remote_response = requests.get(url_with_remote)
+        if remote_response.status_code == 200 and 'application/json' in remote_response.headers.get('Content-Type', ''):
+            remote_data = remote_response.json()
+            remote_days = remote_data.get('days')
+            if remote_days is not None and len(remote_days) > 0:
+                remote_day_data = remote_days[0]
+                remote_temp = remote_day_data.get('temp')
+                
+                if remote_temp is not None:
+                    # Success with remote data!
+                    logger.debug(f"Remote data fallback successful for {date}")
+                    return remote_data
+                else:
+                    logger.debug(f"No temperature data in remote fallback for {date}")
+            else:
+                logger.debug(f"No 'days' data in remote fallback for {date}")
+        else:
+            logger.debug(f"Remote fallback failed with status {remote_response.status_code}")
+    
+    # If we reach here, neither attempt provided valid temperature data
+    return {"error": "No temperature data available", "status": response.status_code}
 
 # get a value from the cache
 def get_cache(cache_key):
@@ -182,7 +253,13 @@ def get_weather_cache_key(location: str, date_str: str) -> str:
     return f"{location.lower()}_{date_str}"
 
 async def get_weather_for_date(location: str, date_str: str) -> dict:
-    """Fetch and cache weather data for a specific date."""
+    """Fetch and cache weather data for a specific date.
+    
+    Implements fallback logic for remote data:
+    1. First tries without remote data parameters
+    2. If no temperature data and year >= 2005, retries with remote data parameters
+    3. Never uses remote data for today's data
+    """
     logger.debug(f"get_weather_for_date for {location} on {date_str}")
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
@@ -195,30 +272,77 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                 logger.error(f"Error decoding cached data for {cache_key}: {e}")
 
     logger.debug(f"Cache miss: {cache_key} — fetching from API")
-    url = build_visual_crossing_url(location, date_str)
+    
+    # Parse the date to determine the year
+    try:
+        year, month, day = map(int, date_str.split("-")[:3])
+        is_today_date = is_today(year, month, day)
+    except Exception:
+        year = 2000  # Default fallback
+        is_today_date = False
+    
+    # First attempt: without remote data parameters
+    url = build_visual_crossing_url(location, date_str, remote=False)
+    logger.debug(f"First attempt (no remote data): {url}")
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
                     data = await resp.json()
                     days = data.get('days')
-                    if days is not None:
-                        to_cache = {"days": days}
-                        if CACHE_ENABLED:
-                            # Determine cache duration
-                            try:
-                                year, month, day = map(int, date_str.split("-")[:3])
-                                cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
-                            except Exception:
-                                cache_duration = LONG_CACHE_DURATION
-                            set_cache(cache_key, cache_duration, json.dumps(to_cache))
-                        return to_cache
+                    if days is not None and len(days) > 0:
+                        # Check if we got valid temperature data
+                        day_data = days[0]
+                        temp = day_data.get('temp')
+                        
+                        if temp is not None:
+                            # Success! Cache and return the data
+                            to_cache = {"days": days}
+                            if CACHE_ENABLED:
+                                cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
+                                set_cache(cache_key, cache_duration, json.dumps(to_cache))
+                            return to_cache
+                        else:
+                            logger.debug(f"No temperature data in first attempt for {date_str}")
                     else:
-                        return {"error": "No 'days' data in response", "status": resp.status}
+                        logger.debug(f"No 'days' data in first attempt for {date_str}")
                 else:
-                    text = await resp.text()
-                    return {"error": text, "status": resp.status}
+                    logger.debug(f"First attempt failed with status {resp.status}")
+                
+                # If we reach here, the first attempt didn't provide valid temperature data
+                # Check if we should try with remote data parameters
+                if not is_today_date and year >= 2005:
+                    logger.debug(f"Trying fallback with remote data for {date_str} (year {year})")
+                    url_with_remote = build_visual_crossing_url(location, date_str, remote=True)
+                    
+                    async with session.get(url_with_remote) as remote_resp:
+                        if remote_resp.status == 200 and 'application/json' in remote_resp.headers.get('Content-Type', ''):
+                            remote_data = await remote_resp.json()
+                            remote_days = remote_data.get('days')
+                            if remote_days is not None and len(remote_days) > 0:
+                                remote_day_data = remote_days[0]
+                                remote_temp = remote_day_data.get('temp')
+                                
+                                if remote_temp is not None:
+                                    # Success with remote data! Cache and return
+                                    logger.debug(f"Remote data fallback successful for {date_str}")
+                                    to_cache = {"days": remote_days}
+                                    if CACHE_ENABLED:
+                                        set_cache(cache_key, LONG_CACHE_DURATION, json.dumps(to_cache))
+                                    return to_cache
+                                else:
+                                    logger.debug(f"No temperature data in remote fallback for {date_str}")
+                            else:
+                                logger.debug(f"No 'days' data in remote fallback for {date_str}")
+                        else:
+                            logger.debug(f"Remote fallback failed with status {remote_resp.status}")
+                
+                # If we reach here, neither attempt provided valid temperature data
+                return {"error": "No temperature data available", "status": resp.status}
+                
     except Exception as e:
+        logger.error(f"Error in get_weather_for_date for {date_str}: {str(e)}")
         return {"error": str(e)}
 
 @app.get("/weather/{location}/{date}")
@@ -259,8 +383,15 @@ async def summary(location: str, month_day: str, request: Request):
     data = await get_temperature_series(location, month, day)
     logger.debug(f"Summary data for {location} on {month_day}:")
     logger.debug(f"Number of data points: {len(data['data'])}")
-    logger.debug(f"Date range: {data['data'][0]['x']} to {data['data'][-1]['x']}")
-    logger.debug(f"Current temperature: {data['data'][-1]['y']}°C")
+    if data['data']:
+        logger.debug(f"Date range: {data['data'][0]['x']} to {data['data'][-1]['x']}")
+    else:
+        logger.debug("No data available for date range")
+    current_temp = data['data'][-1]['y']
+    if current_temp is not None:
+        logger.debug(f"Current temperature: {current_temp}°C")
+    else:
+        logger.debug("Current temperature: None")
     
     if len(data['data']) < 2:
         raise HTTPException(status_code=404, detail="Not enough temperature data available.")
@@ -268,7 +399,10 @@ async def summary(location: str, month_day: str, request: Request):
     data_list = sorted(data['data'], key=lambda d: d['x'])
     avg_temp = calculate_historical_average(data_list)
     logger.debug(f"Calculated average: {avg_temp}°C")
-    logger.debug(f"Temperature difference: {round(data_list[-1]['y'] - avg_temp, 1)}°C")
+    if data_list[-1]['y'] is not None:
+        logger.debug(f"Temperature difference: {round(data_list[-1]['y'] - avg_temp, 1)}°C")
+    else:
+        logger.debug("Temperature difference: Cannot calculate (current temperature is None)")
 
     summary_text = await get_summary(location, month_day, data)
     return JSONResponse(content={"summary": summary_text}, headers={"Cache-Control": CACHE_CONTROL_HEADER})
@@ -500,12 +634,29 @@ async def average(location: str, month_day: str):
     return JSONResponse(content=result, headers=headers)
 
 def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
+    """Calculate temperature trend slope using linear regression.
+    
+    This function handles missing years correctly by using the actual years
+    in the linear regression calculation. The slope represents the rate of
+    temperature change per year, which is then converted to per decade.
+    
+    Args:
+        data: List of dictionaries with 'x' (year) and 'y' (temperature) keys
+        
+    Returns:
+        Slope in °C/decade, rounded to 2 decimal places
+    """
     # Filter out None values
     data = [d for d in data if d.get('y') is not None]
     n = len(data)
     if n < 2:
         return 0.0
 
+    # Sort by year to ensure proper ordering
+    data = sorted(data, key=lambda d: d['x'])
+    
+    # Use actual years for the calculation - this is mathematically correct
+    # Linear regression works with any x-values, not just consecutive integers
     sum_x = sum(p['x'] for p in data)
     sum_y = sum(p['y'] for p in data)
     sum_xy = sum(p['x'] * p['y'] for p in data)
@@ -513,7 +664,17 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
 
     numerator = n * sum_xy - sum_x * sum_y
     denominator = n * sum_xx - sum_x ** 2
-    return round(numerator / denominator, 2) * 10 if denominator != 0 else 0.0
+    
+    if denominator == 0:
+        return 0.0
+    
+    # Calculate slope in °C per year
+    slope_per_year = numerator / denominator
+    
+    # Convert to °C per decade
+    slope_per_decade = slope_per_year * 10.0
+    
+    return round(slope_per_decade, 2)
 
 @app.get("/forecast/{location}")
 async def get_forecast(location: str):
@@ -701,7 +862,7 @@ def get_average_dict(weather_data):
 def is_valid_location(location: str) -> bool:
     """Check if a location is valid by testing the API."""
     today = datetime.now().strftime("%Y-%m-%d")
-    url = build_visual_crossing_url(location, today)
+    url = build_visual_crossing_url(location, today, remote=False)
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         return True
@@ -743,7 +904,11 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
             try:
                 forecast_data = get_forecast_data(location, datetime(year, month, day).date())
                 logger.debug(f"Got forecast data {forecast_data}")
-                data.append({"x": year, "y": forecast_data["average_temperature"]})
+                if "error" in forecast_data:
+                    logger.warning(f"Forecast error: {forecast_data['error']}")
+                    missing_years.append({"year": year, "reason": "forecast_error"})
+                else:
+                    data.append({"x": year, "y": forecast_data["average_temperature"]})
                 continue
             except Exception as e:
                 logger.error(f"Error fetching forecast: {str(e)}")
@@ -850,16 +1015,19 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
 
 def get_forecast_data(location: str, date: str) -> Dict:
     """Get forecast data for a location and date."""
-    url = build_visual_crossing_url(location, date)
+    url = build_visual_crossing_url(location, date, remote=False)
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         data = response.json()
         if data.get('days') and len(data['days']) > 0:
             day_data = data['days'][0]
+            temp = day_data.get('temp')
+            if temp is None:
+                return {"error": "No temperature data in forecast response"}
             return {
                 "location": location,
                 "date": date,
-                "average_temperature": round(day_data['temp'], 1),
+                "average_temperature": round(temp, 1),
                 "unit": "celsius"
             }
         else:
