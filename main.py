@@ -4,7 +4,9 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, date as dt_date
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
+from collections import defaultdict
+import time
 
 # Third-party imports
 import aiohttp
@@ -29,6 +31,12 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 CACHE_CONTROL_HEADER = "public, max-age=14400, immutable"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
+# Rate limiting configuration
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
+MAX_LOCATIONS_PER_HOUR = int(os.getenv("MAX_LOCATIONS_PER_HOUR", "10"))
+MAX_REQUESTS_PER_HOUR = int(os.getenv("MAX_REQUESTS_PER_HOUR", "100"))
+RATE_LIMIT_WINDOW_HOURS = int(os.getenv("RATE_LIMIT_WINDOW_HOURS", "1"))
+
 # Configure logging
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -39,6 +47,179 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Rate Limiting Classes
+class LocationDiversityMonitor:
+    """Monitor and limit location diversity per IP address to prevent API abuse."""
+    
+    def __init__(self, max_locations: int = 10, window_hours: int = 1):
+        self.max_locations = max_locations
+        self.window_hours = window_hours
+        self.window_seconds = window_hours * 3600
+        
+        # Track unique locations per IP over time windows
+        self.ip_locations: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
+        self.suspicious_ips: Set[str] = set()
+        self.last_cleanup = time.time()
+        self.cleanup_interval = 300  # Clean up every 5 minutes
+        
+    def _cleanup_old_entries(self):
+        """Clean up old entries to prevent memory bloat."""
+        current_time = time.time()
+        if current_time - self.last_cleanup < self.cleanup_interval:
+            return
+            
+        window_start = current_time - self.window_seconds
+        
+        for ip_addr in list(self.ip_locations.keys()):
+            for timestamp in list(self.ip_locations[ip_addr].keys()):
+                if float(timestamp) < window_start:
+                    del self.ip_locations[ip_addr][timestamp]
+            
+            # Remove IP if no timestamps remain
+            if not self.ip_locations[ip_addr]:
+                del self.ip_locations[ip_addr]
+        
+        self.last_cleanup = current_time
+    
+    def check_location_diversity(self, ip: str, location: str) -> tuple[bool, str]:
+        """Check if IP is requesting too many different locations.
+        
+        Returns:
+            tuple: (is_allowed, reason)
+        """
+        self._cleanup_old_entries()
+        
+        current_time = time.time()
+        window_start = current_time - self.window_seconds
+        
+        # Add current request
+        timestamp_str = str(current_time)
+        self.ip_locations[ip][timestamp_str].add(location)
+        
+        # Count unique locations in time window
+        unique_locations = set()
+        for timestamp, locations in self.ip_locations[ip].items():
+            if float(timestamp) >= window_start:
+                unique_locations.update(locations)
+        
+        # Check if suspicious
+        if len(unique_locations) > self.max_locations:
+            self.suspicious_ips.add(ip)
+            return False, f"Too many different locations ({len(unique_locations)} > {self.max_locations}) in {self.window_hours} hour(s)"
+        
+        return True, "OK"
+    
+    def is_suspicious(self, ip: str) -> bool:
+        """Check if an IP has been flagged as suspicious."""
+        return ip in self.suspicious_ips
+    
+    def get_stats(self, ip: str) -> Dict:
+        """Get rate limiting stats for an IP address."""
+        current_time = time.time()
+        window_start = current_time - self.window_seconds
+        
+        unique_locations = set()
+        total_requests = 0
+        
+        for timestamp, locations in self.ip_locations[ip].items():
+            if float(timestamp) >= window_start:
+                unique_locations.update(locations)
+                total_requests += len(locations)
+        
+        return {
+            "unique_locations": len(unique_locations),
+            "total_requests": total_requests,
+            "max_locations": self.max_locations,
+            "window_hours": self.window_hours,
+            "is_suspicious": self.is_suspicious(ip)
+        }
+
+class RequestRateMonitor:
+    """Monitor and limit total request rate per IP address."""
+    
+    def __init__(self, max_requests: int = 100, window_hours: int = 1):
+        self.max_requests = max_requests
+        self.window_hours = window_hours
+        self.window_seconds = window_hours * 3600
+        
+        # Track request counts per IP over time windows
+        self.ip_requests: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self.last_cleanup = time.time()
+        self.cleanup_interval = 300  # Clean up every 5 minutes
+        
+    def _cleanup_old_entries(self):
+        """Clean up old entries to prevent memory bloat."""
+        current_time = time.time()
+        if current_time - self.last_cleanup < self.cleanup_interval:
+            return
+            
+        window_start = current_time - self.window_seconds
+        
+        for ip_addr in list(self.ip_requests.keys()):
+            for timestamp in list(self.ip_requests[ip_addr].keys()):
+                if float(timestamp) < window_start:
+                    del self.ip_requests[ip_addr][timestamp]
+            
+            # Remove IP if no timestamps remain
+            if not self.ip_requests[ip_addr]:
+                del self.ip_requests[ip_addr]
+        
+        self.last_cleanup = current_time
+    
+    def check_request_rate(self, ip: str) -> tuple[bool, str]:
+        """Check if IP is making too many requests.
+        
+        Returns:
+            tuple: (is_allowed, reason)
+        """
+        self._cleanup_old_entries()
+        
+        current_time = time.time()
+        window_start = current_time - self.window_seconds
+        
+        # Add current request
+        timestamp_str = str(int(current_time / 60) * 60)  # Round to minute for better grouping
+        self.ip_requests[ip][timestamp_str] += 1
+        
+        # Count total requests in time window
+        total_requests = sum(
+            count for timestamp, count in self.ip_requests[ip].items()
+            if float(timestamp) >= window_start
+        )
+        
+        # Check if rate limit exceeded
+        if total_requests > self.max_requests:
+            return False, f"Too many requests ({total_requests} > {self.max_requests}) in {self.window_hours} hour(s)"
+        
+        return True, "OK"
+    
+    def get_stats(self, ip: str) -> Dict:
+        """Get rate limiting stats for an IP address."""
+        current_time = time.time()
+        window_start = current_time - self.window_seconds
+        
+        total_requests = sum(
+            count for timestamp, count in self.ip_requests[ip].items()
+            if float(timestamp) >= window_start
+        )
+        
+        return {
+            "total_requests": total_requests,
+            "max_requests": self.max_requests,
+            "window_hours": self.window_hours,
+            "remaining_requests": max(0, self.max_requests - total_requests)
+        }
+
+# Initialize rate limiting monitors
+if RATE_LIMIT_ENABLED:
+    location_monitor = LocationDiversityMonitor(MAX_LOCATIONS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
+    request_monitor = RequestRateMonitor(MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
+    logger.info(f"Rate limiting enabled: max {MAX_LOCATIONS_PER_HOUR} locations, max {MAX_REQUESTS_PER_HOUR} requests per {RATE_LIMIT_WINDOW_HOURS} hour(s)")
+else:
+    location_monitor = None
+    request_monitor = None
+    logger.info("Rate limiting disabled")
 
 # API Configuration
 VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
@@ -77,6 +258,22 @@ except ValueError:
     # Firebase app already initialized, skip
     pass
 
+def get_client_ip(request: Request) -> str:
+    """Get the client IP address from the request."""
+    # Check for forwarded headers first (for proxy/load balancer scenarios)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # Take the first IP in the chain
+        return forwarded_for.split(",")[0].strip()
+    
+    # Check for real IP header
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+    
+    # Fallback to direct connection
+    return request.client.host if request.client else "unknown"
+
 def verify_firebase_token(request: Request):
     """Verify Firebase authentication token."""
     auth_header = request.headers.get("Authorization")
@@ -92,7 +289,7 @@ def verify_firebase_token(request: Request):
 
 @app.middleware("http")
 async def verify_token_middleware(request: Request, call_next):
-    """Middleware to verify Firebase tokens for protected routes."""
+    """Middleware to verify Firebase tokens and apply rate limiting for protected routes."""
     logger.info(f"[DEBUG] Middleware: Processing {request.method} request to {request.url.path}")
     
     # Allow OPTIONS requests for CORS preflight
@@ -100,8 +297,48 @@ async def verify_token_middleware(request: Request, call_next):
         logger.info(f"[DEBUG] Middleware: OPTIONS request, allowing through")
         return await call_next(request)
 
+    # Get client IP for rate limiting
+    client_ip = get_client_ip(request)
+    logger.info(f"[DEBUG] Middleware: Client IP: {client_ip}")
+
+    # Apply rate limiting if enabled
+    if RATE_LIMIT_ENABLED and location_monitor and request_monitor:
+        # Check request rate first
+        rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
+        if not rate_allowed:
+            logger.warning(f"[DEBUG] Middleware: Rate limit exceeded for {client_ip}: {rate_reason}")
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Rate limit exceeded",
+                    "reason": rate_reason,
+                    "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600
+                },
+                headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
+            )
+        
+        # For weather-related endpoints, check location diversity
+        weather_paths = ["/weather/", "/data/", "/summary/", "/trend/", "/average/", "/forecast/"]
+        if any(request.url.path.startswith(path) for path in weather_paths):
+            # Extract location from path
+            path_parts = request.url.path.split("/")
+            if len(path_parts) >= 3:
+                location = path_parts[2]  # e.g., "/weather/london/2024-01-15" -> "london"
+                location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
+                if not location_allowed:
+                    logger.warning(f"[DEBUG] Middleware: Location diversity limit exceeded for {client_ip}: {location_reason}")
+                    return JSONResponse(
+                        status_code=429,
+                        content={
+                            "detail": "Location diversity limit exceeded",
+                            "reason": location_reason,
+                            "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600
+                        },
+                        headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
+                    )
+
     # Public paths that don't require a token
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
@@ -151,6 +388,7 @@ app.add_middleware(
         "https://*.onrender.com",  # Any Render subdomain
         "https://temphist.com",  # Main domain
         "https://www.temphist.com",  # www subdomain
+        "https://dev.temphist.com",  # development site
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -181,7 +419,9 @@ async def root():
             "/trend/{location}/{month_day}",
             "/weather/{location}/{date}",
             "/summary/{location}/{month_day}",
-            "/forecast/{location}"
+            "/forecast/{location}",
+            "/rate-limit-status",
+            "/rate-limit-stats"
         ]
     }
 
@@ -760,6 +1000,51 @@ async def test_redis():
     headers={"Cache-Control": CACHE_CONTROL_HEADER}
 )
 
+@app.get("/rate-limit-status")
+async def get_rate_limit_status(request: Request):
+    """Get rate limiting status for the current client IP."""
+    if not RATE_LIMIT_ENABLED:
+        return {"status": "disabled", "message": "Rate limiting is not enabled"}
+    
+    client_ip = get_client_ip(request)
+    
+    location_stats = location_monitor.get_stats(client_ip) if location_monitor else {}
+    request_stats = request_monitor.get_stats(client_ip) if request_monitor else {}
+    
+    return {
+        "client_ip": client_ip,
+        "location_monitor": location_stats,
+        "request_monitor": request_stats,
+        "rate_limits": {
+            "max_locations_per_hour": MAX_LOCATIONS_PER_HOUR,
+            "max_requests_per_hour": MAX_REQUESTS_PER_HOUR,
+            "window_hours": RATE_LIMIT_WINDOW_HOURS
+        }
+    }
+
+@app.get("/rate-limit-stats")
+async def get_rate_limit_stats():
+    """Get overall rate limiting statistics (admin endpoint)."""
+    if not RATE_LIMIT_ENABLED:
+        return {"status": "disabled", "message": "Rate limiting is not enabled"}
+    
+    # Get stats for all monitored IPs
+    all_stats = {}
+    
+    if location_monitor:
+        for ip in location_monitor.ip_locations.keys():
+            all_stats[ip] = {
+                "location_stats": location_monitor.get_stats(ip),
+                "request_stats": request_monitor.get_stats(ip) if request_monitor else {},
+                "suspicious": location_monitor.is_suspicious(ip)
+            }
+    
+    return {
+        "total_monitored_ips": len(all_stats),
+        "suspicious_ips": list(location_monitor.suspicious_ips) if location_monitor else [],
+        "ip_details": all_stats
+    }
+
 # Helper to check if a given year, month, day is today
 def is_today(year: int, month: int, day: int) -> bool:
     """Check if the given date is today."""
@@ -1070,9 +1355,15 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         }
     }
 
-def get_forecast_data(location: str, date: str) -> Dict:
+def get_forecast_data(location: str, date) -> Dict:
     """Get forecast data for a location and date."""
-    url = build_visual_crossing_url(location, date, remote=False)
+    # Convert date to string format if it's a date object
+    if hasattr(date, 'strftime'):
+        date_str = date.strftime("%Y-%m-%d")
+    else:
+        date_str = str(date)
+    
+    url = build_visual_crossing_url(location, date_str, remote=False)
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         data = response.json()
