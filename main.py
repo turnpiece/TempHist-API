@@ -215,11 +215,17 @@ class RequestRateMonitor:
 if RATE_LIMIT_ENABLED:
     location_monitor = LocationDiversityMonitor(MAX_LOCATIONS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
     request_monitor = RequestRateMonitor(MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
-    logger.info(f"Rate limiting enabled: max {MAX_LOCATIONS_PER_HOUR} locations, max {MAX_REQUESTS_PER_HOUR} requests per {RATE_LIMIT_WINDOW_HOURS} hour(s)")
+    if DEBUG:
+        logger.info(f"🛡️  RATE LIMITING INITIALIZED: {MAX_LOCATIONS_PER_HOUR} locations/hour, {MAX_REQUESTS_PER_HOUR} requests/hour, {RATE_LIMIT_WINDOW_HOURS}h window")
+    else:
+        logger.info(f"Rate limiting enabled: max {MAX_LOCATIONS_PER_HOUR} locations, max {MAX_REQUESTS_PER_HOUR} requests per {RATE_LIMIT_WINDOW_HOURS} hour(s)")
 else:
     location_monitor = None
     request_monitor = None
-    logger.info("Rate limiting disabled")
+    if DEBUG:
+        logger.info("⚠️  RATE LIMITING DISABLED")
+    else:
+        logger.info("Rate limiting disabled")
 
 # API Configuration
 VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
@@ -288,6 +294,28 @@ def verify_firebase_token(request: Request):
         raise HTTPException(status_code=403, detail="Invalid token")
 
 @app.middleware("http")
+async def log_requests_middleware(request: Request, call_next):
+    """Log all requests when DEBUG is enabled."""
+    if DEBUG:
+        start_time = time.time()
+        client_ip = get_client_ip(request)
+        
+        # Log request details
+        logger.info(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {request.headers.get('user-agent', 'Unknown')}")
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Log response details
+        process_time = time.time() - start_time
+        logger.info(f"✅ RESPONSE: {response.status_code} | {request.method} {request.url.path} | {process_time:.3f}s | IP: {client_ip}")
+        
+        return response
+    else:
+        # Skip logging in production
+        return await call_next(request)
+
+@app.middleware("http")
 async def verify_token_middleware(request: Request, call_next):
     """Middleware to verify Firebase tokens and apply rate limiting for protected routes."""
     logger.info(f"[DEBUG] Middleware: Processing {request.method} request to {request.url.path}")
@@ -306,7 +334,8 @@ async def verify_token_middleware(request: Request, call_next):
         # Check request rate first
         rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
         if not rate_allowed:
-            logger.warning(f"[DEBUG] Middleware: Rate limit exceeded for {client_ip}: {rate_reason}")
+            if DEBUG:
+                logger.warning(f"🚫 RATE LIMIT EXCEEDED: {client_ip} | {request.method} {request.url.path} | {rate_reason}")
             return JSONResponse(
                 status_code=429,
                 content={
@@ -316,6 +345,8 @@ async def verify_token_middleware(request: Request, call_next):
                 },
                 headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
             )
+        elif DEBUG:
+            logger.debug(f"✅ RATE LIMIT CHECK: {client_ip} | {request.method} {request.url.path} | Rate: OK")
         
         # For weather-related endpoints, check location diversity
         weather_paths = ["/weather/", "/data/", "/summary/", "/trend/", "/average/", "/forecast/"]
@@ -326,7 +357,8 @@ async def verify_token_middleware(request: Request, call_next):
                 location = path_parts[2]  # e.g., "/weather/london/2024-01-15" -> "london"
                 location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
                 if not location_allowed:
-                    logger.warning(f"[DEBUG] Middleware: Location diversity limit exceeded for {client_ip}: {location_reason}")
+                    if DEBUG:
+                        logger.warning(f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {location_reason}")
                     return JSONResponse(
                         status_code=429,
                         content={
@@ -336,6 +368,8 @@ async def verify_token_middleware(request: Request, call_next):
                         },
                         headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
                     )
+                elif DEBUG:
+                    logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {location} | OK")
 
     # Public paths that don't require a token
     public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats"]
@@ -443,7 +477,9 @@ def fetch_weather_from_api(location: str, date: str):
     
     # First attempt: without remote data parameters
     url = build_visual_crossing_url(location, date, remote=False)
-    logger.debug(f"fetch_weather_from_api first attempt (no remote data): {url}")
+    if DEBUG:
+        logger.debug(f"🌤️  API CALL: {location} | {date} | Remote: False")
+        logger.debug(f"🔗 URL: {url}")
     
     response = requests.get(url)
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
@@ -468,7 +504,8 @@ def fetch_weather_from_api(location: str, date: str):
     # If we reach here, the first attempt didn't provide valid temperature data
     # Check if we should try with remote data parameters
     if not is_today_date and year >= 2005:
-        logger.debug(f"Trying fallback with remote data for {date} (year {year})")
+        if DEBUG:
+            logger.debug(f"🔄 API FALLBACK: {location} | {date} | Year: {year}")
         url_with_remote = build_visual_crossing_url(location, date, remote=True)
         
         remote_response = requests.get(url_with_remote)
@@ -496,13 +533,20 @@ def fetch_weather_from_api(location: str, date: str):
 # get a value from the cache
 def get_cache(cache_key):
     """Get a value from the cache."""
-    logger.debug(f"Get cache for {cache_key}")
-    return redis_client.get(cache_key)
+    if DEBUG:
+        logger.debug(f"🔍 CACHE GET: {cache_key}")
+    result = redis_client.get(cache_key)
+    if DEBUG and result:
+        logger.debug(f"✅ CACHE HIT: {cache_key}")
+    elif DEBUG:
+        logger.debug(f"❌ CACHE MISS: {cache_key}")
+    return result
 
 # set a value in the cache
 def set_cache(cache_key, lifetime, value):
     """Set a value in the cache with specified lifetime."""
-    logger.debug(f"Set cache for {cache_key}")
+    if DEBUG:
+        logger.debug(f"💾 CACHE SET: {cache_key} | TTL: {lifetime}")
     redis_client.setex(cache_key, lifetime, value)
 
 # Shared async function for fetching and caching weather data for a single date
@@ -523,7 +567,8 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
     if CACHE_ENABLED:
         cached_data = get_cache(cache_key)
         if cached_data:
-            logger.debug(f"Cache hit: {cache_key}")
+            if DEBUG:
+                logger.debug(f"✅ SERVING CACHED WEATHER: {cache_key} | Location: {location} | Date: {date_str}")
             try:
                 return json.loads(cached_data)
             except Exception as e:
@@ -578,6 +623,9 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                                 # Return full data if filtering is disabled
                                 to_cache = {"days": days}
 
+                            if DEBUG:
+                                logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
+
                             if CACHE_ENABLED:
                                 cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
                                 set_cache(cache_key, cache_duration, json.dumps(to_cache))
@@ -612,6 +660,8 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                                     # Success with remote data! Cache and return
                                     logger.debug(f"Remote data fallback successful for {date_str}")
                                     to_cache = {"days": remote_days}
+                                    if DEBUG:
+                                        logger.debug(f"🌤️ REMOTE FALLBACK RESPONSE: {location} | {date_str}")
                                     if CACHE_ENABLED:
                                         set_cache(cache_key, LONG_CACHE_DURATION, json.dumps(to_cache))
                                     return to_cache
@@ -643,19 +693,29 @@ def get_weather(location: str, date: str):
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        logger.info(f"[DEBUG] Caching enabled, checking cache...")
+        if DEBUG:
+            logger.info(f"🔍 CACHE CHECK: {cache_key}")
         cached_data = get_cache(cache_key)
         if cached_data:
-            logger.info(f"[DEBUG] Cache hit: {cache_key}")
+            if DEBUG:
+                logger.info(f"✅ SERVING CACHED DATA: {cache_key} | Location: {location} | Date: {date}")
             return json.loads(cached_data)
-        logger.info(f"[DEBUG] Cache miss: {cache_key} — fetching from API")
+        if DEBUG:
+            logger.info(f"❌ CACHE MISS: {cache_key} — fetching from API")
     else:
-        logger.info(f"[DEBUG] Caching disabled, fetching from API")
+        if DEBUG:
+            logger.info(f"⚠️  CACHING DISABLED: fetching from API")
     
     logger.info(f"[DEBUG] About to call get_weather_for_date...")
     # Use the shared async function for consistency
     # Since this is a sync endpoint, run the async function in the event loop
     result = asyncio.run(get_weather_for_date(location, date))
+    
+    # Log the final response being returned to the client
+    if DEBUG:
+        logger.debug(f"🎯 FINAL RESPONSE TO CLIENT: {location} | {date}")
+        logger.debug(f"📄 FINAL JSON RESPONSE: {json.dumps(result, indent=2)}")
+    
     # Only cache successful results if caching is enabled and not already cached
     if CACHE_ENABLED and "error" not in result:
         try:
@@ -749,33 +809,43 @@ async def get_summary(location: str, month_day: str, weather_data: Optional[List
         is_warmest = all(latest['y'] >= p['y'] for p in previous)
         is_coldest = all(latest['y'] <= p['y'] for p in previous)
 
+        # Check against last year first for consistency
+        last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
+        
+        # Generate mutually exclusive summaries to avoid contradictions
         if is_warmest:
             warm_summary = f"This is the warmest {friendly_date} on record."
-        else:
-            last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
-            if last_warmer:
-                years_since = int(latest['x'] - last_warmer)
-                if years_since > 1:
+        elif is_coldest:
+            cold_summary = f"This is the coldest {friendly_date} on record."
+        elif last_year_temp is not None:
+            # Compare against last year first
+            if latest['y'] > last_year_temp:
+                # Warmer than last year - find last warmer year
+                last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
+                if last_warmer:
+                    years_since = int(latest['x'] - last_warmer)
                     if years_since == 2:
                         warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
                     elif years_since <= 10:
                         warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
                     else:
                         warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
-
-        if is_coldest:
-            cold_summary = f"This is the coldest {friendly_date} on record."
-        else:
-            last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
-            if last_colder:
-                years_since = int(latest['x'] - last_colder)
-                if years_since > 1:
+                else:
+                    warm_summary = f"It's warmer than last year."
+            elif latest['y'] < last_year_temp:
+                # Colder than last year - find last colder year
+                last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
+                if last_colder:
+                    years_since = int(latest['x'] - last_colder)
                     if years_since == 2:
                         cold_summary = f"It's colder than last year but not as cold as {last_colder}."
                     elif years_since <= 10:
                         cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
                     else:
                         cold_summary = f"This is the coldest {friendly_date} in {years_since} years."
+                else:
+                    cold_summary = f"It's colder than last year."
+            # If equal to last year, no warm/cold summary is generated
 
         if abs(diff) < 0.05:
             avg_summary = "It is about average for this date."
@@ -1064,7 +1134,8 @@ async def get_all_data(location: str, month_day: str):
     try:
         month, day = map(int, month_day.split("-"))
         weather_data = await get_temperature_series(location, month, day)
-        logger.debug(f"weather_data for {location} on {month_day}: {weather_data}")
+        if DEBUG:
+            logger.debug(f"📊 WEATHER DATA SERIES: {location} | {month_day}")
         if not weather_data['data']:
             return JSONResponse(
                 content={
@@ -1095,9 +1166,12 @@ async def get_all_data(location: str, month_day: str):
             summary_cache_key = f"summary_{location.lower()}_{month:02d}_{day:02d}"
             cached_summary = get_cache(summary_cache_key)
             if cached_summary:
-                logger.debug(f"Cache hit: {summary_cache_key}")
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED SUMMARY: {summary_cache_key}")
                 summary_data = json.loads(cached_summary)
             else:
+                if DEBUG:
+                    logger.debug(f"🔄 GENERATING FRESH SUMMARY: {location} | {month_day}")
                 summary_data = await get_summary(location, month_day, weather_data)
                 set_cache(summary_cache_key, cache_duration, json.dumps(summary_data))
 
@@ -1105,25 +1179,39 @@ async def get_all_data(location: str, month_day: str):
             average_cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
             cached_average = get_cache(average_cache_key)
             if cached_average:
-                logger.debug(f"Cache hit: {average_cache_key}")
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED AVERAGE: {average_cache_key}")
                 average_data = json.loads(cached_average)
             else:
+                if DEBUG:
+                    logger.debug(f"🔄 GENERATING FRESH AVERAGE: {location} | {month_day}")
                 average_data = get_average_dict(weather_data)
                 set_cache(average_cache_key, cache_duration, json.dumps(average_data))
         else:
             # If data is incomplete or cache is disabled, compute without caching
+            if DEBUG:
+                logger.debug(f"⚠️  CACHE DISABLED OR INCOMPLETE DATA: computing fresh summary and average")
             summary_data = await get_summary(location, month_day, weather_data)
             average_data = get_average_dict(weather_data)
         
+        if DEBUG:
+            logger.debug(f"🔄 GENERATING TREND DATA: {location} | {month_day}")
         trend_data = await get_trend(location, month_day, weather_data)
 
+        # Log the final aggregated response
+        final_response = {
+            "weather": weather_data,
+            "summary": summary_data,
+            "trend": trend_data,
+            "average": average_data
+        }
+        
+        if DEBUG:
+            logger.debug(f"🎯 FINAL /DATA ENDPOINT RESPONSE: {location} | {month_day}")
+            logger.debug(f"📄 COMPLETE RESPONSE JSON: {json.dumps(final_response, indent=2)}")
+
         return JSONResponse(
-            content={
-                "weather": weather_data,
-                "summary": summary_data,
-                "trend": trend_data,
-                "average": average_data
-            },
+            content=final_response,
             headers=headers
         )
     except HTTPException as e:
@@ -1260,6 +1348,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         if CACHE_ENABLED:
             cached_data = get_cache(cache_key)
             if cached_data:
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED TEMPERATURE: {cache_key} | Location: {location} | Year: {year}")
                 weather = json.loads(cached_data)
                 try:
                     temp = weather["days"][0]["temp"]
