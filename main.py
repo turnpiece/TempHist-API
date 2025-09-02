@@ -37,6 +37,14 @@ MAX_LOCATIONS_PER_HOUR = int(os.getenv("MAX_LOCATIONS_PER_HOUR", "10"))
 MAX_REQUESTS_PER_HOUR = int(os.getenv("MAX_REQUESTS_PER_HOUR", "100"))
 RATE_LIMIT_WINDOW_HOURS = int(os.getenv("RATE_LIMIT_WINDOW_HOURS", "1"))
 
+# IP address management
+IP_WHITELIST = os.getenv("IP_WHITELIST", "").split(",") if os.getenv("IP_WHITELIST") else []
+IP_BLACKLIST = os.getenv("IP_BLACKLIST", "").split(",") if os.getenv("IP_BLACKLIST") else []
+
+# Clean up empty strings from lists
+IP_WHITELIST = [ip.strip() for ip in IP_WHITELIST if ip.strip()]
+IP_BLACKLIST = [ip.strip() for ip in IP_BLACKLIST if ip.strip()]
+
 # Configure logging
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -217,8 +225,16 @@ if RATE_LIMIT_ENABLED:
     request_monitor = RequestRateMonitor(MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
     if DEBUG:
         logger.info(f"🛡️  RATE LIMITING INITIALIZED: {MAX_LOCATIONS_PER_HOUR} locations/hour, {MAX_REQUESTS_PER_HOUR} requests/hour, {RATE_LIMIT_WINDOW_HOURS}h window")
+        if IP_WHITELIST:
+            logger.info(f"⭐ WHITELISTED IPS: {', '.join(IP_WHITELIST)}")
+        if IP_BLACKLIST:
+            logger.info(f"🚫 BLACKLISTED IPS: {', '.join(IP_BLACKLIST)}")
     else:
         logger.info(f"Rate limiting enabled: max {MAX_LOCATIONS_PER_HOUR} locations, max {MAX_REQUESTS_PER_HOUR} requests per {RATE_LIMIT_WINDOW_HOURS} hour(s)")
+        if IP_WHITELIST:
+            logger.info(f"Whitelisted IPs: {len(IP_WHITELIST)} configured")
+        if IP_BLACKLIST:
+            logger.info(f"Blacklisted IPs: {len(IP_BLACKLIST)} configured")
 else:
     location_monitor = None
     request_monitor = None
@@ -280,6 +296,14 @@ def get_client_ip(request: Request) -> str:
     # Fallback to direct connection
     return request.client.host if request.client else "unknown"
 
+def is_ip_whitelisted(ip: str) -> bool:
+    """Check if an IP address is whitelisted (exempt from rate limiting)."""
+    return ip in IP_WHITELIST
+
+def is_ip_blacklisted(ip: str) -> bool:
+    """Check if an IP address is blacklisted (blocked entirely)."""
+    return ip in IP_BLACKLIST
+
 def verify_firebase_token(request: Request):
     """Verify Firebase authentication token."""
     auth_header = request.headers.get("Authorization")
@@ -329,8 +353,20 @@ async def verify_token_middleware(request: Request, call_next):
     client_ip = get_client_ip(request)
     logger.info(f"[DEBUG] Middleware: Client IP: {client_ip}")
 
-    # Apply rate limiting if enabled
-    if RATE_LIMIT_ENABLED and location_monitor and request_monitor:
+    # Check if IP is blacklisted (block entirely)
+    if is_ip_blacklisted(client_ip):
+        if DEBUG:
+            logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {client_ip} | {request.method} {request.url.path}")
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "Access denied",
+                "reason": "IP address is blacklisted"
+            }
+        )
+
+    # Apply rate limiting if enabled and IP is not whitelisted
+    if RATE_LIMIT_ENABLED and location_monitor and request_monitor and not is_ip_whitelisted(client_ip):
         # Check request rate first
         rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
         if not rate_allowed:
@@ -347,8 +383,11 @@ async def verify_token_middleware(request: Request, call_next):
             )
         elif DEBUG:
             logger.debug(f"✅ RATE LIMIT CHECK: {client_ip} | {request.method} {request.url.path} | Rate: OK")
-        
-        # For weather-related endpoints, check location diversity
+    elif is_ip_whitelisted(client_ip) and DEBUG:
+        logger.info(f"⭐ WHITELISTED IP: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
+    
+    # For weather-related endpoints, check location diversity (only for non-whitelisted IPs)
+    if RATE_LIMIT_ENABLED and location_monitor and not is_ip_whitelisted(client_ip):
         weather_paths = ["/weather/", "/data/", "/summary/", "/trend/", "/average/", "/forecast/"]
         if any(request.url.path.startswith(path) for path in weather_paths):
             # Extract location from path
@@ -1078,11 +1117,20 @@ async def get_rate_limit_status(request: Request):
     
     client_ip = get_client_ip(request)
     
-    location_stats = location_monitor.get_stats(client_ip) if location_monitor else {}
-    request_stats = request_monitor.get_stats(client_ip) if request_monitor else {}
+    # Check IP status
+    is_whitelisted = is_ip_whitelisted(client_ip)
+    is_blacklisted = is_ip_blacklisted(client_ip)
+    
+    location_stats = location_monitor.get_stats(client_ip) if location_monitor and not is_whitelisted else {}
+    request_stats = request_monitor.get_stats(client_ip) if request_monitor and not is_whitelisted else {}
     
     return {
         "client_ip": client_ip,
+        "ip_status": {
+            "whitelisted": is_whitelisted,
+            "blacklisted": is_blacklisted,
+            "rate_limited": not is_whitelisted and not is_blacklisted
+        },
         "location_monitor": location_stats,
         "request_monitor": request_stats,
         "rate_limits": {
@@ -1106,12 +1154,16 @@ async def get_rate_limit_stats():
             all_stats[ip] = {
                 "location_stats": location_monitor.get_stats(ip),
                 "request_stats": request_monitor.get_stats(ip) if request_monitor else {},
-                "suspicious": location_monitor.is_suspicious(ip)
+                "suspicious": location_monitor.is_suspicious(ip),
+                "whitelisted": is_ip_whitelisted(ip),
+                "blacklisted": is_ip_blacklisted(ip)
             }
     
     return {
         "total_monitored_ips": len(all_stats),
         "suspicious_ips": list(location_monitor.suspicious_ips) if location_monitor else [],
+        "whitelisted_ips": IP_WHITELIST,
+        "blacklisted_ips": IP_BLACKLIST,
         "ip_details": all_stats
     }
 

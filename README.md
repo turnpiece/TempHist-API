@@ -29,6 +29,10 @@ A FastAPI backend for historical temperature data using Visual Crossing.
   MAX_LOCATIONS_PER_HOUR=10  # Defaults to 10
   MAX_REQUESTS_PER_HOUR=100  # Defaults to 100
   RATE_LIMIT_WINDOW_HOURS=1  # Defaults to 1
+
+  # IP Address Management (Optional)
+  IP_WHITELIST=192.168.1.100,10.0.0.5  # Comma-separated list of IPs exempt from rate limiting
+  IP_BLACKLIST=192.168.1.200,10.0.0.99  # Comma-separated list of IPs blocked entirely
   ```
 
 ## Installation
@@ -121,6 +125,19 @@ The API includes built-in rate limiting to prevent abuse and protect against mis
 - **Maximum requests per hour**: Configurable via `MAX_REQUESTS_PER_HOUR` (default: 100)
 - **Time window**: Configurable via `RATE_LIMIT_WINDOW_HOURS` (default: 1 hour)
 - **Purpose**: Prevents users from making too many API calls overall
+
+### IP Address Management
+
+- **IP Whitelist**: Comma-separated list of IP addresses exempt from all rate limiting
+
+  - Set via `IP_WHITELIST` environment variable
+  - Useful for development, testing, or trusted applications
+  - Example: `IP_WHITELIST=192.168.1.100,10.0.0.5`
+
+- **IP Blacklist**: Comma-separated list of IP addresses blocked entirely
+  - Set via `IP_BLACKLIST` environment variable
+  - Returns HTTP 403 Forbidden for blacklisted IPs
+  - Example: `IP_BLACKLIST=192.168.1.200,10.0.0.99`
 
 ### Configuration
 

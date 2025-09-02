@@ -15,7 +15,9 @@ from main import (
     app as main_app,
     LocationDiversityMonitor,
     RequestRateMonitor,
-    get_client_ip
+    get_client_ip,
+    is_ip_whitelisted,
+    is_ip_blacklisted
 )
 
 @pytest.fixture
@@ -717,3 +719,134 @@ class TestRateLimitingManual:
         assert rate_limits.get("max_locations_per_hour", 0) > 0
         assert rate_limits.get("max_requests_per_hour", 0) > 0
         assert rate_limits.get("window_hours", 0) > 0
+
+
+class TestIPWhitelistBlacklist:
+    """Test IP whitelist and blacklist functionality."""
+    
+    def test_ip_whitelist_function(self):
+        """Test IP whitelist helper function."""
+        with patch.dict('os.environ', {'IP_WHITELIST': '192.168.1.100,10.0.0.5'}):
+            # Reload the module to pick up new environment variables
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            assert main.is_ip_whitelisted('192.168.1.100') == True
+            assert main.is_ip_whitelisted('10.0.0.5') == True
+            assert main.is_ip_whitelisted('192.168.1.101') == False
+            assert main.is_ip_whitelisted('unknown') == False
+    
+    def test_ip_blacklist_function(self):
+        """Test IP blacklist helper function."""
+        with patch.dict('os.environ', {'IP_BLACKLIST': '192.168.1.200,10.0.0.99'}):
+            # Reload the module to pick up new environment variables
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            assert main.is_ip_blacklisted('192.168.1.200') == True
+            assert main.is_ip_blacklisted('10.0.0.99') == True
+            assert main.is_ip_blacklisted('192.168.1.201') == False
+            assert main.is_ip_blacklisted('unknown') == False
+    
+    def test_whitelist_empty_environment(self):
+        """Test whitelist with empty environment variable."""
+        with patch.dict('os.environ', {'IP_WHITELIST': ''}):
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            assert main.is_ip_whitelisted('192.168.1.100') == False
+            assert main.IP_WHITELIST == []
+    
+    def test_blacklist_empty_environment(self):
+        """Test blacklist with empty environment variable."""
+        with patch.dict('os.environ', {'IP_BLACKLIST': ''}):
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            assert main.is_ip_blacklisted('192.168.1.200') == False
+            assert main.IP_BLACKLIST == []
+    
+    def test_whitelist_with_spaces(self):
+        """Test whitelist with spaces in environment variable."""
+        with patch.dict('os.environ', {'IP_WHITELIST': ' 192.168.1.100 , 10.0.0.5 '}):
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            assert main.is_ip_whitelisted('192.168.1.100') == True
+            assert main.is_ip_whitelisted('10.0.0.5') == True
+            assert main.IP_WHITELIST == ['192.168.1.100', '10.0.0.5']
+
+
+class TestIPWhitelistBlacklistIntegration:
+    """Test IP whitelist and blacklist integration with FastAPI."""
+    
+    def test_blacklisted_ip_blocked(self):
+        """Test that blacklisted IPs are blocked entirely."""
+        with patch.dict('os.environ', {'IP_BLACKLIST': 'testclient'}):
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            # Create a new test client with the reloaded app
+            with TestClient(main.app) as test_client:
+                # Test that blacklisted IP gets 403
+                response = test_client.get("/rate-limit-status")
+                assert response.status_code == 403
+                data = response.json()
+                assert data["detail"] == "Access denied"
+                assert data["reason"] == "IP address is blacklisted"
+    
+    def test_whitelisted_ip_bypasses_rate_limits(self):
+        """Test that whitelisted IPs bypass rate limiting."""
+        with patch.dict('os.environ', {'IP_WHITELIST': 'testclient'}):
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            # Create a new test client with the reloaded app
+            with TestClient(main.app) as test_client:
+                # Test rate limit status endpoint
+                response = test_client.get("/rate-limit-status")
+                assert response.status_code == 200
+                
+                data = response.json()
+                ip_status = data.get("ip_status", {})
+                assert ip_status.get("whitelisted") == True
+                assert ip_status.get("rate_limited") == False
+    
+    def test_rate_limit_status_shows_ip_status(self, client):
+        """Test that rate limit status endpoint shows IP whitelist/blacklist status."""
+        response = client.get("/rate-limit-status")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert "ip_status" in data
+        ip_status = data["ip_status"]
+        
+        # Should have these keys
+        assert "whitelisted" in ip_status
+        assert "blacklisted" in ip_status
+        assert "rate_limited" in ip_status
+        
+        # Should be boolean values
+        assert isinstance(ip_status["whitelisted"], bool)
+        assert isinstance(ip_status["blacklisted"], bool)
+        assert isinstance(ip_status["rate_limited"], bool)
+    
+    def test_rate_limit_stats_shows_ip_lists(self, client):
+        """Test that rate limit stats endpoint shows whitelist and blacklist."""
+        response = client.get("/rate-limit-stats")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert "whitelisted_ips" in data
+        assert "blacklisted_ips" in data
+        
+        # Should be lists
+        assert isinstance(data["whitelisted_ips"], list)
+        assert isinstance(data["blacklisted_ips"], list)
