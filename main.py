@@ -962,6 +962,14 @@ async def trend(location: str, month_day: str):
     slope = calculate_trend_slope(data['data'])
     is_complete = data['metadata']['completeness'] == 100
     
+    # Determine if this is today's data (includes forecast that can change)
+    latest_year = None
+    if data['data']:
+        latest_year = data['data'][-1]['x']
+    cache_is_today = False
+    if latest_year is not None:
+        cache_is_today = is_today(latest_year, month, day)
+    
     result = {
         "slope": slope, 
         "units": "°C/decade",
@@ -974,7 +982,9 @@ async def trend(location: str, month_day: str):
 
     # Cache the result if caching is enabled and data is complete
     if CACHE_ENABLED and is_complete:
-        set_cache(cache_key, SHORT_CACHE_DURATION, json.dumps(result))
+        # Use smart cache duration: short for today's data (includes forecast), long for historical data
+        cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
+        set_cache(cache_key, cache_duration, json.dumps(result))
     
     return JSONResponse(content=result, headers=headers)
 
@@ -1015,6 +1025,14 @@ async def average(location: str, month_day: str):
 
     is_complete = data['metadata']['completeness'] == 100
 
+    # Determine if this is today's data (includes forecast that can change)
+    latest_year = None
+    if data['data']:
+        latest_year = data['data'][-1]['x']
+    cache_is_today = False
+    if latest_year is not None:
+        cache_is_today = is_today(latest_year, month, day)
+
     # Calculate average temperature using the new function
     data_list = sorted(data['data'], key=lambda d: d['x'])
     avg_temp = calculate_historical_average(data_list)
@@ -1035,7 +1053,9 @@ async def average(location: str, month_day: str):
 
     # Cache the result if caching is enabled and data is complete
     if CACHE_ENABLED and is_complete:
-        set_cache(cache_key, SHORT_CACHE_DURATION, json.dumps(result))
+        # Use smart cache duration: short for today's data (includes forecast), long for historical data
+        cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
+        set_cache(cache_key, cache_duration, json.dumps(result))
     
     return JSONResponse(content=result, headers=headers)
 
