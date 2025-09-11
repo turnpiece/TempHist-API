@@ -266,6 +266,8 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
 # Cache durations
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
 LONG_CACHE_DURATION = timedelta(hours=168)  # 1 week for historical data
+FORECAST_DAY_CACHE_DURATION = timedelta(minutes=30)  # Short cache during active hours (Midnight - 6 PM)
+FORECAST_NIGHT_CACHE_DURATION = timedelta(hours=2)  # Longer cache during stable hours (6 PM - Midnight)
 
 # Remove the old debug_print function - we'll use logger.debug() instead
 
@@ -1104,9 +1106,49 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
 
 @app.get("/forecast/{location}")
 async def get_forecast(location: str):
-    """Get weather forecast for a location."""
-    today = datetime.now().date()
-    return get_forecast_data(location, today)
+    """Get weather forecast for a location with time-based caching."""
+    try:
+        # Create cache key for forecast
+        cache_key = f"forecast_{location.lower()}"
+        
+        # Check cache first if caching is enabled
+        if CACHE_ENABLED:
+            cached_forecast = get_cache(cache_key)
+            if cached_forecast:
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED FORECAST: {cache_key} | Location: {location}")
+                return JSONResponse(content=json.loads(cached_forecast), headers={"Cache-Control": "public, max-age=1800"})
+            elif DEBUG:
+                logger.debug(f"❌ FORECAST CACHE MISS: {cache_key} — fetching fresh forecast")
+        
+        # Fetch fresh forecast data
+        today = datetime.now().date()
+        result = get_forecast_data(location, today)
+        
+        # Cache the result if caching is enabled and no error
+        if CACHE_ENABLED and "error" not in result:
+            cache_duration = get_forecast_cache_duration()
+            # Convert date object to string for JSON serialization
+            if "date" in result and hasattr(result["date"], 'strftime'):
+                result["date"] = result["date"].strftime("%Y-%m-%d")
+            set_cache(cache_key, cache_duration, json.dumps(result))
+            if DEBUG:
+                current_hour = datetime.now().hour
+                time_period = "stable" if current_hour >= 18 else "active"
+                logger.debug(f"💾 CACHED FORECAST: {cache_key} | Duration: {cache_duration} | Time: {time_period}")
+        
+        # Convert date object to string for JSON response
+        if "date" in result and hasattr(result["date"], 'strftime'):
+            result["date"] = result["date"].strftime("%Y-%m-%d")
+        
+        return JSONResponse(content=result, headers={"Cache-Control": "public, max-age=1800"})
+    
+    except Exception as e:
+        logger.error(f"Error in forecast endpoint: {e}")
+        return JSONResponse(
+            content={"error": f"Forecast error: {str(e)}"},
+            status_code=500
+        )
 
 @app.get("/test-redis")
 async def test_redis():
@@ -1198,6 +1240,21 @@ def is_today_or_future(year: int, month: int, day: int) -> bool:
     today = dt_date.today()
     date = dt_date(year, month, day)
     return date >= today
+
+def get_forecast_cache_duration() -> timedelta:
+    """Get appropriate cache duration for forecast data based on time of day.
+    
+    Returns:
+        timedelta: Short duration during active forecast hours (30 min), longer when stable (2 hours)
+    """
+    current_hour = datetime.now().hour
+    
+    # Stable hours (6 PM to Midnight) - forecast is more stable
+    if current_hour >= 18:
+        return FORECAST_NIGHT_CACHE_DURATION
+    else:
+        # Active hours (Midnight to 6 PM) - forecast can change frequently
+        return FORECAST_DAY_CACHE_DURATION
 
 @app.get("/data/{location}/{month_day}")
 async def get_all_data(location: str, month_day: str):
