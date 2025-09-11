@@ -219,6 +219,144 @@ class RequestRateMonitor:
             "remaining_requests": max(0, self.max_requests - total_requests)
         }
 
+# Usage Tracking Configuration
+USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
+USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
+DEFAULT_POPULAR_LOCATIONS = os.getenv("CACHE_WARMING_POPULAR_LOCATIONS", "london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin").split(",")
+DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCATIONS if loc.strip()]
+
+class LocationUsageTracker:
+    """Track location usage patterns for analytics and cache warming."""
+    
+    def __init__(self, retention_days: int = 7):
+        self.retention_days = retention_days
+        self.retention_seconds = retention_days * 24 * 3600
+        self.usage_prefix = "usage_"
+        self.timestamp_prefix = "usage_ts_"
+        
+    def track_location_request(self, location: str, endpoint: str = None):
+        """Track a location request for analytics and popularity detection."""
+        if not USAGE_TRACKING_ENABLED:
+            return
+            
+        location = location.lower()
+        current_time = time.time()
+        
+        # Track total requests for this location
+        usage_key = f"{self.usage_prefix}{location}"
+        redis_client.incr(usage_key)
+        redis_client.expire(usage_key, self.retention_seconds)
+        
+        # Track timestamp for time-based analysis
+        timestamp_key = f"{self.timestamp_prefix}{location}"
+        redis_client.lpush(timestamp_key, current_time)
+        redis_client.expire(timestamp_key, self.retention_seconds)
+        
+        # Track endpoint-specific usage
+        if endpoint:
+            endpoint_key = f"{self.usage_prefix}{location}_{endpoint}"
+            redis_client.incr(endpoint_key)
+            redis_client.expire(endpoint_key, self.retention_seconds)
+        
+        if DEBUG:
+            logger.debug(f"📊 USAGE TRACKED: {location} | Endpoint: {endpoint or 'unknown'}")
+    
+    def get_popular_locations(self, limit: int = 10, hours: int = 24) -> List[tuple]:
+        """Get most popular locations in the last N hours."""
+        if not USAGE_TRACKING_ENABLED:
+            return []
+            
+        cutoff_time = time.time() - (hours * 3600)
+        location_counts = []
+        
+        # Get all usage keys
+        usage_keys = redis_client.keys(f"{self.usage_prefix}*")
+        
+        for key in usage_keys:
+            key_str = key.decode()
+            if "_" in key_str and not key_str.endswith("_ts"):
+                # Skip endpoint-specific keys for now
+                if "_" in key_str.split("_", 2)[2:]:
+                    continue
+                    
+                location = key_str.replace(self.usage_prefix, "")
+                
+                # Check if location has recent activity
+                timestamp_key = f"{self.timestamp_prefix}{location}"
+                timestamps = redis_client.lrange(timestamp_key, 0, -1)
+                
+                recent_count = 0
+                for ts in timestamps:
+                    if float(ts) > cutoff_time:
+                        recent_count += 1
+                
+                if recent_count > 0:
+                    location_counts.append((location, recent_count))
+        
+        # Sort by count and return top locations
+        return sorted(location_counts, key=lambda x: x[1], reverse=True)[:limit]
+    
+    def get_location_stats(self, location: str) -> Dict:
+        """Get detailed stats for a specific location."""
+        if not USAGE_TRACKING_ENABLED:
+            return {}
+            
+        location = location.lower()
+        usage_key = f"{self.usage_prefix}{location}"
+        timestamp_key = f"{self.timestamp_prefix}{location}"
+        
+        total_requests = int(redis_client.get(usage_key) or 0)
+        timestamps = [float(ts) for ts in redis_client.lrange(timestamp_key, 0, -1)]
+        
+        # Calculate recent activity
+        now = time.time()
+        last_hour = sum(1 for ts in timestamps if ts > now - 3600)
+        last_24h = sum(1 for ts in timestamps if ts > now - 86400)
+        
+        return {
+            "location": location,
+            "total_requests": total_requests,
+            "last_hour": last_hour,
+            "last_24h": last_24h,
+            "first_request": min(timestamps) if timestamps else None,
+            "last_request": max(timestamps) if timestamps else None
+        }
+    
+    def get_all_location_stats(self) -> Dict:
+        """Get stats for all tracked locations."""
+        if not USAGE_TRACKING_ENABLED:
+            return {}
+            
+        all_stats = {}
+        usage_keys = redis_client.keys(f"{self.usage_prefix}*")
+        
+        for key in usage_keys:
+            key_str = key.decode()
+            if "_" in key_str and not key_str.endswith("_ts"):
+                # Skip endpoint-specific keys
+                if "_" in key_str.split("_", 2)[2:]:
+                    continue
+                    
+                location = key_str.replace(self.usage_prefix, "")
+                all_stats[location] = self.get_location_stats(location)
+        
+        return all_stats
+
+# Initialize usage tracker
+if USAGE_TRACKING_ENABLED:
+    usage_tracker = LocationUsageTracker(USAGE_RETENTION_DAYS)
+    if DEBUG:
+        logger.info(f"📊 USAGE TRACKING INITIALIZED: {USAGE_RETENTION_DAYS} days retention")
+        logger.info(f"🏙️  DEFAULT POPULAR LOCATIONS: {', '.join(DEFAULT_POPULAR_LOCATIONS)}")
+    else:
+        logger.info(f"Usage tracking enabled: {USAGE_RETENTION_DAYS} days retention")
+else:
+    usage_tracker = None
+    if DEBUG:
+        logger.info("⚠️  USAGE TRACKING DISABLED")
+    else:
+        logger.info("Usage tracking disabled")
+
 # Initialize rate limiting monitors
 if RATE_LIMIT_ENABLED:
     location_monitor = LocationDiversityMonitor(MAX_LOCATIONS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
@@ -269,9 +407,296 @@ LONG_CACHE_DURATION = timedelta(hours=168)  # 1 week for historical data
 FORECAST_DAY_CACHE_DURATION = timedelta(minutes=30)  # Short cache during active hours (Midnight - 6 PM)
 FORECAST_NIGHT_CACHE_DURATION = timedelta(hours=2)  # Longer cache during stable hours (6 PM - Midnight)
 
+# Cache Warming Configuration
+CACHE_WARMING_ENABLED = os.getenv("CACHE_WARMING_ENABLED", "true").lower() == "true"
+CACHE_WARMING_INTERVAL_HOURS = int(os.getenv("CACHE_WARMING_INTERVAL_HOURS", "4"))
+CACHE_WARMING_DAYS_BACK = int(os.getenv("CACHE_WARMING_DAYS_BACK", "7"))
+CACHE_WARMING_CONCURRENT_REQUESTS = int(os.getenv("CACHE_WARMING_CONCURRENT_REQUESTS", "3"))
+CACHE_WARMING_MAX_LOCATIONS = int(os.getenv("CACHE_WARMING_MAX_LOCATIONS", "15"))
+
+class CacheWarmer:
+    """Proactive cache warming for popular locations and recent dates."""
+    
+    def __init__(self, usage_tracker: LocationUsageTracker = None):
+        self.usage_tracker = usage_tracker
+        self.warming_in_progress = False
+        self.last_warming_time = None
+        self.warming_stats = {
+            "total_warmed": 0,
+            "successful_warmed": 0,
+            "failed_warmed": 0,
+            "last_warming_duration": 0
+        }
+    
+    def get_locations_to_warm(self) -> List[str]:
+        """Get list of locations to warm using hybrid approach."""
+        locations = set()
+        
+        # Always include default popular locations
+        locations.update(DEFAULT_POPULAR_LOCATIONS)
+        
+        # Add recently popular locations from usage tracking
+        if self.usage_tracker and USAGE_TRACKING_ENABLED:
+            recent_popular = self.usage_tracker.get_popular_locations(limit=10, hours=24)
+            for location, count in recent_popular:
+                locations.add(location)
+        
+        # Limit to max locations
+        return list(locations)[:CACHE_WARMING_MAX_LOCATIONS]
+    
+    def get_dates_to_warm(self) -> List[str]:
+        """Get list of dates to warm."""
+        dates = []
+        today = datetime.now().date()
+        
+        # Add recent dates
+        for days_back in range(CACHE_WARMING_DAYS_BACK):
+            date = today - timedelta(days=days_back)
+            dates.append(date.strftime("%Y-%m-%d"))
+        
+        # Add current month days for current year
+        current_year = today.year
+        current_month = today.month
+        for day in range(1, 32):
+            try:
+                date = dt_date(current_year, current_month, day)
+                if date <= today:  # Only include past and current days
+                    dates.append(date.strftime("%Y-%m-%d"))
+            except ValueError:
+                continue  # Skip invalid dates (e.g., Feb 30)
+        
+        return dates
+    
+    def get_month_days_to_warm(self) -> List[str]:
+        """Get list of month-day combinations to warm."""
+        month_days = []
+        today = datetime.now()
+        
+        # Add current month-day
+        month_days.append(f"{today.month:02d}-{today.day:02d}")
+        
+        # Add recent month-days
+        for days_back in range(1, min(CACHE_WARMING_DAYS_BACK, 30)):
+            date = today - timedelta(days=days_back)
+            month_days.append(f"{date.month:02d}-{date.day:02d}")
+        
+        return month_days
+    
+    async def warm_location_data(self, location: str) -> Dict:
+        """Warm all data for a specific location."""
+        if DEBUG:
+            logger.info(f"🔥 WARMING LOCATION: {location}")
+        
+        results = {
+            "location": location,
+            "warmed_endpoints": [],
+            "errors": []
+        }
+        
+        try:
+            # Warm forecast data
+            try:
+                forecast_url = f"http://localhost:8000/forecast/{location}"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(forecast_url, headers={"Authorization": "Bearer test_token"}) as resp:
+                        if resp.status == 200:
+                            results["warmed_endpoints"].append("forecast")
+                        else:
+                            results["errors"].append(f"forecast: {resp.status}")
+            except Exception as e:
+                results["errors"].append(f"forecast: {str(e)}")
+            
+            # Warm month-day data
+            month_days = self.get_month_days_to_warm()
+            for month_day in month_days:
+                try:
+                    data_url = f"http://localhost:8000/data/{location}/{month_day}"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(data_url, headers={"Authorization": "Bearer test_token"}) as resp:
+                            if resp.status == 200:
+                                results["warmed_endpoints"].append(f"data/{month_day}")
+                            else:
+                                results["errors"].append(f"data/{month_day}: {resp.status}")
+                except Exception as e:
+                    results["errors"].append(f"data/{month_day}: {str(e)}")
+            
+            # Warm individual weather data for recent dates
+            dates = self.get_dates_to_warm()
+            for date in dates[:5]:  # Limit to last 5 dates to avoid too many requests
+                try:
+                    weather_url = f"http://localhost:8000/weather/{location}/{date}"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(weather_url, headers={"Authorization": "Bearer test_token"}) as resp:
+                            if resp.status == 200:
+                                results["warmed_endpoints"].append(f"weather/{date}")
+                            else:
+                                results["errors"].append(f"weather/{date}: {resp.status}")
+                except Exception as e:
+                    results["errors"].append(f"weather/{date}: {str(e)}")
+        
+        except Exception as e:
+            results["errors"].append(f"location_warming: {str(e)}")
+        
+        return results
+    
+    async def warm_all_locations(self) -> Dict:
+        """Warm cache for all popular locations."""
+        if self.warming_in_progress:
+            return {"status": "already_in_progress", "message": "Cache warming already in progress"}
+        
+        if not CACHE_WARMING_ENABLED:
+            return {"status": "disabled", "message": "Cache warming is disabled"}
+        
+        self.warming_in_progress = True
+        start_time = time.time()
+        
+        try:
+            locations = self.get_locations_to_warm()
+            if DEBUG:
+                logger.info(f"🔥 STARTING CACHE WARMING: {len(locations)} locations")
+                logger.info(f"🏙️  LOCATIONS: {', '.join(locations)}")
+            
+            # Warm locations with concurrency limit
+            semaphore = asyncio.Semaphore(CACHE_WARMING_CONCURRENT_REQUESTS)
+            
+            async def warm_with_semaphore(location):
+                async with semaphore:
+                    return await self.warm_location_data(location)
+            
+            # Execute warming tasks
+            tasks = [warm_with_semaphore(location) for location in locations]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results
+            successful_locations = 0
+            total_endpoints = 0
+            total_errors = 0
+            
+            for result in results:
+                if isinstance(result, dict):
+                    if result.get("warmed_endpoints"):
+                        successful_locations += 1
+                        total_endpoints += len(result["warmed_endpoints"])
+                    total_errors += len(result.get("errors", []))
+                else:
+                    total_errors += 1
+            
+            # Update stats
+            duration = time.time() - start_time
+            self.warming_stats.update({
+                "total_warmed": len(locations),
+                "successful_warmed": successful_locations,
+                "failed_warmed": len(locations) - successful_locations,
+                "last_warming_duration": duration
+            })
+            self.last_warming_time = datetime.now()
+            
+            if DEBUG:
+                logger.info(f"✅ CACHE WARMING COMPLETED: {successful_locations}/{len(locations)} locations | {total_endpoints} endpoints | {duration:.1f}s")
+            
+            return {
+                "status": "completed",
+                "locations_processed": len(locations),
+                "successful_locations": successful_locations,
+                "total_endpoints_warmed": total_endpoints,
+                "total_errors": total_errors,
+                "duration_seconds": duration,
+                "results": results
+            }
+        
+        except Exception as e:
+            if DEBUG:
+                logger.error(f"❌ CACHE WARMING FAILED: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "duration_seconds": time.time() - start_time
+            }
+        
+        finally:
+            self.warming_in_progress = False
+    
+    def get_warming_stats(self) -> Dict:
+        """Get cache warming statistics."""
+        return {
+            "enabled": CACHE_WARMING_ENABLED,
+            "in_progress": self.warming_in_progress,
+            "last_warming_time": self.last_warming_time.isoformat() if self.last_warming_time else None,
+            "stats": self.warming_stats,
+            "configuration": {
+                "interval_hours": CACHE_WARMING_INTERVAL_HOURS,
+                "days_back": CACHE_WARMING_DAYS_BACK,
+                "concurrent_requests": CACHE_WARMING_CONCURRENT_REQUESTS,
+                "max_locations": CACHE_WARMING_MAX_LOCATIONS
+            }
+        }
+
+# Initialize cache warmer
+if CACHE_WARMING_ENABLED:
+    cache_warmer = CacheWarmer(usage_tracker)
+    if DEBUG:
+        logger.info(f"🔥 CACHE WARMING INITIALIZED: {CACHE_WARMING_INTERVAL_HOURS}h interval, {CACHE_WARMING_DAYS_BACK} days back")
+    else:
+        logger.info(f"Cache warming enabled: {CACHE_WARMING_INTERVAL_HOURS}h interval")
+else:
+    cache_warmer = None
+    if DEBUG:
+        logger.info("⚠️  CACHE WARMING DISABLED")
+    else:
+        logger.info("Cache warming disabled")
+
+# Background task for scheduled cache warming
+async def scheduled_cache_warming():
+    """Background task that runs cache warming on a schedule."""
+    if not CACHE_WARMING_ENABLED or not cache_warmer:
+        return
+    
+    while True:
+        try:
+            # Wait for the specified interval
+            await asyncio.sleep(CACHE_WARMING_INTERVAL_HOURS * 3600)
+            
+            # Check if warming is already in progress
+            if not cache_warmer.warming_in_progress:
+                if DEBUG:
+                    logger.info("🕐 SCHEDULED CACHE WARMING: Starting automatic warming cycle")
+                
+                # Run warming in background
+                asyncio.create_task(cache_warmer.warm_all_locations())
+            else:
+                if DEBUG:
+                    logger.info("⏭️  SCHEDULED CACHE WARMING: Skipping - warming already in progress")
+        
+        except Exception as e:
+            if DEBUG:
+                logger.error(f"❌ SCHEDULED CACHE WARMING ERROR: {str(e)}")
+            # Continue the loop even if there's an error
+            await asyncio.sleep(300)  # Wait 5 minutes before retrying
+
+# Start scheduled warming if enabled
+if CACHE_WARMING_ENABLED and cache_warmer:
+    # Start the background task
+    asyncio.create_task(scheduled_cache_warming())
+    if DEBUG:
+        logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
+
 # Remove the old debug_print function - we'll use logger.debug() instead
 
 app = FastAPI()
+
+# Startup event to trigger initial cache warming
+@app.on_event("startup")
+async def startup_event():
+    """Trigger cache warming on server startup."""
+    if CACHE_WARMING_ENABLED and cache_warmer:
+        # Wait a moment for the server to fully start
+        await asyncio.sleep(2)
+        
+        if DEBUG:
+            logger.info("🚀 STARTUP CACHE WARMING: Triggering initial warming cycle")
+        
+        # Run initial warming in background
+        asyncio.create_task(cache_warmer.warm_all_locations())
 redis_client = redis.from_url(REDIS_URL)
 
 # check Firebase credentials
@@ -411,6 +836,16 @@ async def verify_token_middleware(request: Request, call_next):
                     )
                 elif DEBUG:
                     logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {location} | OK")
+    
+    # Track usage for weather-related endpoints
+    if USAGE_TRACKING_ENABLED and usage_tracker:
+        weather_paths = ["/weather/", "/data/", "/summary/", "/trend/", "/average/", "/forecast/"]
+        if any(request.url.path.startswith(path) for path in weather_paths):
+            path_parts = request.url.path.split("/")
+            if len(path_parts) >= 3:
+                location = path_parts[2]
+                endpoint = path_parts[1] if len(path_parts) > 1 else "unknown"
+                usage_tracker.track_location_request(location, endpoint)
 
     # Public paths that don't require a token
     public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats"]
@@ -496,7 +931,14 @@ async def root():
             "/summary/{location}/{month_day}",
             "/forecast/{location}",
             "/rate-limit-status",
-            "/rate-limit-stats"
+            "/rate-limit-stats",
+            "/usage-stats",
+            "/usage-stats/{location}",
+            "/cache-warm",
+            "/cache-warm/status",
+            "/cache-warm/locations",
+            "/cache-warm/startup",
+            "/cache-warm/schedule"
         ]
     }
 
@@ -1227,6 +1669,102 @@ async def get_rate_limit_stats():
         "whitelisted_ips": IP_WHITELIST,
         "blacklisted_ips": IP_BLACKLIST,
         "ip_details": all_stats
+    }
+
+@app.get("/usage-stats")
+async def get_usage_stats():
+    """Get usage tracking statistics."""
+    if not USAGE_TRACKING_ENABLED or not usage_tracker:
+        return {"status": "disabled", "message": "Usage tracking is not enabled"}
+    
+    return {
+        "enabled": USAGE_TRACKING_ENABLED,
+        "retention_days": USAGE_RETENTION_DAYS,
+        "popular_locations_24h": usage_tracker.get_popular_locations(limit=10, hours=24),
+        "popular_locations_7d": usage_tracker.get_popular_locations(limit=10, hours=168),
+        "all_location_stats": usage_tracker.get_all_location_stats()
+    }
+
+@app.get("/usage-stats/{location}")
+async def get_location_usage_stats(location: str):
+    """Get usage statistics for a specific location."""
+    if not USAGE_TRACKING_ENABLED or not usage_tracker:
+        return {"status": "disabled", "message": "Usage tracking is not enabled"}
+    
+    stats = usage_tracker.get_location_stats(location)
+    if not stats:
+        return {"status": "not_found", "message": f"No usage data found for location: {location}"}
+    
+    return stats
+
+@app.post("/cache-warm")
+async def trigger_cache_warming():
+    """Trigger manual cache warming for all popular locations."""
+    if not CACHE_WARMING_ENABLED or not cache_warmer:
+        return {"status": "disabled", "message": "Cache warming is not enabled"}
+    
+    if cache_warmer.warming_in_progress:
+        return {"status": "already_in_progress", "message": "Cache warming is already in progress"}
+    
+    # Run warming in background
+    asyncio.create_task(cache_warmer.warm_all_locations())
+    
+    return {
+        "status": "started",
+        "message": "Cache warming started in background",
+        "locations_to_warm": cache_warmer.get_locations_to_warm()
+    }
+
+@app.get("/cache-warm/status")
+async def get_cache_warming_status():
+    """Get cache warming status and statistics."""
+    if not CACHE_WARMING_ENABLED or not cache_warmer:
+        return {"status": "disabled", "message": "Cache warming is not enabled"}
+    
+    return cache_warmer.get_warming_stats()
+
+@app.get("/cache-warm/locations")
+async def get_locations_to_warm():
+    """Get list of locations that would be warmed."""
+    if not CACHE_WARMING_ENABLED or not cache_warmer:
+        return {"status": "disabled", "message": "Cache warming is not enabled"}
+    
+    return {
+        "locations": cache_warmer.get_locations_to_warm(),
+        "dates": cache_warmer.get_dates_to_warm(),
+        "month_days": cache_warmer.get_month_days_to_warm()
+    }
+
+@app.post("/cache-warm/startup")
+async def trigger_startup_warming():
+    """Trigger cache warming on startup (useful for deployment)."""
+    if not CACHE_WARMING_ENABLED or not cache_warmer:
+        return {"status": "disabled", "message": "Cache warming is not enabled"}
+    
+    if cache_warmer.warming_in_progress:
+        return {"status": "already_in_progress", "message": "Cache warming is already in progress"}
+    
+    # Run warming in background
+    asyncio.create_task(cache_warmer.warm_all_locations())
+    
+    return {
+        "status": "started",
+        "message": "Startup cache warming started in background",
+        "locations_to_warm": cache_warmer.get_locations_to_warm()
+    }
+
+@app.get("/cache-warm/schedule")
+async def get_warming_schedule():
+    """Get information about the warming schedule."""
+    if not CACHE_WARMING_ENABLED or not cache_warmer:
+        return {"status": "disabled", "message": "Cache warming is not enabled"}
+    
+    return {
+        "enabled": CACHE_WARMING_ENABLED,
+        "interval_hours": CACHE_WARMING_INTERVAL_HOURS,
+        "next_warming_in_hours": CACHE_WARMING_INTERVAL_HOURS,  # Simplified - would need more complex logic for exact timing
+        "last_warming": cache_warmer.last_warming_time.isoformat() if cache_warmer.last_warming_time else None,
+        "warming_in_progress": cache_warmer.warming_in_progress
     }
 
 # Helper to check if a given year, month, day is today
