@@ -1185,6 +1185,20 @@ async def get_all_data(location: str, month_day: str):
     logger.debug(f"get_all_data for {location} on {month_day}")
     try:
         month, day = map(int, month_day.split("-"))
+        
+        # Create main response cache key
+        main_cache_key = f"data_{location.lower()}_{month:02d}_{day:02d}"
+        
+        # Check main response cache first if caching is enabled
+        if CACHE_ENABLED:
+            cached_response = get_cache(main_cache_key)
+            if cached_response:
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED MAIN RESPONSE: {main_cache_key} | Location: {location} | Date: {month_day}")
+                return JSONResponse(content=json.loads(cached_response), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+            elif DEBUG:
+                logger.debug(f"❌ MAIN CACHE MISS: {main_cache_key} — computing fresh response")
+        
         weather_data = await get_temperature_series(location, month, day)
         if DEBUG:
             logger.debug(f"📊 WEATHER DATA SERIES: {location} | {month_day}")
@@ -1261,6 +1275,15 @@ async def get_all_data(location: str, month_day: str):
         if DEBUG:
             logger.debug(f"🎯 FINAL /DATA ENDPOINT RESPONSE: {location} | {month_day}")
             logger.debug(f"📄 COMPLETE RESPONSE JSON: {json.dumps(final_response, indent=2)}")
+
+        # Cache the main response if caching is enabled and data is complete
+        if CACHE_ENABLED and is_complete:
+            # Determine cache duration based on whether this is today's data
+            # Today's data includes forecast which can change, so use shorter cache
+            cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
+            set_cache(main_cache_key, cache_duration, json.dumps(final_response))
+            if DEBUG:
+                logger.debug(f"💾 CACHED MAIN RESPONSE: {main_cache_key} | Duration: {cache_duration} | Today: {cache_is_today}")
 
         return JSONResponse(
             content=final_response,
