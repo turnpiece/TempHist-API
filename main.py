@@ -419,6 +419,11 @@ CACHE_STATS_ENABLED = os.getenv("CACHE_STATS_ENABLED", "true").lower() == "true"
 CACHE_STATS_RETENTION_HOURS = int(os.getenv("CACHE_STATS_RETENTION_HOURS", "24"))
 CACHE_HEALTH_THRESHOLD = float(os.getenv("CACHE_HEALTH_THRESHOLD", "0.7"))  # 70% hit rate threshold
 
+# Cache Invalidation Configuration
+CACHE_INVALIDATION_ENABLED = os.getenv("CACHE_INVALIDATION_ENABLED", "true").lower() == "true"
+CACHE_INVALIDATION_DRY_RUN = os.getenv("CACHE_INVALIDATION_DRY_RUN", "false").lower() == "true"
+CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "100"))
+
 class CacheWarmer:
     """Proactive cache warming for popular locations and recent dates."""
     
@@ -890,6 +895,292 @@ class CacheStats:
         if DEBUG:
             logger.info("📊 CACHE STATS RESET: All statistics cleared")
 
+class CacheInvalidator:
+    """Manage cache invalidation with various strategies and patterns."""
+    
+    def __init__(self):
+        self.invalidation_prefix = "invalidation_"
+        self.batch_size = CACHE_INVALIDATION_BATCH_SIZE
+        
+    def invalidate_by_key(self, cache_key: str, dry_run: bool = False) -> Dict:
+        """Invalidate a specific cache key."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        try:
+            if dry_run or CACHE_INVALIDATION_DRY_RUN:
+                # Check if key exists without deleting
+                exists = redis_client.exists(cache_key)
+                return {
+                    "status": "dry_run",
+                    "cache_key": cache_key,
+                    "exists": bool(exists),
+                    "action": "would_delete" if exists else "no_action"
+                }
+            else:
+                # Actually delete the key
+                deleted = redis_client.delete(cache_key)
+                return {
+                    "status": "success",
+                    "cache_key": cache_key,
+                    "deleted": bool(deleted),
+                    "action": "deleted" if deleted else "not_found"
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "cache_key": cache_key,
+                "error": str(e)
+            }
+    
+    def invalidate_by_pattern(self, pattern: str, dry_run: bool = False) -> Dict:
+        """Invalidate cache keys matching a pattern."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        try:
+            # Find keys matching pattern
+            matching_keys = redis_client.keys(pattern)
+            
+            if dry_run or CACHE_INVALIDATION_DRY_RUN:
+                return {
+                    "status": "dry_run",
+                    "pattern": pattern,
+                    "matching_keys": [key.decode() for key in matching_keys],
+                    "count": len(matching_keys),
+                    "action": "would_delete"
+                }
+            else:
+                # Delete keys in batches
+                deleted_count = 0
+                for i in range(0, len(matching_keys), self.batch_size):
+                    batch = matching_keys[i:i + self.batch_size]
+                    if batch:
+                        deleted_count += redis_client.delete(*batch)
+                
+                return {
+                    "status": "success",
+                    "pattern": pattern,
+                    "matching_keys": [key.decode() for key in matching_keys],
+                    "deleted_count": deleted_count,
+                    "total_found": len(matching_keys)
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "pattern": pattern,
+                "error": str(e)
+            }
+    
+    def invalidate_by_endpoint(self, endpoint: str, location: str = None, dry_run: bool = False) -> Dict:
+        """Invalidate cache keys for a specific endpoint and optionally location."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        # Build pattern based on endpoint and location
+        if location:
+            pattern = f"{endpoint}_{location.lower()}_*"
+        else:
+            pattern = f"{endpoint}_*"
+        
+        return self.invalidate_by_pattern(pattern, dry_run)
+    
+    def invalidate_by_location(self, location: str, dry_run: bool = False) -> Dict:
+        """Invalidate all cache keys for a specific location."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        location = location.lower()
+        pattern = f"*_{location}_*"
+        return self.invalidate_by_pattern(pattern, dry_run)
+    
+    def invalidate_by_date(self, date: str, dry_run: bool = False) -> Dict:
+        """Invalidate cache keys for a specific date."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        # Handle different date formats
+        date_patterns = [
+            f"*_{date}_*",  # YYYY-MM-DD format
+            f"*_{date.replace('-', '_')}_*",  # YYYY_MM_DD format
+            f"*_{date.replace('-', '_')}",  # End of key
+        ]
+        
+        results = []
+        total_deleted = 0
+        total_found = 0
+        
+        for pattern in date_patterns:
+            result = self.invalidate_by_pattern(pattern, dry_run)
+            results.append(result)
+            if result.get("status") == "success":
+                total_deleted += result.get("deleted_count", 0)
+                total_found += result.get("total_found", 0)
+            elif result.get("status") == "dry_run":
+                total_found += result.get("count", 0)
+        
+        return {
+            "status": "success" if not dry_run and not CACHE_INVALIDATION_DRY_RUN else "dry_run",
+            "date": date,
+            "patterns_checked": len(date_patterns),
+            "total_deleted": total_deleted,
+            "total_found": total_found,
+            "pattern_results": results
+        }
+    
+    def invalidate_forecast_data(self, dry_run: bool = False) -> Dict:
+        """Invalidate all forecast data (since it changes frequently)."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        return self.invalidate_by_pattern("forecast_*", dry_run)
+    
+    def invalidate_today_data(self, dry_run: bool = False) -> Dict:
+        """Invalidate all data for today (since it includes forecasts)."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
+        today_pattern = today.strftime("%m_%d")
+        
+        # Invalidate by both date formats
+        results = []
+        for date_format in [today_str, today_pattern]:
+            result = self.invalidate_by_date(date_format, dry_run)
+            results.append(result)
+        
+        return {
+            "status": "success" if not dry_run and not CACHE_INVALIDATION_DRY_RUN else "dry_run",
+            "date": today_str,
+            "results": results
+        }
+    
+    def invalidate_expired_keys(self, dry_run: bool = False) -> Dict:
+        """Invalidate keys that have expired (TTL = 0 or negative)."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        try:
+            # Get all keys
+            all_keys = redis_client.keys("*")
+            expired_keys = []
+            
+            for key in all_keys:
+                ttl = redis_client.ttl(key)
+                if ttl == -1:  # Key exists but has no expiration
+                    continue
+                elif ttl <= 0:  # Key has expired
+                    expired_keys.append(key)
+            
+            if dry_run or CACHE_INVALIDATION_DRY_RUN:
+                return {
+                    "status": "dry_run",
+                    "expired_keys": [key.decode() for key in expired_keys],
+                    "count": len(expired_keys),
+                    "action": "would_delete"
+                }
+            else:
+                # Delete expired keys
+                deleted_count = 0
+                if expired_keys:
+                    deleted_count = redis_client.delete(*expired_keys)
+                
+                return {
+                    "status": "success",
+                    "expired_keys": [key.decode() for key in expired_keys],
+                    "deleted_count": deleted_count,
+                    "total_found": len(expired_keys)
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    def get_cache_info(self) -> Dict:
+        """Get information about current cache state."""
+        try:
+            # Get basic Redis info
+            info = redis_client.info()
+            
+            # Get key count by pattern
+            patterns = {
+                "weather": "weather_*",
+                "data": "data_*",
+                "trend": "trend_*",
+                "average": "average_*",
+                "summary": "summary_*",
+                "forecast": "forecast_*",
+                "series": "series_*",
+                "usage": "usage_*",
+                "cache_stats": "cache_stats_*"
+            }
+            
+            pattern_counts = {}
+            for name, pattern in patterns.items():
+                count = len(redis_client.keys(pattern))
+                pattern_counts[name] = count
+            
+            return {
+                "redis_info": {
+                    "used_memory": info.get("used_memory_human", "unknown"),
+                    "connected_clients": info.get("connected_clients", 0),
+                    "total_commands_processed": info.get("total_commands_processed", 0),
+                    "keyspace_hits": info.get("keyspace_hits", 0),
+                    "keyspace_misses": info.get("keyspace_misses", 0)
+                },
+                "key_counts": pattern_counts,
+                "total_keys": info.get("db0", {}).get("keys", 0) if "db0" in info else 0
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    def clear_all_cache(self, dry_run: bool = False) -> Dict:
+        """Clear all cache data (use with caution!)."""
+        if not CACHE_INVALIDATION_ENABLED:
+            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        try:
+            if dry_run or CACHE_INVALIDATION_DRY_RUN:
+                # Count keys without deleting
+                all_keys = redis_client.keys("*")
+                return {
+                    "status": "dry_run",
+                    "total_keys": len(all_keys),
+                    "action": "would_delete_all"
+                }
+            else:
+                # Flush all data
+                redis_client.flushdb()
+                return {
+                    "status": "success",
+                    "action": "cleared_all_cache",
+                    "message": "All cache data has been cleared"
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+# Initialize cache invalidator
+if CACHE_INVALIDATION_ENABLED:
+    cache_invalidator = CacheInvalidator()
+    if DEBUG:
+        logger.info(f"🗑️  CACHE INVALIDATION INITIALIZED: Batch size {CACHE_INVALIDATION_BATCH_SIZE}, Dry run: {CACHE_INVALIDATION_DRY_RUN}")
+    else:
+        logger.info(f"Cache invalidation enabled: batch size {CACHE_INVALIDATION_BATCH_SIZE}")
+else:
+    cache_invalidator = None
+    if DEBUG:
+        logger.info("⚠️  CACHE INVALIDATION DISABLED")
+    else:
+        logger.info("Cache invalidation disabled")
+
 # Initialize cache statistics
 if CACHE_STATS_ENABLED:
     cache_stats = CacheStats()
@@ -1218,7 +1509,17 @@ async def root():
             "/cache-stats/endpoints",
             "/cache-stats/locations",
             "/cache-stats/hourly",
-            "/cache-stats/reset"
+            "/cache-stats/reset",
+            "/cache/info",
+            "/cache/invalidate/key/{cache_key}",
+            "/cache/invalidate/pattern",
+            "/cache/invalidate/endpoint/{endpoint}",
+            "/cache/invalidate/location/{location}",
+            "/cache/invalidate/date/{date}",
+            "/cache/invalidate/forecast",
+            "/cache/invalidate/today",
+            "/cache/invalidate/expired",
+            "/cache/clear"
         ]
     }
 
@@ -2134,6 +2435,95 @@ async def reset_cache_statistics():
         "message": "Cache statistics have been reset",
         "timestamp": datetime.now().isoformat()
     }
+
+@app.delete("/cache/invalidate/key/{cache_key:path}")
+async def invalidate_cache_key(cache_key: str, dry_run: bool = False):
+    """Invalidate a specific cache key."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_by_key(cache_key, dry_run)
+    return result
+
+@app.delete("/cache/invalidate/pattern")
+async def invalidate_by_pattern(pattern: str, dry_run: bool = False):
+    """Invalidate cache keys matching a pattern."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_by_pattern(pattern, dry_run)
+    return result
+
+@app.delete("/cache/invalidate/endpoint/{endpoint}")
+async def invalidate_by_endpoint(endpoint: str, location: str = None, dry_run: bool = False):
+    """Invalidate cache keys for a specific endpoint and optionally location."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_by_endpoint(endpoint, location, dry_run)
+    return result
+
+@app.delete("/cache/invalidate/location/{location}")
+async def invalidate_by_location(location: str, dry_run: bool = False):
+    """Invalidate all cache keys for a specific location."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_by_location(location, dry_run)
+    return result
+
+@app.delete("/cache/invalidate/date/{date}")
+async def invalidate_by_date(date: str, dry_run: bool = False):
+    """Invalidate cache keys for a specific date."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_by_date(date, dry_run)
+    return result
+
+@app.delete("/cache/invalidate/forecast")
+async def invalidate_forecast_data(dry_run: bool = False):
+    """Invalidate all forecast data."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_forecast_data(dry_run)
+    return result
+
+@app.delete("/cache/invalidate/today")
+async def invalidate_today_data(dry_run: bool = False):
+    """Invalidate all data for today."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_today_data(dry_run)
+    return result
+
+@app.delete("/cache/invalidate/expired")
+async def invalidate_expired_keys(dry_run: bool = False):
+    """Invalidate keys that have expired."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.invalidate_expired_keys(dry_run)
+    return result
+
+@app.get("/cache/info")
+async def get_cache_info():
+    """Get information about current cache state."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    return cache_invalidator.get_cache_info()
+
+@app.delete("/cache/clear")
+async def clear_all_cache(dry_run: bool = False):
+    """Clear all cache data (use with caution!)."""
+    if not CACHE_INVALIDATION_ENABLED or not cache_invalidator:
+        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+    
+    result = cache_invalidator.clear_all_cache(dry_run)
+    return result
 
 # Helper to check if a given year, month, day is today
 def is_today(year: int, month: int, day: int) -> bool:
