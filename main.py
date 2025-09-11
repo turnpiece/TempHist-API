@@ -414,6 +414,11 @@ CACHE_WARMING_DAYS_BACK = int(os.getenv("CACHE_WARMING_DAYS_BACK", "7"))
 CACHE_WARMING_CONCURRENT_REQUESTS = int(os.getenv("CACHE_WARMING_CONCURRENT_REQUESTS", "3"))
 CACHE_WARMING_MAX_LOCATIONS = int(os.getenv("CACHE_WARMING_MAX_LOCATIONS", "15"))
 
+# Cache Statistics Configuration
+CACHE_STATS_ENABLED = os.getenv("CACHE_STATS_ENABLED", "true").lower() == "true"
+CACHE_STATS_RETENTION_HOURS = int(os.getenv("CACHE_STATS_RETENTION_HOURS", "24"))
+CACHE_HEALTH_THRESHOLD = float(os.getenv("CACHE_HEALTH_THRESHOLD", "0.7"))  # 70% hit rate threshold
+
 class CacheWarmer:
     """Proactive cache warming for popular locations and recent dates."""
     
@@ -630,6 +635,275 @@ class CacheWarmer:
                 "max_locations": CACHE_WARMING_MAX_LOCATIONS
             }
         }
+
+class CacheStats:
+    """Track and analyze cache performance statistics."""
+    
+    def __init__(self):
+        self.stats_prefix = "cache_stats_"
+        self.retention_seconds = CACHE_STATS_RETENTION_HOURS * 3600
+        self.stats = {
+            "total_requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "cache_errors": 0,
+            "endpoint_stats": {},
+            "location_stats": {},
+            "hourly_stats": {},
+            "last_reset": time.time()
+        }
+    
+    def track_cache_request(self, cache_key: str, hit: bool, endpoint: str = None, location: str = None, error: bool = False):
+        """Track a cache request (hit, miss, or error)."""
+        if not CACHE_STATS_ENABLED:
+            return
+        
+        current_time = time.time()
+        hour_key = int(current_time // 3600)  # Hour bucket
+        
+        # Update overall stats
+        self.stats["total_requests"] += 1
+        if error:
+            self.stats["cache_errors"] += 1
+        elif hit:
+            self.stats["cache_hits"] += 1
+        else:
+            self.stats["cache_misses"] += 1
+        
+        # Update endpoint stats
+        if endpoint:
+            if endpoint not in self.stats["endpoint_stats"]:
+                self.stats["endpoint_stats"][endpoint] = {"hits": 0, "misses": 0, "errors": 0, "total": 0}
+            
+            self.stats["endpoint_stats"][endpoint]["total"] += 1
+            if error:
+                self.stats["endpoint_stats"][endpoint]["errors"] += 1
+            elif hit:
+                self.stats["endpoint_stats"][endpoint]["hits"] += 1
+            else:
+                self.stats["endpoint_stats"][endpoint]["misses"] += 1
+        
+        # Update location stats
+        if location:
+            if location not in self.stats["location_stats"]:
+                self.stats["location_stats"][location] = {"hits": 0, "misses": 0, "errors": 0, "total": 0}
+            
+            self.stats["location_stats"][location]["total"] += 1
+            if error:
+                self.stats["location_stats"][location]["errors"] += 1
+            elif hit:
+                self.stats["location_stats"][location]["hits"] += 1
+            else:
+                self.stats["location_stats"][location]["misses"] += 1
+        
+        # Update hourly stats
+        if hour_key not in self.stats["hourly_stats"]:
+            self.stats["hourly_stats"][hour_key] = {"hits": 0, "misses": 0, "errors": 0, "total": 0}
+        
+        self.stats["hourly_stats"][hour_key]["total"] += 1
+        if error:
+            self.stats["hourly_stats"][hour_key]["errors"] += 1
+        elif hit:
+            self.stats["hourly_stats"][hour_key]["hits"] += 1
+        else:
+            self.stats["hourly_stats"][hour_key]["misses"] += 1
+        
+        # Store in Redis for persistence
+        self._store_stats_in_redis()
+    
+    def _store_stats_in_redis(self):
+        """Store current stats in Redis for persistence."""
+        if not CACHE_STATS_ENABLED:
+            return
+        
+        try:
+            stats_key = f"{self.stats_prefix}current"
+            redis_client.setex(stats_key, self.retention_seconds, json.dumps(self.stats))
+        except Exception as e:
+            if DEBUG:
+                logger.error(f"Failed to store cache stats in Redis: {e}")
+    
+    def _load_stats_from_redis(self):
+        """Load stats from Redis on startup."""
+        if not CACHE_STATS_ENABLED:
+            return
+        
+        try:
+            stats_key = f"{self.stats_prefix}current"
+            cached_stats = redis_client.get(stats_key)
+            if cached_stats:
+                loaded_stats = json.loads(cached_stats)
+                # Merge with current stats (in case of partial data)
+                for key, value in loaded_stats.items():
+                    if key in self.stats and isinstance(value, dict):
+                        if isinstance(self.stats[key], dict):
+                            self.stats[key].update(value)
+                        else:
+                            self.stats[key] = value
+                    else:
+                        self.stats[key] = value
+        except Exception as e:
+            if DEBUG:
+                logger.error(f"Failed to load cache stats from Redis: {e}")
+    
+    def get_hit_rate(self) -> float:
+        """Calculate overall cache hit rate."""
+        total = self.stats["cache_hits"] + self.stats["cache_misses"]
+        if total == 0:
+            return 0.0
+        return self.stats["cache_hits"] / total
+    
+    def get_error_rate(self) -> float:
+        """Calculate cache error rate."""
+        total = self.stats["total_requests"]
+        if total == 0:
+            return 0.0
+        return self.stats["cache_errors"] / total
+    
+    def get_endpoint_stats(self) -> Dict:
+        """Get cache statistics by endpoint."""
+        endpoint_stats = {}
+        for endpoint, stats in self.stats["endpoint_stats"].items():
+            total = stats["hits"] + stats["misses"]
+            hit_rate = stats["hits"] / total if total > 0 else 0.0
+            error_rate = stats["errors"] / stats["total"] if stats["total"] > 0 else 0.0
+            
+            endpoint_stats[endpoint] = {
+                "total_requests": stats["total"],
+                "cache_hits": stats["hits"],
+                "cache_misses": stats["misses"],
+                "cache_errors": stats["errors"],
+                "hit_rate": hit_rate,
+                "error_rate": error_rate
+            }
+        
+        return endpoint_stats
+    
+    def get_location_stats(self) -> Dict:
+        """Get cache statistics by location."""
+        location_stats = {}
+        for location, stats in self.stats["location_stats"].items():
+            total = stats["hits"] + stats["misses"]
+            hit_rate = stats["hits"] / total if total > 0 else 0.0
+            error_rate = stats["errors"] / stats["total"] if stats["total"] > 0 else 0.0
+            
+            location_stats[location] = {
+                "total_requests": stats["total"],
+                "cache_hits": stats["hits"],
+                "cache_misses": stats["misses"],
+                "cache_errors": stats["errors"],
+                "hit_rate": hit_rate,
+                "error_rate": error_rate
+            }
+        
+        return location_stats
+    
+    def get_hourly_stats(self, hours: int = 24) -> List[Dict]:
+        """Get hourly cache statistics for the last N hours."""
+        current_hour = int(time.time() // 3600)
+        hourly_data = []
+        
+        for i in range(hours):
+            hour_key = current_hour - i
+            if hour_key in self.stats["hourly_stats"]:
+                stats = self.stats["hourly_stats"][hour_key]
+                total = stats["hits"] + stats["misses"]
+                hit_rate = stats["hits"] / total if total > 0 else 0.0
+                
+                hourly_data.append({
+                    "hour": hour_key,
+                    "timestamp": hour_key * 3600,
+                    "total_requests": stats["total"],
+                    "cache_hits": stats["hits"],
+                    "cache_misses": stats["misses"],
+                    "cache_errors": stats["errors"],
+                    "hit_rate": hit_rate
+                })
+            else:
+                hourly_data.append({
+                    "hour": hour_key,
+                    "timestamp": hour_key * 3600,
+                    "total_requests": 0,
+                    "cache_hits": 0,
+                    "cache_misses": 0,
+                    "cache_errors": 0,
+                    "hit_rate": 0.0
+                })
+        
+        return list(reversed(hourly_data))  # Return in chronological order
+    
+    def get_cache_health(self) -> Dict:
+        """Get cache health assessment."""
+        hit_rate = self.get_hit_rate()
+        error_rate = self.get_error_rate()
+        
+        health_status = "healthy"
+        if hit_rate < CACHE_HEALTH_THRESHOLD:
+            health_status = "degraded"
+        if error_rate > 0.1:  # 10% error rate threshold
+            health_status = "unhealthy"
+        
+        return {
+            "status": health_status,
+            "hit_rate": hit_rate,
+            "error_rate": error_rate,
+            "threshold": CACHE_HEALTH_THRESHOLD,
+            "total_requests": self.stats["total_requests"],
+            "uptime_hours": (time.time() - self.stats["last_reset"]) / 3600
+        }
+    
+    def get_comprehensive_stats(self) -> Dict:
+        """Get comprehensive cache statistics."""
+        return {
+            "overall": {
+                "total_requests": self.stats["total_requests"],
+                "cache_hits": self.stats["cache_hits"],
+                "cache_misses": self.stats["cache_misses"],
+                "cache_errors": self.stats["cache_errors"],
+                "hit_rate": self.get_hit_rate(),
+                "error_rate": self.get_error_rate()
+            },
+            "by_endpoint": self.get_endpoint_stats(),
+            "by_location": self.get_location_stats(),
+            "hourly": self.get_hourly_stats(24),
+            "health": self.get_cache_health(),
+            "configuration": {
+                "enabled": CACHE_STATS_ENABLED,
+                "retention_hours": CACHE_STATS_RETENTION_HOURS,
+                "health_threshold": CACHE_HEALTH_THRESHOLD
+            }
+        }
+    
+    def reset_stats(self):
+        """Reset all cache statistics."""
+        self.stats = {
+            "total_requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "cache_errors": 0,
+            "endpoint_stats": {},
+            "location_stats": {},
+            "hourly_stats": {},
+            "last_reset": time.time()
+        }
+        self._store_stats_in_redis()
+        if DEBUG:
+            logger.info("📊 CACHE STATS RESET: All statistics cleared")
+
+# Initialize cache statistics
+if CACHE_STATS_ENABLED:
+    cache_stats = CacheStats()
+    cache_stats._load_stats_from_redis()  # Load existing stats from Redis
+    if DEBUG:
+        logger.info(f"📊 CACHE STATS INITIALIZED: {CACHE_STATS_RETENTION_HOURS}h retention, {CACHE_HEALTH_THRESHOLD} hit rate threshold")
+    else:
+        logger.info(f"Cache statistics enabled: {CACHE_STATS_RETENTION_HOURS}h retention")
+else:
+    cache_stats = None
+    if DEBUG:
+        logger.info("⚠️  CACHE STATS DISABLED")
+    else:
+        logger.info("Cache statistics disabled")
 
 # Initialize cache warmer
 if CACHE_WARMING_ENABLED:
@@ -938,7 +1212,13 @@ async def root():
             "/cache-warm/status",
             "/cache-warm/locations",
             "/cache-warm/startup",
-            "/cache-warm/schedule"
+            "/cache-warm/schedule",
+            "/cache-stats",
+            "/cache-stats/health",
+            "/cache-stats/endpoints",
+            "/cache-stats/locations",
+            "/cache-stats/hourly",
+            "/cache-stats/reset"
         ]
     }
 
@@ -1014,16 +1294,34 @@ def fetch_weather_from_api(location: str, date: str):
     return {"error": "No temperature data available", "status": response.status_code}
 
 # get a value from the cache
-def get_cache(cache_key):
-    """Get a value from the cache."""
+def get_cache(cache_key, endpoint: str = None, location: str = None):
+    """Get a value from the cache with statistics tracking."""
     if DEBUG:
         logger.debug(f"🔍 CACHE GET: {cache_key}")
-    result = redis_client.get(cache_key)
-    if DEBUG and result:
-        logger.debug(f"✅ CACHE HIT: {cache_key}")
-    elif DEBUG:
-        logger.debug(f"❌ CACHE MISS: {cache_key}")
-    return result
+    
+    try:
+        result = redis_client.get(cache_key)
+        hit = result is not None
+        
+        # Track cache statistics
+        if CACHE_STATS_ENABLED and cache_stats:
+            cache_stats.track_cache_request(cache_key, hit, endpoint, location)
+        
+        if DEBUG and result:
+            logger.debug(f"✅ CACHE HIT: {cache_key}")
+        elif DEBUG:
+            logger.debug(f"❌ CACHE MISS: {cache_key}")
+        
+        return result
+    
+    except Exception as e:
+        # Track cache errors
+        if CACHE_STATS_ENABLED and cache_stats:
+            cache_stats.track_cache_request(cache_key, False, endpoint, location, error=True)
+        
+        if DEBUG:
+            logger.error(f"❌ CACHE ERROR: {cache_key} - {str(e)}")
+        return None
 
 # set a value in the cache
 def set_cache(cache_key, lifetime, value):
@@ -1048,7 +1346,7 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
     logger.debug(f"get_weather_for_date for {location} on {date_str}")
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
-        cached_data = get_cache(cache_key)
+        cached_data = get_cache(cache_key, endpoint="weather", location=location)
         if cached_data:
             if DEBUG:
                 logger.debug(f"✅ SERVING CACHED WEATHER: {cache_key} | Location: {location} | Date: {date_str}")
@@ -1178,7 +1476,7 @@ def get_weather(location: str, date: str):
     if CACHE_ENABLED:
         if DEBUG:
             logger.info(f"🔍 CACHE CHECK: {cache_key}")
-        cached_data = get_cache(cache_key)
+        cached_data = get_cache(cache_key, endpoint="weather", location=location)
         if cached_data:
             if DEBUG:
                 logger.info(f"✅ SERVING CACHED DATA: {cache_key} | Location: {location} | Date: {date}")
@@ -1392,7 +1690,7 @@ async def trend(location: str, month_day: str):
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = get_cache(cache_key)
+        cached_data = get_cache(cache_key, endpoint="trend", location=location)
         if cached_data:
             logger.debug(f"Cache hit: {cache_key}")
             return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
@@ -1456,7 +1754,7 @@ async def average(location: str, month_day: str):
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
-        cached_data = get_cache(cache_key)
+        cached_data = get_cache(cache_key, endpoint="average", location=location)
         if cached_data:
             logger.debug(f"Cache hit: {cache_key}")
             return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
@@ -1555,7 +1853,7 @@ async def get_forecast(location: str):
         
         # Check cache first if caching is enabled
         if CACHE_ENABLED:
-            cached_forecast = get_cache(cache_key)
+            cached_forecast = get_cache(cache_key, endpoint="forecast", location=location)
             if cached_forecast:
                 if DEBUG:
                     logger.debug(f"✅ SERVING CACHED FORECAST: {cache_key} | Location: {location}")
@@ -1599,7 +1897,7 @@ async def test_redis():
         # Try to set a test value
         set_cache("test_key", timedelta(minutes=5), "test_value")
         # Try to get the test value
-        test_value = get_cache("test_key")
+        test_value = get_cache("test_key", endpoint="test", location="test")
         if test_value and test_value.decode('utf-8') == "test_value":
             return JSONResponse(content={"status": "success", "message": "Redis connection is working"}, headers={"Cache-Control": CACHE_CONTROL_HEADER})
         else:
@@ -1767,6 +2065,76 @@ async def get_warming_schedule():
         "warming_in_progress": cache_warmer.warming_in_progress
     }
 
+@app.get("/cache-stats")
+async def get_cache_statistics():
+    """Get comprehensive cache statistics and performance metrics."""
+    if not CACHE_STATS_ENABLED or not cache_stats:
+        return {"status": "disabled", "message": "Cache statistics are not enabled"}
+    
+    return cache_stats.get_comprehensive_stats()
+
+@app.get("/cache-stats/health")
+async def get_cache_health():
+    """Get cache health assessment and alerts."""
+    if not CACHE_STATS_ENABLED or not cache_stats:
+        return {"status": "disabled", "message": "Cache statistics are not enabled"}
+    
+    return cache_stats.get_cache_health()
+
+@app.get("/cache-stats/endpoints")
+async def get_cache_endpoint_stats():
+    """Get cache statistics broken down by endpoint."""
+    if not CACHE_STATS_ENABLED or not cache_stats:
+        return {"status": "disabled", "message": "Cache statistics are not enabled"}
+    
+    return {
+        "by_endpoint": cache_stats.get_endpoint_stats(),
+        "overall": {
+            "total_requests": cache_stats.stats["total_requests"],
+            "hit_rate": cache_stats.get_hit_rate(),
+            "error_rate": cache_stats.get_error_rate()
+        }
+    }
+
+@app.get("/cache-stats/locations")
+async def get_cache_location_stats():
+    """Get cache statistics broken down by location."""
+    if not CACHE_STATS_ENABLED or not cache_stats:
+        return {"status": "disabled", "message": "Cache statistics are not enabled"}
+    
+    return {
+        "by_location": cache_stats.get_location_stats(),
+        "overall": {
+            "total_requests": cache_stats.stats["total_requests"],
+            "hit_rate": cache_stats.get_hit_rate(),
+            "error_rate": cache_stats.get_error_rate()
+        }
+    }
+
+@app.get("/cache-stats/hourly")
+async def get_cache_hourly_stats(hours: int = 24):
+    """Get hourly cache statistics for the last N hours."""
+    if not CACHE_STATS_ENABLED or not cache_stats:
+        return {"status": "disabled", "message": "Cache statistics are not enabled"}
+    
+    return {
+        "hourly_data": cache_stats.get_hourly_stats(hours),
+        "requested_hours": hours
+    }
+
+@app.post("/cache-stats/reset")
+async def reset_cache_statistics():
+    """Reset all cache statistics (admin endpoint)."""
+    if not CACHE_STATS_ENABLED or not cache_stats:
+        return {"status": "disabled", "message": "Cache statistics are not enabled"}
+    
+    cache_stats.reset_stats()
+    return {
+        "status": "success",
+        "message": "Cache statistics have been reset",
+        "timestamp": datetime.now().isoformat()
+    }
+
 # Helper to check if a given year, month, day is today
 def is_today(year: int, month: int, day: int) -> bool:
     """Check if the given date is today."""
@@ -1827,7 +2195,7 @@ async def get_all_data(location: str, month_day: str):
         
         # Check main response cache first if caching is enabled
         if CACHE_ENABLED:
-            cached_response = get_cache(main_cache_key)
+            cached_response = get_cache(main_cache_key, endpoint="data", location=location)
             if cached_response:
                 if DEBUG:
                     logger.debug(f"✅ SERVING CACHED MAIN RESPONSE: {main_cache_key} | Location: {location} | Date: {month_day}")
@@ -1866,7 +2234,7 @@ async def get_all_data(location: str, month_day: str):
         if is_complete and CACHE_ENABLED:
             # Check cache for summary
             summary_cache_key = generate_cache_key("summary", location, f"{month:02d}_{day:02d}")
-            cached_summary = get_cache(summary_cache_key)
+            cached_summary = get_cache(summary_cache_key, endpoint="summary", location=location)
             if cached_summary:
                 if DEBUG:
                     logger.debug(f"✅ SERVING CACHED SUMMARY: {summary_cache_key}")
@@ -1879,7 +2247,7 @@ async def get_all_data(location: str, month_day: str):
 
             # Check cache for average
             average_cache_key = generate_cache_key("average", location, f"{month:02d}_{day:02d}")
-            cached_average = get_cache(average_cache_key)
+            cached_average = get_cache(average_cache_key, endpoint="average", location=location)
             if cached_average:
                 if DEBUG:
                     logger.debug(f"✅ SERVING CACHED AVERAGE: {average_cache_key}")
@@ -2014,7 +2382,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     # Check for cached series first
     series_cache_key = generate_cache_key("series", location, f"{month:02d}_{day:02d}")
     if CACHE_ENABLED:
-        cached_series = get_cache(series_cache_key)
+        cached_series = get_cache(series_cache_key, endpoint="series", location=location)
         if cached_series:
             logger.debug(f"Cache hit: {series_cache_key}")
             try:
@@ -2057,7 +2425,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                 continue
         # Use historical data for all other dates
         if CACHE_ENABLED:
-            cached_data = get_cache(cache_key)
+            cached_data = get_cache(cache_key, endpoint="weather", location=location)
             if cached_data:
                 if DEBUG:
                     logger.debug(f"✅ SERVING CACHED TEMPERATURE: {cache_key} | Location: {location} | Year: {year}")
