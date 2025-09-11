@@ -729,7 +729,7 @@ def get_weather(location: str, date: str):
     """Get weather data for a specific location and date."""
     logger.info(f"[DEBUG] Weather endpoint called with location={location}, date={date}")
     
-    cache_key = f"{location.lower()}_{date}"
+    cache_key = generate_cache_key("weather", location, date)
     logger.info(f"[DEBUG] Cache key: {cache_key}")
     
     # Check cache first if caching is enabled
@@ -946,7 +946,7 @@ async def trend(location: str, month_day: str):
         raise HTTPException(status_code=400, detail=str(e))
 
     # Create cache key for the trend
-    cache_key = f"trend_{location.lower()}_{month:02d}_{day:02d}"
+    cache_key = generate_cache_key("trend", location, f"{month:02d}_{day:02d}")
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
@@ -1010,7 +1010,7 @@ async def average(location: str, month_day: str):
         raise HTTPException(status_code=400, detail=str(e))
 
     # Create cache key for the average
-    cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
+    cache_key = generate_cache_key("average", location, f"{month:02d}_{day:02d}")
     
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
@@ -1109,7 +1109,7 @@ async def get_forecast(location: str):
     """Get weather forecast for a location with time-based caching."""
     try:
         # Create cache key for forecast
-        cache_key = f"forecast_{location.lower()}"
+        cache_key = generate_cache_key("forecast", location)
         
         # Check cache first if caching is enabled
         if CACHE_ENABLED:
@@ -1256,6 +1256,27 @@ def get_forecast_cache_duration() -> timedelta:
         # Active hours (Midnight to 6 PM) - forecast can change frequently
         return FORECAST_DAY_CACHE_DURATION
 
+def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
+    """Generate standardized cache keys.
+    
+    Args:
+        prefix: Cache key prefix (e.g., 'weather', 'data', 'trend')
+        location: Location name
+        date_part: Date part (can be YYYY-MM-DD, MM-DD, or MM_DD format). Empty string for no date.
+        
+    Returns:
+        str: Standardized cache key in format: {prefix}_{location}_{date_part}
+    """
+    # Normalize location to lowercase
+    location = location.lower()
+    
+    if date_part:
+        # Normalize date part by replacing hyphens with underscores
+        date_part = date_part.replace('-', '_')
+        return f"{prefix}_{location}_{date_part}"
+    else:
+        return f"{prefix}_{location}"
+
 @app.get("/data/{location}/{month_day}")
 async def get_all_data(location: str, month_day: str):
     """Get all temperature data, summary, trend, and average for a location and date."""
@@ -1264,7 +1285,7 @@ async def get_all_data(location: str, month_day: str):
         month, day = map(int, month_day.split("-"))
         
         # Create main response cache key
-        main_cache_key = f"data_{location.lower()}_{month:02d}_{day:02d}"
+        main_cache_key = generate_cache_key("data", location, f"{month:02d}_{day:02d}")
         
         # Check main response cache first if caching is enabled
         if CACHE_ENABLED:
@@ -1306,7 +1327,7 @@ async def get_all_data(location: str, month_day: str):
 
         if is_complete and CACHE_ENABLED:
             # Check cache for summary
-            summary_cache_key = f"summary_{location.lower()}_{month:02d}_{day:02d}"
+            summary_cache_key = generate_cache_key("summary", location, f"{month:02d}_{day:02d}")
             cached_summary = get_cache(summary_cache_key)
             if cached_summary:
                 if DEBUG:
@@ -1319,7 +1340,7 @@ async def get_all_data(location: str, month_day: str):
                 set_cache(summary_cache_key, cache_duration, json.dumps(summary_data))
 
             # Check cache for average
-            average_cache_key = f"average_{location.lower()}_{month:02d}_{day:02d}"
+            average_cache_key = generate_cache_key("average", location, f"{month:02d}_{day:02d}")
             cached_average = get_cache(average_cache_key)
             if cached_average:
                 if DEBUG:
@@ -1453,7 +1474,7 @@ def is_valid_location(location: str) -> bool:
 async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     """Get temperature series data for a location and date over multiple years."""
     # Check for cached series first
-    series_cache_key = f"series_{location.lower()}_{month:02d}_{day:02d}"
+    series_cache_key = generate_cache_key("series", location, f"{month:02d}_{day:02d}")
     if CACHE_ENABLED:
         cached_series = get_cache(series_cache_key)
         if cached_series:
@@ -1478,7 +1499,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     for year in years:
         logger.debug(f"get_temperature_series year: {year}")
         date_str = f"{year}-{month:02d}-{day:02d}"
-        cache_key = f"{location.lower()}_{date_str}"
+        cache_key = generate_cache_key("weather", location, date_str)
         year_to_date_str[year] = date_str
         # If this is today's date, use the forecast data
         if year == current_year and month == today.month and day == today.day:
@@ -1509,7 +1530,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                         data.append({"x": year, "y": temp})
                         # Cache the result if caching is enabled
                         if CACHE_ENABLED:
-                            cache_key = f"{location.lower()}_{date_str}"
+                            cache_key = generate_cache_key("weather", location, date_str)
                             cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
                             set_cache(cache_key, cache_duration, json.dumps(weather))
                     else:
@@ -1540,7 +1561,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                         data.append({"x": year, "y": temp})
                         # Cache the result if caching is enabled
                         if CACHE_ENABLED:
-                            cache_key = f"{location.lower()}_{date_str}"
+                            cache_key = generate_cache_key("weather", location, date_str)
                             cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
                             set_cache(cache_key, cache_duration, json.dumps(weather))
                     else:
