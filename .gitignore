@@ -6,12 +6,15 @@ weather_cache/
 app.js
 server.js
 firebase-service-account.json
-
-# Python virtual environment
 venv/
-
-# Python version file
+.venv/
 .python-version
+
+# Profiling files
+*.prof
+*.svg
+profile_*.py
+*.speedscope
 
 # Log files
 *.log
