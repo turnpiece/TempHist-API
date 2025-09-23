@@ -91,22 +91,70 @@ FILTER_WEATHER_DATA=true  # Filter to essential temperature data only
 
 ## 📡 API Endpoints
 
-### Core Endpoints
+### V1 API (Recommended)
 
-| Endpoint                           | Description               | Format       |
-| ---------------------------------- | ------------------------- | ------------ |
-| `GET /`                            | API information           | -            |
-| `GET /weather/{location}/{date}`   | Weather for specific date | `YYYY-MM-DD` |
-| `GET /data/{location}/{month_day}` | Complete data package     | `MM-DD`      |
-| `GET /forecast/{location}`         | Current weather forecast  | -            |
+The new v1 API provides a unified structure for accessing temperature records across different time periods.
 
-### Analysis Endpoints
+#### Main Record Endpoints
 
-| Endpoint                              | Description                      | Format  |
-| ------------------------------------- | -------------------------------- | ------- |
-| `GET /average/{location}/{month_day}` | Historical average temperature   | `MM-DD` |
-| `GET /trend/{location}/{month_day}`   | Temperature trend over time      | `MM-DD` |
-| `GET /summary/{location}/{month_day}` | Text summary of temperature data | `MM-DD` |
+| Endpoint                                                   | Description                 | Format                       |
+| ---------------------------------------------------------- | --------------------------- | ---------------------------- |
+| `GET /v1/records/{period}/{location}/{identifier}`         | Complete temperature record | See identifier formats below |
+| `GET /v1/records/{period}/{location}/{identifier}/average` | Average temperature data    | Subresource                  |
+| `GET /v1/records/{period}/{location}/{identifier}/trend`   | Temperature trend data      | Subresource                  |
+| `GET /v1/records/{period}/{location}/{identifier}/summary` | Text summary                | Subresource                  |
+
+#### Period Types and Identifier Formats
+
+All periods use the same `MM-DD` identifier format, representing the **end date** of the period:
+
+| Period    | Identifier Format | Example | Description                                      |
+| --------- | ----------------- | ------- | ------------------------------------------------ |
+| `daily`   | `MM-DD`           | `01-15` | January 15th across all years                    |
+| `weekly`  | `MM-DD`           | `01-15` | 7 days ending on January 15th across all years   |
+| `monthly` | `MM-DD`           | `01-15` | 30 days ending on January 15th across all years  |
+| `yearly`  | `MM-DD`           | `01-15` | 365 days ending on January 15th across all years |
+
+#### Example V1 Requests
+
+```bash
+# Get daily record for January 15th
+GET /v1/records/daily/london/01-15
+
+# Get weekly record ending on January 15th
+GET /v1/records/weekly/london/01-15
+
+# Get monthly record ending on January 15th
+GET /v1/records/monthly/london/01-15
+
+# Get yearly record ending on January 15th
+GET /v1/records/yearly/london/01-15
+
+# Get just the average for a daily record
+GET /v1/records/daily/london/01-15/average
+
+# Get just the trend for a daily record
+GET /v1/records/daily/london/01-15/trend
+```
+
+### Legacy Endpoints (Deprecated)
+
+⚠️ **These endpoints are deprecated and will be removed in a future version. Please migrate to v1 endpoints.**
+
+| Endpoint                              | Description                      | Format  | V1 Equivalent                                      |
+| ------------------------------------- | -------------------------------- | ------- | -------------------------------------------------- |
+| `GET /data/{location}/{month_day}`    | Complete data package            | `MM-DD` | `/v1/records/daily/{location}/{month_day}`         |
+| `GET /average/{location}/{month_day}` | Historical average temperature   | `MM-DD` | `/v1/records/daily/{location}/{month_day}/average` |
+| `GET /trend/{location}/{month_day}`   | Temperature trend over time      | `MM-DD` | `/v1/records/daily/{location}/{month_day}/trend`   |
+| `GET /summary/{location}/{month_day}` | Text summary of temperature data | `MM-DD` | `/v1/records/daily/{location}/{month_day}/summary` |
+
+### Other Endpoints
+
+| Endpoint                         | Description               | Format       |
+| -------------------------------- | ------------------------- | ------------ |
+| `GET /`                          | API information           | -            |
+| `GET /weather/{location}/{date}` | Weather for specific date | `YYYY-MM-DD` |
+| `GET /forecast/{location}`       | Current weather forecast  | -            |
 
 ### Monitoring Endpoints
 
@@ -117,7 +165,54 @@ FILTER_WEATHER_DATA=true  # Filter to essential temperature data only
 | `GET /test-redis`        | Redis connection test            | Public |
 | `GET /health`            | Health check                     | Public |
 
-### Example Response
+### V1 API Response Format
+
+**GET `/v1/records/daily/london/01-15`** returns:
+
+```json
+{
+  "period": "daily",
+  "location": "london",
+  "identifier": "01-15",
+  "range": {
+    "start": "1970-01-15",
+    "end": "2024-01-15",
+    "years": 55
+  },
+  "unit_group": "metric",
+  "values": [
+    {
+      "date": "1970-01-15",
+      "year": 1970,
+      "temperature": 15.0,
+      "temp_min": null,
+      "temp_max": null
+    }
+  ],
+  "average": {
+    "mean": 12.5,
+    "temp_min": null,
+    "temp_max": null,
+    "unit": "celsius",
+    "data_points": 55
+  },
+  "trend": {
+    "slope": 0.25,
+    "unit": "°C/decade",
+    "data_points": 55,
+    "r_squared": null
+  },
+  "summary": "15.0°C. It is 2.5°C warmer than average today.",
+  "metadata": {
+    "total_years": 55,
+    "available_years": 55,
+    "missing_years": [],
+    "completeness": 100.0
+  }
+}
+```
+
+### Legacy Response Format (Deprecated)
 
 **GET `/data/London/01-15`** returns:
 

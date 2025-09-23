@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, date as dt_date
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Union, Literal
 from collections import defaultdict
 import time
 
@@ -13,11 +13,13 @@ import aiohttp
 import firebase_admin
 import redis
 import requests
+import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from firebase_admin import auth, credentials
+from pydantic import BaseModel, Field, validator
 
 load_dotenv()
 
@@ -44,6 +46,57 @@ IP_BLACKLIST = os.getenv("IP_BLACKLIST", "").split(",") if os.getenv("IP_BLACKLI
 # Clean up empty strings from lists
 IP_WHITELIST = [ip.strip() for ip in IP_WHITELIST if ip.strip()]
 IP_BLACKLIST = [ip.strip() for ip in IP_BLACKLIST if ip.strip()]
+
+# Pydantic Models for v1 API
+class TemperatureValue(BaseModel):
+    """Individual temperature data point."""
+    date: str = Field(..., description="Date in YYYY-MM-DD format")
+    year: int = Field(..., description="Year")
+    temperature: float = Field(..., description="Temperature in Celsius")
+    temp_min: Optional[float] = Field(None, description="Minimum temperature")
+    temp_max: Optional[float] = Field(None, description="Maximum temperature")
+
+class DateRange(BaseModel):
+    """Date range for the data."""
+    start: str = Field(..., description="Start date in YYYY-MM-DD format")
+    end: str = Field(..., description="End date in YYYY-MM-DD format")
+    years: int = Field(..., description="Number of years in range")
+
+class AverageData(BaseModel):
+    """Average temperature statistics."""
+    mean: float = Field(..., description="Mean temperature")
+    temp_min: Optional[float] = Field(None, description="Average minimum temperature")
+    temp_max: Optional[float] = Field(None, description="Average maximum temperature")
+    unit: str = Field("celsius", description="Temperature unit")
+    data_points: int = Field(..., description="Number of data points used")
+
+class TrendData(BaseModel):
+    """Temperature trend analysis."""
+    slope: float = Field(..., description="Temperature change per decade in Celsius")
+    unit: str = Field("°C/decade", description="Trend unit")
+    data_points: int = Field(..., description="Number of data points used")
+    r_squared: Optional[float] = Field(None, description="R-squared value for trend fit")
+
+class RecordResponse(BaseModel):
+    """Main record response for v1 API."""
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
+    location: str = Field(..., description="Location name")
+    identifier: str = Field(..., description="Date identifier (MM-DD for daily, YYYY-MM for monthly, etc.)")
+    range: DateRange = Field(..., description="Date range covered")
+    unit_group: str = Field("metric", description="Unit group used")
+    values: List[TemperatureValue] = Field(..., description="Temperature data points")
+    average: AverageData = Field(..., description="Average temperature statistics")
+    trend: TrendData = Field(..., description="Temperature trend analysis")
+    summary: str = Field(..., description="Human-readable summary")
+    metadata: Dict = Field(default_factory=dict, description="Additional metadata")
+
+class SubResourceResponse(BaseModel):
+    """Response for subresource endpoints."""
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
+    location: str = Field(..., description="Location name")
+    identifier: str = Field(..., description="Date identifier")
+    data: Union[AverageData, TrendData, str] = Field(..., description="Subresource data")
+    metadata: Dict = Field(default_factory=dict, description="Additional metadata")
 
 # Configure logging
 logging.basicConfig(
@@ -1181,20 +1234,8 @@ else:
     else:
         logger.info("Cache invalidation disabled")
 
-# Initialize cache statistics
-if CACHE_STATS_ENABLED:
-    cache_stats = CacheStats()
-    cache_stats._load_stats_from_redis()  # Load existing stats from Redis
-    if DEBUG:
-        logger.info(f"📊 CACHE STATS INITIALIZED: {CACHE_STATS_RETENTION_HOURS}h retention, {CACHE_HEALTH_THRESHOLD} hit rate threshold")
-    else:
-        logger.info(f"Cache statistics enabled: {CACHE_STATS_RETENTION_HOURS}h retention")
-else:
-    cache_stats = None
-    if DEBUG:
-        logger.info("⚠️  CACHE STATS DISABLED")
-    else:
-        logger.info("Cache statistics disabled")
+# Initialize cache statistics (after Redis client is available)
+cache_stats = None
 
 # Initialize cache warmer
 if CACHE_WARMING_ENABLED:
@@ -1238,12 +1279,10 @@ async def scheduled_cache_warming():
             # Continue the loop even if there's an error
             await asyncio.sleep(300)  # Wait 5 minutes before retrying
 
-# Start scheduled warming if enabled
+# Start scheduled warming if enabled (will be started in startup event)
 if CACHE_WARMING_ENABLED and cache_warmer:
-    # Start the background task
-    asyncio.create_task(scheduled_cache_warming())
     if DEBUG:
-        logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
+        logger.info("⏰ SCHEDULED CACHE WARMING: Will be started on server startup")
 
 # Remove the old debug_print function - we'll use logger.debug() instead
 
@@ -1262,7 +1301,36 @@ async def startup_event():
         
         # Run initial warming in background
         asyncio.create_task(cache_warmer.warm_all_locations())
+        
+        # Start scheduled warming background task
+        asyncio.create_task(scheduled_cache_warming())
+        if DEBUG:
+            logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
 redis_client = redis.from_url(REDIS_URL)
+
+# Initialize cache statistics (now that Redis client is available)
+if CACHE_STATS_ENABLED:
+    cache_stats = CacheStats()
+    cache_stats._load_stats_from_redis()  # Load existing stats from Redis
+    if DEBUG:
+        logger.info(f"📊 CACHE STATS INITIALIZED: {CACHE_STATS_RETENTION_HOURS}h retention, {CACHE_HEALTH_THRESHOLD} hit rate threshold")
+    else:
+        logger.info(f"Cache statistics enabled: {CACHE_STATS_RETENTION_HOURS}h retention")
+else:
+    if DEBUG:
+        logger.info("⚠️  CACHE STATS DISABLED")
+    else:
+        logger.info("Cache statistics disabled")
+
+# HTTP client configuration
+HTTP_TIMEOUT = 30.0
+MAX_CONCURRENT_REQUESTS = 5
+visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+# HTTP client for external API calls
+async def get_http_client():
+    """Get configured httpx client."""
+    return httpx.AsyncClient(timeout=HTTP_TIMEOUT)
 
 # check Firebase credentials
 try:
@@ -1488,12 +1556,33 @@ async def root():
     return {
         "name": "Temperature History API",
         "version": "1.0.0",
-        "endpoints": [
-            "/data/{location}/{month_day}",
-            "/average/{location}/{month_day}",
-            "/trend/{location}/{month_day}",
+        "description": "Temperature history API with v1 unified endpoints and legacy support",
+        "v1_endpoints": {
+            "records": [
+                "/v1/records/{period}/{location}/{identifier}",
+                "/v1/records/{period}/{location}/{identifier}/average",
+                "/v1/records/{period}/{location}/{identifier}/trend",
+                "/v1/records/{period}/{location}/{identifier}/summary"
+            ],
+            "periods": ["daily", "weekly", "monthly", "yearly"],
+            "examples": [
+                "/v1/records/daily/london/01-15",
+                "/v1/records/weekly/london/01-15",
+                "/v1/records/monthly/london/01-15",
+                "/v1/records/yearly/london/01-15"
+            ]
+        },
+        "legacy_endpoints": {
+            "deprecated": [
+                "/data/{location}/{month_day}",
+                "/average/{location}/{month_day}",
+                "/trend/{location}/{month_day}",
+                "/summary/{location}/{month_day}"
+            ],
+            "note": "Legacy endpoints are deprecated. Please migrate to v1 endpoints."
+        },
+        "other_endpoints": [
             "/weather/{location}/{date}",
-            "/summary/{location}/{month_day}",
             "/forecast/{location}",
             "/rate-limit-status",
             "/rate-limit-stats",
@@ -1523,8 +1612,8 @@ async def root():
         ]
     }
 
-def fetch_weather_from_api(location: str, date: str):
-    """Fetch weather data from Visual Crossing API with fallback logic.
+async def fetch_weather_from_api(location: str, date: str):
+    """Fetch weather data from Visual Crossing API with fallback logic using httpx.
     
     Implements fallback logic for remote data:
     1. First tries without remote data parameters
@@ -1545,51 +1634,52 @@ def fetch_weather_from_api(location: str, date: str):
         logger.debug(f"🌤️  API CALL: {location} | {date} | Remote: False")
         logger.debug(f"🔗 URL: {url}")
     
-    response = requests.get(url)
-    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-        data = response.json()
-        days = data.get('days')
-        if days is not None and len(days) > 0:
-            # Check if we got valid temperature data
-            day_data = days[0]
-            temp = day_data.get('temp')
-            
-            if temp is not None:
-                # Success! Return the data
-                logger.debug(f"fetch_weather_from_api successful without remote data for {date}")
-                return data
-            else:
-                logger.debug(f"No temperature data in first attempt for {date}")
-        else:
-            logger.debug(f"No 'days' data in first attempt for {date}")
-    else:
-        logger.debug(f"First attempt failed with status {response.status_code}")
-    
-    # If we reach here, the first attempt didn't provide valid temperature data
-    # Check if we should try with remote data parameters
-    if not is_today_date and year >= 2005:
-        if DEBUG:
-            logger.debug(f"🔄 API FALLBACK: {location} | {date} | Year: {year}")
-        url_with_remote = build_visual_crossing_url(location, date, remote=True)
-        
-        remote_response = requests.get(url_with_remote)
-        if remote_response.status_code == 200 and 'application/json' in remote_response.headers.get('Content-Type', ''):
-            remote_data = remote_response.json()
-            remote_days = remote_data.get('days')
-            if remote_days is not None and len(remote_days) > 0:
-                remote_day_data = remote_days[0]
-                remote_temp = remote_day_data.get('temp')
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        response = await client.get(url)
+        if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
+            data = response.json()
+            days = data.get('days')
+            if days is not None and len(days) > 0:
+                # Check if we got valid temperature data
+                day_data = days[0]
+                temp = day_data.get('temp')
                 
-                if remote_temp is not None:
-                    # Success with remote data!
-                    logger.debug(f"Remote data fallback successful for {date}")
-                    return remote_data
+                if temp is not None:
+                    # Success! Return the data
+                    logger.debug(f"fetch_weather_from_api successful without remote data for {date}")
+                    return data
                 else:
-                    logger.debug(f"No temperature data in remote fallback for {date}")
+                    logger.debug(f"No temperature data in first attempt for {date}")
             else:
-                logger.debug(f"No 'days' data in remote fallback for {date}")
+                logger.debug(f"No 'days' data in first attempt for {date}")
         else:
-            logger.debug(f"Remote fallback failed with status {remote_response.status_code}")
+            logger.debug(f"First attempt failed with status {response.status_code}")
+        
+        # If we reach here, the first attempt didn't provide valid temperature data
+        # Check if we should try with remote data parameters
+        if not is_today_date and year >= 2005:
+            if DEBUG:
+                logger.debug(f"🔄 API FALLBACK: {location} | {date} | Year: {year}")
+            url_with_remote = build_visual_crossing_url(location, date, remote=True)
+            
+            remote_response = await client.get(url_with_remote)
+            if remote_response.status_code == 200 and 'application/json' in remote_response.headers.get('Content-Type', ''):
+                remote_data = remote_response.json()
+                remote_days = remote_data.get('days')
+                if remote_days is not None and len(remote_days) > 0:
+                    remote_day_data = remote_days[0]
+                    remote_temp = remote_day_data.get('temp')
+                    
+                    if remote_temp is not None:
+                        # Success with remote data!
+                        logger.debug(f"Remote data fallback successful for {date}")
+                        return remote_data
+                    else:
+                        logger.debug(f"No temperature data in remote fallback for {date}")
+                else:
+                    logger.debug(f"No 'days' data in remote fallback for {date}")
+            else:
+                logger.debug(f"Remote fallback failed with status {remote_response.status_code}")
     
     # If we reach here, neither attempt provided valid temperature data
     return {"error": "No temperature data available", "status": response.status_code}
@@ -1811,40 +1901,47 @@ def get_weather(location: str, date: str):
 # get a text summary
 @app.get("/summary/{location}/{month_day}")
 async def summary(location: str, month_day: str, request: Request):
-    """Get a text summary of temperature data for a location and date."""
-    try:
-        month, day = map(int, month_day.split("-"))
-        today = datetime.now()
-        current_year = today.year
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid month-day format. Use MM-DD.")
-
-    data = await get_temperature_series(location, month, day)
-    logger.debug(f"Summary data for {location} on {month_day}:")
-    logger.debug(f"Number of data points: {len(data['data'])}")
-    if data['data']:
-        logger.debug(f"Date range: {data['data'][0]['x']} to {data['data'][-1]['x']}")
-    else:
-        logger.debug("No data available for date range")
-    current_temp = data['data'][-1]['y']
-    if current_temp is not None:
-        logger.debug(f"Current temperature: {current_temp}°C")
-    else:
-        logger.debug("Current temperature: None")
+    """
+    [DEPRECATED] Get a text summary of temperature data for a location and date.
     
-    if len(data['data']) < 2:
-        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
-
-    data_list = sorted(data['data'], key=lambda d: d['x'])
-    avg_temp = calculate_historical_average(data_list)
-    logger.debug(f"Calculated average: {avg_temp}°C")
-    if data_list[-1]['y'] is not None:
-        logger.debug(f"Temperature difference: {round(data_list[-1]['y'] - avg_temp, 1)}°C")
-    else:
-        logger.debug("Temperature difference: Cannot calculate (current temperature is None)")
-
-    summary_text = await get_summary(location, month_day, data)
-    return JSONResponse(content={"summary": summary_text}, headers={"Cache-Control": CACHE_CONTROL_HEADER})
+    This endpoint is deprecated. Please use /v1/records/daily/{location}/{month_day}/summary instead.
+    """
+    logger.warning(f"⚠️  DEPRECATED ENDPOINT: /summary/{location}/{month_day} - Use /v1/records/daily/{location}/{month_day}/summary instead")
+    
+    try:
+        # Proxy to v1 API
+        v1_response = await get_record_summary("daily", location, month_day)
+        
+        # Handle the response properly - it's a JSONResponse object
+        if hasattr(v1_response, 'body'):
+            v1_data = json.loads(v1_response.body.decode())
+        else:
+            # If it's already a dict, use it directly
+            v1_data = v1_response
+        
+        # Convert to legacy format
+        legacy_response = {
+            "summary": v1_data["data"]
+        }
+        
+        return JSONResponse(
+            content=legacy_response,
+            headers={
+                "Cache-Control": CACHE_CONTROL_HEADER,
+                "X-Deprecated": "true",
+                "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}/summary"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in deprecated /summary endpoint: {e}")
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": f"Internal server error: {str(e)}"
+            },
+            headers={"Cache-Control": "public, max-age=60"},
+            status_code=500
+        )
 
 def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     """
@@ -1970,137 +2067,104 @@ async def get_summary(location: str, month_day: str, weather_data: Optional[List
 # get the warming/cooling trend
 @app.get("/trend/{location}/{month_day}")
 async def trend(location: str, month_day: str):
-    """Get the temperature trend (warming/cooling) for a location and date."""
+    """
+    [DEPRECATED] Get the temperature trend (warming/cooling) for a location and date.
+    
+    This endpoint is deprecated. Please use /v1/records/daily/{location}/{month_day}/trend instead.
+    """
+    logger.warning(f"⚠️  DEPRECATED ENDPOINT: /trend/{location}/{month_day} - Use /v1/records/daily/{location}/{month_day}/trend instead")
+    
     try:
-        month, day = map(int, month_day.split("-"))
-        # Validate month and day
-        if not (1 <= month <= 12):
-            raise ValueError("Month must be between 1 and 12")
-        if not (1 <= day <= 31):
-            raise ValueError("Day must be between 1 and 31")
-        # Additional validation for specific months
-        if month in [4, 6, 9, 11] and day > 30:
-            raise ValueError(f"Month {month} has only 30 days")
-        if month == 2 and day > 29:
-            raise ValueError("February has only 29 days")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    # Create cache key for the trend
-    cache_key = generate_cache_key("trend", location, f"{month:02d}_{day:02d}")
-    
-    # Check cache first if caching is enabled
-    if CACHE_ENABLED:
-        cached_data = get_cache(cache_key, endpoint="trend", location=location)
-        if cached_data:
-            logger.debug(f"Cache hit: {cache_key}")
-            return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
-        logger.debug(f"Cache miss: {cache_key} — calculating trend")
-
-    data = await get_temperature_series(location, month, day)
-
-    if len(data['data']) < 2:
-        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
-
-    slope = calculate_trend_slope(data['data'])
-    is_complete = data['metadata']['completeness'] == 100
-    
-    # Determine if this is today's data (includes forecast that can change)
-    latest_year = None
-    if data['data']:
-        latest_year = data['data'][-1]['x']
-    cache_is_today = False
-    if latest_year is not None:
-        cache_is_today = is_today(latest_year, month, day)
-    
-    result = {
-        "slope": slope, 
-        "units": "°C/decade",
-        "data_points": len(data['data']),
-        "completeness": data['metadata']['completeness'],
-        "missing_years": data['metadata']['missing_years']
-    }
-    
-    headers = {"Cache-Control": CACHE_CONTROL_HEADER if is_complete else "no-store"}
-
-    # Cache the result if caching is enabled and data is complete
-    if CACHE_ENABLED and is_complete:
-        # Use smart cache duration: short for today's data (includes forecast), long for historical data
-        cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
-        set_cache(cache_key, cache_duration, json.dumps(result))
-    
-    return JSONResponse(content=result, headers=headers)
+        # Proxy to v1 API
+        v1_response = await get_record_trend("daily", location, month_day)
+        
+        # Handle the response properly - it's a JSONResponse object
+        if hasattr(v1_response, 'body'):
+            v1_data = json.loads(v1_response.body.decode())
+        else:
+            # If it's already a dict, use it directly
+            v1_data = v1_response
+        
+        # Convert to legacy format
+        legacy_response = {
+            "slope": v1_data["data"]["slope"],
+            "units": v1_data["data"]["unit"],
+            "data_points": v1_data["data"]["data_points"],
+            "completeness": v1_data["metadata"].get("completeness", 0),
+            "missing_years": v1_data["metadata"].get("missing_years", [])
+        }
+        
+        return JSONResponse(
+            content=legacy_response,
+            headers={
+                "Cache-Control": CACHE_CONTROL_HEADER,
+                "X-Deprecated": "true",
+                "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}/trend"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in deprecated /trend endpoint: {e}")
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": f"Internal server error: {str(e)}"
+            },
+            headers={"Cache-Control": "public, max-age=60"},
+            status_code=500
+        )
 
 # get the average temperature
 @app.api_route("/average/{location}/{month_day}", methods=["GET", "OPTIONS"])
 async def average(location: str, month_day: str):
-    """Get the historical average temperature for a location and date."""
+    """
+    [DEPRECATED] Get the historical average temperature for a location and date.
+    
+    This endpoint is deprecated. Please use /v1/records/daily/{location}/{month_day}/average instead.
+    """
+    logger.warning(f"⚠️  DEPRECATED ENDPOINT: /average/{location}/{month_day} - Use /v1/records/daily/{location}/{month_day}/average instead")
+    
     try:
-        month, day = map(int, month_day.split("-"))
-        # Validate month and day
-        if not (1 <= month <= 12):
-            raise ValueError("Month must be between 1 and 12")
-        if not (1 <= day <= 31):
-            raise ValueError("Day must be between 1 and 31")
-        # Additional validation for specific months
-        if month in [4, 6, 9, 11] and day > 30:
-            raise ValueError(f"Month {month} has only 30 days")
-        if month == 2 and day > 29:
-            raise ValueError("February has only 29 days")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    # Create cache key for the average
-    cache_key = generate_cache_key("average", location, f"{month:02d}_{day:02d}")
-    
-    # Check cache first if caching is enabled
-    if CACHE_ENABLED:
-        cached_data = get_cache(cache_key, endpoint="average", location=location)
-        if cached_data:
-            logger.debug(f"Cache hit: {cache_key}")
-            return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
-        logger.debug(f"Cache miss: {cache_key} — calculating average")
-
-    data = await get_temperature_series(location, month, day)
-
-    if len(data['data']) < 2:
-        raise HTTPException(status_code=404, detail="Not enough temperature data available.")
-
-    is_complete = data['metadata']['completeness'] == 100
-
-    # Determine if this is today's data (includes forecast that can change)
-    latest_year = None
-    if data['data']:
-        latest_year = data['data'][-1]['x']
-    cache_is_today = False
-    if latest_year is not None:
-        cache_is_today = is_today(latest_year, month, day)
-
-    # Calculate average temperature using the new function
-    data_list = sorted(data['data'], key=lambda d: d['x'])
-    avg_temp = calculate_historical_average(data_list)
-    
-    result = {
-        "average": avg_temp,
-        "unit": "celsius",
-        "data_points": len(data['data']),
-        "year_range": {
-            "start": data_list[0]['x'],
-            "end": data_list[-1]['x']
-        },
-        "missing_years": data['metadata']['missing_years'],
-        "completeness": data['metadata']['completeness']
-    }
-
-    headers = {"Cache-Control": CACHE_CONTROL_HEADER if is_complete else "no-store"}
-
-    # Cache the result if caching is enabled and data is complete
-    if CACHE_ENABLED and is_complete:
-        # Use smart cache duration: short for today's data (includes forecast), long for historical data
-        cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
-        set_cache(cache_key, cache_duration, json.dumps(result))
-    
-    return JSONResponse(content=result, headers=headers)
+        # Proxy to v1 API
+        v1_response = await get_record_average("daily", location, month_day)
+        
+        # Handle the response properly - it's a JSONResponse object
+        if hasattr(v1_response, 'body'):
+            v1_data = json.loads(v1_response.body.decode())
+        else:
+            # If it's already a dict, use it directly
+            v1_data = v1_response
+        
+        # Convert to legacy format
+        legacy_response = {
+            "average": v1_data["data"]["mean"],
+            "unit": v1_data["data"]["unit"],
+            "data_points": v1_data["data"]["data_points"],
+            "year_range": {
+                "start": v1_data["metadata"].get("start_year", 0),
+                "end": v1_data["metadata"].get("end_year", 0)
+            },
+            "missing_years": v1_data["metadata"].get("missing_years", []),
+            "completeness": v1_data["metadata"].get("completeness", 0)
+        }
+        
+        return JSONResponse(
+            content=legacy_response,
+            headers={
+                "Cache-Control": CACHE_CONTROL_HEADER,
+                "X-Deprecated": "true",
+                "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}/average"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in deprecated /average endpoint: {e}")
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": f"Internal server error: {str(e)}"
+            },
+            headers={"Cache-Control": "public, max-age=60"},
+            status_code=500
+        )
 
 def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     """Calculate temperature trend slope using linear regression.
@@ -2164,7 +2228,7 @@ async def get_forecast(location: str):
         
         # Fetch fresh forecast data
         today = datetime.now().date()
-        result = get_forecast_data(location, today)
+        result = await get_forecast_data(location, today)
         
         # Cache the result if caching is enabled and no error
         if CACHE_ENABLED and "error" not in result:
@@ -2575,124 +2639,58 @@ def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
 
 @app.get("/data/{location}/{month_day}")
 async def get_all_data(location: str, month_day: str):
-    """Get all temperature data, summary, trend, and average for a location and date."""
-    logger.debug(f"get_all_data for {location} on {month_day}")
+    """
+    [DEPRECATED] Get all temperature data, summary, trend, and average for a location and date.
+    
+    This endpoint is deprecated. Please use /v1/records/daily/{location}/{month_day} instead.
+    """
+    logger.warning(f"⚠️  DEPRECATED ENDPOINT: /data/{location}/{month_day} - Use /v1/records/daily/{location}/{month_day} instead")
+    
     try:
-        month, day = map(int, month_day.split("-"))
+        # Proxy to v1 API
+        v1_response = await get_record("daily", location, month_day)
         
-        # Create main response cache key
-        main_cache_key = generate_cache_key("data", location, f"{month:02d}_{day:02d}")
-        
-        # Check main response cache first if caching is enabled
-        if CACHE_ENABLED:
-            cached_response = get_cache(main_cache_key, endpoint="data", location=location)
-            if cached_response:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED MAIN RESPONSE: {main_cache_key} | Location: {location} | Date: {month_day}")
-                return JSONResponse(content=json.loads(cached_response), headers={"Cache-Control": CACHE_CONTROL_HEADER})
-            elif DEBUG:
-                logger.debug(f"❌ MAIN CACHE MISS: {main_cache_key} — computing fresh response")
-        
-        weather_data = await get_temperature_series(location, month, day)
-        if DEBUG:
-            logger.debug(f"📊 WEATHER DATA SERIES: {location} | {month_day}")
-        if not weather_data['data']:
-            return JSONResponse(
-                content={
-                    "status": "error",
-                    "message": "No valid temperature data found for this location and date."
-                },
-                headers={"Cache-Control": "public, max-age=60"},
-                status_code=404
-            )
-        is_complete = weather_data['metadata']['completeness'] == 100
-        headers = {"Cache-Control": CACHE_CONTROL_HEADER if is_complete else "no-store"}
-        
-        summary_data = None
-        average_data = None
-
-        # Determine if the latest data point is today
-        latest_year = None
-        if weather_data['data']:
-            latest_year = weather_data['data'][-1]['x']
-        cache_is_today = False
-        if latest_year is not None:
-            cache_is_today = is_today(latest_year, month, day)
-        # Set cache durations using global constants
-        cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
-
-        if is_complete and CACHE_ENABLED:
-            # Check cache for summary
-            summary_cache_key = generate_cache_key("summary", location, f"{month:02d}_{day:02d}")
-            cached_summary = get_cache(summary_cache_key, endpoint="summary", location=location)
-            if cached_summary:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED SUMMARY: {summary_cache_key}")
-                summary_data = json.loads(cached_summary)
-            else:
-                if DEBUG:
-                    logger.debug(f"🔄 GENERATING FRESH SUMMARY: {location} | {month_day}")
-                summary_data = await get_summary(location, month_day, weather_data)
-                set_cache(summary_cache_key, cache_duration, json.dumps(summary_data))
-
-            # Check cache for average
-            average_cache_key = generate_cache_key("average", location, f"{month:02d}_{day:02d}")
-            cached_average = get_cache(average_cache_key, endpoint="average", location=location)
-            if cached_average:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED AVERAGE: {average_cache_key}")
-                average_data = json.loads(cached_average)
-            else:
-                if DEBUG:
-                    logger.debug(f"🔄 GENERATING FRESH AVERAGE: {location} | {month_day}")
-                average_data = get_average_dict(weather_data)
-                set_cache(average_cache_key, cache_duration, json.dumps(average_data))
+        # Handle the response properly - it's a JSONResponse object
+        if hasattr(v1_response, 'body'):
+            v1_data = json.loads(v1_response.body.decode())
         else:
-            # If data is incomplete or cache is disabled, compute without caching
-            if DEBUG:
-                logger.debug(f"⚠️  CACHE DISABLED OR INCOMPLETE DATA: computing fresh summary and average")
-            summary_data = await get_summary(location, month_day, weather_data)
-            average_data = get_average_dict(weather_data)
+            # If it's already a dict, use it directly
+            v1_data = v1_response
         
-        if DEBUG:
-            logger.debug(f"🔄 GENERATING TREND DATA: {location} | {month_day}")
-        trend_data = await get_trend(location, month_day, weather_data)
-
-        # Log the final aggregated response
-        final_response = {
-            "weather": weather_data,
-            "summary": summary_data,
-            "trend": trend_data,
-            "average": average_data
+        # Convert to legacy format
+        legacy_response = {
+            "weather": {
+                "data": [{"x": v["year"], "y": v["temperature"]} for v in v1_data["values"]],
+                "metadata": v1_data["metadata"]
+            },
+            "summary": v1_data["summary"],
+            "trend": {
+                "slope": v1_data["trend"]["slope"],
+                "units": v1_data["trend"]["unit"]
+            },
+            "average": {
+                "average": v1_data["average"]["mean"],
+                "unit": v1_data["average"]["unit"],
+                "data_points": v1_data["average"]["data_points"],
+                "year_range": {
+                    "start": v1_data["range"]["start"].split("-")[0],
+                    "end": v1_data["range"]["end"].split("-")[0]
+                },
+                "missing_years": v1_data["metadata"].get("missing_years", []),
+                "completeness": v1_data["metadata"].get("completeness", 0)
+            }
         }
         
-        if DEBUG:
-            logger.debug(f"🎯 FINAL /DATA ENDPOINT RESPONSE: {location} | {month_day}")
-            logger.debug(f"📄 COMPLETE RESPONSE JSON: {json.dumps(final_response, indent=2)}")
-
-        # Cache the main response if caching is enabled and data is complete
-        if CACHE_ENABLED and is_complete:
-            # Determine cache duration based on whether this is today's data
-            # Today's data includes forecast which can change, so use shorter cache
-            cache_duration = SHORT_CACHE_DURATION if cache_is_today else LONG_CACHE_DURATION
-            set_cache(main_cache_key, cache_duration, json.dumps(final_response))
-            if DEBUG:
-                logger.debug(f"💾 CACHED MAIN RESPONSE: {main_cache_key} | Duration: {cache_duration} | Today: {cache_is_today}")
-
         return JSONResponse(
-            content=final_response,
-            headers=headers
-        )
-    except HTTPException as e:
-        return JSONResponse(
-            content={
-                "status": "error",
-                "message": str(e.detail)
-            },
-            headers={"Cache-Control": "public, max-age=60"},
-            status_code=e.status_code
+            content=legacy_response,
+            headers={
+                "Cache-Control": CACHE_CONTROL_HEADER,
+                "X-Deprecated": "true",
+                "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}"
+            }
         )
     except Exception as e:
+        logger.error(f"Error in deprecated /data endpoint: {e}")
         return JSONResponse(
             content={
                 "status": "error",
@@ -2801,7 +2799,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         if year == current_year and month == today.month and day == today.day:
             logger.debug("get_temperature_series forecast for today")
             try:
-                forecast_data = get_forecast_data(location, datetime(year, month, day).date())
+                forecast_data = await get_forecast_data(location, datetime(year, month, day).date())
                 logger.debug(f"Got forecast data {forecast_data}")
                 if "error" in forecast_data:
                     logger.warning(f"Forecast error: {forecast_data['error']}")
@@ -2914,8 +2912,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         }
     }
 
-def get_forecast_data(location: str, date) -> Dict:
-    """Get forecast data for a location and date."""
+async def get_forecast_data(location: str, date) -> Dict:
+    """Get forecast data for a location and date using httpx."""
     # Convert date to string format if it's a date object
     if hasattr(date, 'strftime'):
         date_str = date.strftime("%Y-%m-%d")
@@ -2923,43 +2921,475 @@ def get_forecast_data(location: str, date) -> Dict:
         date_str = str(date)
     
     url = build_visual_crossing_url(location, date_str, remote=False)
-    response = requests.get(url)
-    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-        data = response.json()
-        if data.get('days') and len(data['days']) > 0:
-            day_data = data['days'][0]
-            temp = day_data.get('temp')
-            if temp is None:
-                return {"error": "No temperature data in forecast response"}
-            return {
-                "location": location,
-                "date": date,
-                "average_temperature": round(temp, 1),
-                "unit": "celsius"
-            }
-        else:
-            return {"error": "No days data in forecast response"}
-    return {"error": response.text, "status": response.status_code}
+    
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        response = await client.get(url)
+        if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
+            data = response.json()
+            if data.get('days') and len(data['days']) > 0:
+                day_data = data['days'][0]
+                temp = day_data.get('temp')
+                if temp is None:
+                    return {"error": "No temperature data in forecast response"}
+                return {
+                    "location": location,
+                    "date": date,
+                    "average_temperature": round(temp, 1),
+                    "unit": "celsius"
+                }
+            else:
+                return {"error": "No days data in forecast response"}
+        return {"error": response.text, "status": response.status_code}
 
-async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: int = 1) -> dict:
+async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: int = None) -> dict:
     """
-    Fetch weather data for multiple dates in parallel using aiohttp, with limited concurrency.
+    Fetch weather data for multiple dates in parallel using httpx with concurrency control.
     Returns a dict mapping date_str to weather data.
-    Now uses caching for each date.
+    Now uses caching for each date and global concurrency semaphore.
     """
     logger.debug(f"fetch_weather_batch for {location}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="Visual Crossing API key not configured")
+    
+    # Use global semaphore if max_concurrent not specified
+    if max_concurrent is None:
+        semaphore = visual_crossing_semaphore
+    else:
+        semaphore = asyncio.Semaphore(max_concurrent)
+    
     results = {}
-    semaphore = asyncio.Semaphore(max_concurrent)
+    
     async def fetch_one(date_str):
         async with semaphore:
             return date_str, await get_weather_for_date(location, date_str)
+    
     tasks = [fetch_one(date_str) for date_str in date_strs]
     for fut in asyncio.as_completed(tasks):
         date_str, result = await fut
         results[date_str] = result
     return results
+
+# ============================================================================
+# V1 API ENDPOINTS
+# ============================================================================
+
+def parse_identifier(period: str, identifier: str) -> tuple:
+    """Parse identifier based on period type. All periods use MM-DD format representing the end date."""
+    # All periods use MM-DD format representing the end date of the period
+    try:
+        month, day = map(int, identifier.split("-"))
+        if not (1 <= month <= 12):
+            raise ValueError("Month must be between 1 and 12")
+        if not (1 <= day <= 31):
+            raise ValueError("Day must be between 1 and 31")
+        return month, day, period
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Identifier must be in MM-DD format: {str(e)}")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid period. Must be daily, weekly, monthly, or yearly")
+
+async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, unit_group: str = "metric"):
+    """Fetch yearly summary data from Visual Crossing historysummary endpoint."""
+    url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/weatherdata/historysummary"
+    params = {
+        "aggregateHours": 24,
+        "minYear": start_year,
+        "maxYear": end_year,
+        "chronoUnit": "years",
+        "breakBy": "years",
+        "dailySummaries": "false",
+        "contentType": "json",
+        "unitGroup": unit_group,
+        "locations": location,
+        "key": API_KEY,
+    }
+    
+    async with visual_crossing_semaphore:
+        async with get_http_client() as http:
+            r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
+    r.raise_for_status()
+    data = r.json()
+    
+    # Parse the response to extract yearly temperature data
+    yearly_data = []
+    if 'locations' in data and location in data['locations']:
+        location_data = data['locations'][location]
+        if 'values' in location_data:
+            for value in location_data['values']:
+                year = value.get('year')
+                temp = value.get('temp')
+                if year and temp is not None:
+                    yearly_data.append((year, temp))
+    
+    return yearly_data
+
+async def get_temperature_data_v1(location: str, period: str, identifier: str) -> Dict:
+    """Get temperature data for v1 API with unified logic."""
+    # Parse identifier based on period (all use MM-DD format representing end date)
+    month, day, period_type = parse_identifier(period, identifier)
+    
+    # Calculate date range based on period and end date
+    from datetime import datetime, timedelta
+    
+    # Use 50 years of data ending at current year
+    current_year = datetime.now().year
+    start_year = current_year - 49  # 50 years total
+    end_date = datetime(current_year, month, day)
+    
+    if period == "daily":
+        # Single day across all years
+        start_date = end_date
+        date_range_days = 1
+    elif period == "weekly":
+        # 7 days ending on the specified date
+        start_date = end_date - timedelta(days=6)
+        date_range_days = 7
+    elif period == "monthly":
+        # 30 days ending on the specified date
+        start_date = end_date - timedelta(days=29)
+        date_range_days = 30
+    elif period == "yearly":
+        # 365 days ending on the specified date
+        start_date = end_date - timedelta(days=364)
+        date_range_days = 365
+    else:
+        raise HTTPException(status_code=400, detail="Invalid period. Must be daily, weekly, monthly, or yearly")
+    
+    # Get temperature data for the date range across all years
+    values = []
+    all_temps = []
+    
+    if period == "daily":
+        # For daily, get data for just the specific day across all years
+        weather_data = await get_temperature_series(location, month, day)
+        if weather_data and 'data' in weather_data:
+            for data_point in weather_data['data']:
+                year = int(data_point['x'])
+                temp = data_point['y']
+                if temp is not None:
+                    all_temps.append(temp)
+                    values.append(TemperatureValue(
+                        date=f"{year}-{month:02d}-{day:02d}",
+                        year=year,
+                        temperature=temp,
+                        temp_min=None,
+                        temp_max=None
+                    ))
+    
+    elif period in ["weekly", "monthly"]:
+        # For weekly/monthly, sample a few representative days within the period
+        sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
+        step = max(1, date_range_days // sample_days)
+        
+        for year in range(start_year, current_year + 1):
+            year_values = []
+            for day_offset in range(0, date_range_days, step):
+                current_date = start_date.replace(year=year) + timedelta(days=day_offset)
+                
+                try:
+                    weather_data = await get_temperature_series(location, current_date.month, current_date.day)
+                    if weather_data and 'data' in weather_data:
+                        for data_point in weather_data['data']:
+                            if int(data_point['x']) == year and data_point['y'] is not None:
+                                temp = data_point['y']
+                                year_values.append(temp)
+                                all_temps.append(temp)
+                                break
+                except Exception as e:
+                    if DEBUG:
+                        logger.debug(f"Error getting data for {current_date}: {e}")
+                    continue
+            
+            # Calculate average for the year
+            if year_values:
+                avg_temp = sum(year_values) / len(year_values)
+                values.append(TemperatureValue(
+                    date=end_date.replace(year=year).strftime("%Y-%m-%d"),
+                    year=year,
+                    temperature=round(avg_temp, 1),
+                    temp_min=None,
+                    temp_max=None
+                ))
+    
+    elif period == "yearly":
+        # For yearly, use the Visual Crossing historysummary endpoint for efficiency
+        try:
+            if DEBUG:
+                logger.debug(f"Fetching yearly summary for {location} from {start_year} to {current_year}")
+            yearly_data = await _fetch_yearly_summary(location, start_year, current_year)
+            if DEBUG:
+                logger.debug(f"Got {len(yearly_data)} yearly data points")
+            
+            if yearly_data:
+                for year, temp in yearly_data:
+                    all_temps.append(temp)
+                    values.append(TemperatureValue(
+                        date=f"{year}-{month:02d}-{day:02d}",
+                        year=year,
+                        temperature=round(temp, 1),
+                        temp_min=None,
+                        temp_max=None
+                    ))
+            else:
+                if DEBUG:
+                    logger.debug("No yearly data returned, falling back to sampling")
+                raise Exception("No yearly data returned")
+        except Exception as e:
+            if DEBUG:
+                logger.debug(f"Error fetching yearly summary: {e}")
+            # Fallback to simple sampling approach if historysummary fails
+            # Just sample a few representative days for each year
+            sample_dates = [
+                (1, 15), (4, 15), (7, 15), (10, 15)  # Mid-month samples for each season
+            ]
+            
+            for year in range(start_year, current_year + 1):
+                year_values = []
+                for sample_month, sample_day in sample_dates:
+                    try:
+                        weather_data = await get_temperature_series(location, sample_month, sample_day)
+                        if weather_data and 'data' in weather_data:
+                            for data_point in weather_data['data']:
+                                if int(data_point['x']) == year and data_point['y'] is not None:
+                                    temp = data_point['y']
+                                    year_values.append(temp)
+                                    all_temps.append(temp)
+                                    break
+                    except Exception as e:
+                        if DEBUG:
+                            logger.debug(f"Error getting data for {year}-{sample_month:02d}-{sample_day:02d}: {e}")
+                        continue
+                
+                # Calculate average for the year
+                if year_values:
+                    avg_temp = sum(year_values) / len(year_values)
+                    values.append(TemperatureValue(
+                        date=f"{year}-{month:02d}-{day:02d}",
+                        year=year,
+                        temperature=round(avg_temp, 1),
+                        temp_min=None,
+                        temp_max=None
+                    ))
+    
+    # Calculate date range
+    if values:
+        start_year = min(v.year for v in values)
+        end_year = max(v.year for v in values)
+        range_data = DateRange(
+            start=f"{start_year}-{month:02d}-{day:02d}",
+            end=f"{end_year}-{month:02d}-{day:02d}",
+            years=end_year - start_year + 1
+        )
+    else:
+        range_data = DateRange(start="", end="", years=0)
+    
+    # Calculate average
+    if all_temps:
+        avg_data = AverageData(
+            mean=round(sum(all_temps) / len(all_temps), 1),
+            temp_min=None,
+            temp_max=None,
+            unit="celsius",
+            data_points=len(all_temps)
+        )
+    else:
+        avg_data = AverageData(mean=0.0, unit="celsius", data_points=0)
+    
+    # Calculate trend
+    if len(values) >= 2:
+        trend_input = [{"x": v.year, "y": v.temperature} for v in values]
+        slope = calculate_trend_slope(trend_input)
+        trend_data = TrendData(
+            slope=slope,
+            unit="°C/decade",
+            data_points=len(values),
+            r_squared=None
+        )
+    else:
+        trend_data = TrendData(slope=0.0, unit="°C/decade", data_points=len(values))
+    
+    # Generate summary
+    summary_text = f"Temperature data for {period} period ending on {month:02d}-{day:02d} in {location}"
+    
+    return {
+        "period": period,
+        "location": location,
+        "identifier": identifier,
+        "range": range_data.dict(),
+        "unit_group": "metric",
+        "values": [v.dict() for v in values],
+        "average": avg_data.dict(),
+        "trend": trend_data.dict(),
+        "summary": summary_text,
+        "metadata": {"period_days": date_range_days, "end_date": end_date.strftime("%Y-%m-%d")}
+    }
+
+@app.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
+async def get_record(
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
+    location: str = Path(..., description="Location name"),
+    identifier: str = Path(..., description="Date identifier")
+):
+    """Get temperature record data for a specific period, location, and identifier."""
+    try:
+        # Create cache key for v1 endpoint
+        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}"
+        
+        # Check cache first
+        if CACHE_ENABLED:
+            cached_data = get_cache(cache_key, endpoint="v1_records", location=location)
+            if cached_data:
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED V1 RECORD: {cache_key}")
+                return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+        
+        # Get data
+        data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Cache the result
+        if CACHE_ENABLED:
+            cache_duration = LONG_CACHE_DURATION  # Use long cache for historical data
+            set_cache(cache_key, cache_duration, json.dumps(data))
+        
+        return JSONResponse(content=data, headers={"Cache-Control": CACHE_CONTROL_HEADER})
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in v1 records endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/v1/records/{period}/{location}/{identifier}/average", response_model=SubResourceResponse)
+async def get_record_average(
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
+    location: str = Path(..., description="Location name"),
+    identifier: str = Path(..., description="Date identifier")
+):
+    """Get average temperature data for a specific record."""
+    try:
+        # Create cache key for subresource
+        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}_average"
+        
+        # Check cache first
+        if CACHE_ENABLED:
+            cached_data = get_cache(cache_key, endpoint="v1_records_average", location=location)
+            if cached_data:
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED V1 AVERAGE: {cache_key}")
+                return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+        
+        # Get full record data
+        record_data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Extract average data
+        response_data = SubResourceResponse(
+            period=record_data["period"],
+            location=record_data["location"],
+            identifier=record_data["identifier"],
+            data=record_data["average"],
+            metadata=record_data["metadata"]
+        )
+        
+        # Cache the result
+        if CACHE_ENABLED:
+            cache_duration = LONG_CACHE_DURATION
+            set_cache(cache_key, cache_duration, json.dumps(response_data.dict()))
+        
+        return JSONResponse(content=response_data.dict(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in v1 records average endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/v1/records/{period}/{location}/{identifier}/trend", response_model=SubResourceResponse)
+async def get_record_trend(
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
+    location: str = Path(..., description="Location name"),
+    identifier: str = Path(..., description="Date identifier")
+):
+    """Get temperature trend data for a specific record."""
+    try:
+        # Create cache key for subresource
+        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}_trend"
+        
+        # Check cache first
+        if CACHE_ENABLED:
+            cached_data = get_cache(cache_key, endpoint="v1_records_trend", location=location)
+            if cached_data:
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED V1 TREND: {cache_key}")
+                return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+        
+        # Get full record data
+        record_data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Extract trend data
+        response_data = SubResourceResponse(
+            period=record_data["period"],
+            location=record_data["location"],
+            identifier=record_data["identifier"],
+            data=record_data["trend"],
+            metadata=record_data["metadata"]
+        )
+        
+        # Cache the result
+        if CACHE_ENABLED:
+            cache_duration = LONG_CACHE_DURATION
+            set_cache(cache_key, cache_duration, json.dumps(response_data.dict()))
+        
+        return JSONResponse(content=response_data.dict(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in v1 records trend endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/v1/records/{period}/{location}/{identifier}/summary", response_model=SubResourceResponse)
+async def get_record_summary(
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
+    location: str = Path(..., description="Location name"),
+    identifier: str = Path(..., description="Date identifier")
+):
+    """Get temperature summary text for a specific record."""
+    try:
+        # Create cache key for subresource
+        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}_summary"
+        
+        # Check cache first
+        if CACHE_ENABLED:
+            cached_data = get_cache(cache_key, endpoint="v1_records_summary", location=location)
+            if cached_data:
+                if DEBUG:
+                    logger.debug(f"✅ SERVING CACHED V1 SUMMARY: {cache_key}")
+                return JSONResponse(content=json.loads(cached_data), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+        
+        # Get full record data
+        record_data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Extract summary data
+        response_data = SubResourceResponse(
+            period=record_data["period"],
+            location=record_data["location"],
+            identifier=record_data["identifier"],
+            data=record_data["summary"],
+            metadata=record_data["metadata"]
+        )
+        
+        # Cache the result
+        if CACHE_ENABLED:
+            cache_duration = LONG_CACHE_DURATION
+            set_cache(cache_key, cache_duration, json.dumps(response_data.dict()))
+        
+        return JSONResponse(content=response_data.dict(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in v1 records summary endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/protected-endpoint")
 def protected_route(user=Depends(verify_firebase_token)):
