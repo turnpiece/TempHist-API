@@ -569,19 +569,36 @@ class CacheWarmer:
             except Exception as e:
                 results["errors"].append(f"forecast: {str(e)}")
             
-            # Warm month-day data
+            # Warm legacy endpoints (forecast, weather) - daily data now handled by v1 endpoints below
             month_days = self.get_month_days_to_warm()
+            
+            # Warm v1 endpoints (daily, weekly, monthly) - skipping yearly for phase 1
             for month_day in month_days:
-                try:
-                    data_url = f"http://localhost:8000/data/{location}/{month_day}"
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(data_url, headers={"Authorization": "Bearer test_token"}) as resp:
-                            if resp.status == 200:
-                                results["warmed_endpoints"].append(f"data/{month_day}")
-                            else:
-                                results["errors"].append(f"data/{month_day}: {resp.status}")
-                except Exception as e:
-                    results["errors"].append(f"data/{month_day}: {str(e)}")
+                for period in ["daily", "weekly", "monthly"]:
+                    # Main record endpoint
+                    try:
+                        v1_url = f"http://localhost:8000/v1/records/{period}/{location}/{month_day}"
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(v1_url, headers={"Authorization": "Bearer test_token"}) as resp:
+                                if resp.status == 200:
+                                    results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
+                                else:
+                                    results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
+                    except Exception as e:
+                        results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
+                    
+                    # Subresource endpoints (average, trend, summary)
+                    for subresource in ["average", "trend", "summary"]:
+                        try:
+                            sub_url = f"http://localhost:8000/v1/records/{period}/{location}/{month_day}/{subresource}"
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(sub_url, headers={"Authorization": "Bearer test_token"}) as resp:
+                                    if resp.status == 200:
+                                        results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}/{subresource}")
+                                    else:
+                                        results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {resp.status}")
+                        except Exception as e:
+                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {str(e)}")
             
             # Warm individual weather data for recent dates
             dates = self.get_dates_to_warm()
@@ -1167,7 +1184,11 @@ class CacheInvalidator:
                 "forecast": "forecast_*",
                 "series": "series_*",
                 "usage": "usage_*",
-                "cache_stats": "cache_stats_*"
+                "cache_stats": "cache_stats_*",
+                "v1_records": "records:*",
+                "v1_records_average": "records:*:average",
+                "v1_records_trend": "records:*:trend",
+                "v1_records_summary": "records:*:summary"
             }
             
             pattern_counts = {}
@@ -3082,7 +3103,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
         step = max(1, date_range_days // sample_days)
         
         for year in range(start_year, current_year + 1):
-            year_values = []
+            year_temps = []
             for day_offset in range(0, date_range_days, step):
                 current_date = start_date.replace(year=year) + timedelta(days=day_offset)
                 
@@ -3091,18 +3112,17 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
                     if weather_data and 'data' in weather_data:
                         for data_point in weather_data['data']:
                             if int(data_point['x']) == year and data_point['y'] is not None:
-                                temp = data_point['y']
-                                year_values.append(temp)
-                                all_temps.append(temp)
+                                year_temps.append(data_point['y'])
                                 break
                 except Exception as e:
                     if DEBUG:
                         logger.debug(f"Error getting data for {current_date}: {e}")
                     continue
             
-            # Calculate average for the year
-            if year_values:
-                avg_temp = sum(year_values) / len(year_values)
+            # Calculate average for the year (only add one value per year)
+            if year_temps:
+                avg_temp = sum(year_temps) / len(year_temps)
+                all_temps.append(avg_temp)  # Add to all_temps only once per year
                 values.append(TemperatureValue(
                     date=end_date.replace(year=year).strftime("%Y-%m-%d"),
                     year=year,
@@ -3208,8 +3228,35 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
     else:
         trend_data = TrendData(slope=0.0, unit="°C/decade", data_points=len(values))
     
-    # Generate summary
-    summary_text = f"Temperature data for {period} period ending on {month:02d}-{day:02d} in {location}"
+    # Generate summary using existing logic
+    from datetime import datetime
+    end_date = datetime(current_year, month, day)
+    
+    # Create friendly date based on period
+    if period == "daily":
+        friendly_date = get_friendly_date(end_date)
+    elif period == "weekly":
+        friendly_date = f"week ending {end_date.strftime('%d %B')}"
+    elif period == "monthly":
+        friendly_date = f"month ending {end_date.strftime('%d %B')}"
+    elif period == "yearly":
+        friendly_date = f"year ending {end_date.strftime('%d %B')}"
+    else:
+        friendly_date = end_date.strftime('%d %B')
+    
+    # Convert values to the format expected by generate_summary
+    summary_data = []
+    for value in values:
+        summary_data.append({
+            'x': value.year,
+            'y': value.temperature
+        })
+    
+    # Generate summary text
+    summary_text = generate_summary(summary_data, end_date)
+    
+    # Replace the friendly date in the summary with our period-specific version
+    summary_text = summary_text.replace(get_friendly_date(end_date), friendly_date)
     
     return {
         "period": period,
@@ -3232,8 +3279,8 @@ async def get_record(
 ):
     """Get temperature record data for a specific period, location, and identifier."""
     try:
-        # Create cache key for v1 endpoint
-        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}"
+        # Create cache key for v1 endpoint with comprehensive format
+        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:values,average,trend,summary"
         
         # Check cache first
         if CACHE_ENABLED:
@@ -3268,7 +3315,7 @@ async def get_record_average(
     """Get average temperature data for a specific record."""
     try:
         # Create cache key for subresource
-        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}_average"
+        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:average"
         
         # Check cache first
         if CACHE_ENABLED:
@@ -3312,7 +3359,7 @@ async def get_record_trend(
     """Get temperature trend data for a specific record."""
     try:
         # Create cache key for subresource
-        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}_trend"
+        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:trend"
         
         # Check cache first
         if CACHE_ENABLED:
@@ -3356,7 +3403,7 @@ async def get_record_summary(
     """Get temperature summary text for a specific record."""
     try:
         # Create cache key for subresource
-        cache_key = f"v1_records_{period}_{location.lower()}_{identifier.replace('-', '_')}_summary"
+        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:summary"
         
         # Check cache first
         if CACHE_ENABLED:
