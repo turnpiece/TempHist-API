@@ -21,6 +21,9 @@ from fastapi.responses import JSONResponse
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field, validator
 
+# Import the new router
+from routers.records_agg import router as records_agg_router
+
 load_dotenv()
 
 # Environment variables
@@ -1307,12 +1310,13 @@ if CACHE_WARMING_ENABLED and cache_warmer:
 
 # Remove the old debug_print function - we'll use logger.debug() instead
 
-app = FastAPI()
+# Lifespan event handler for startup and shutdown
+from contextlib import asynccontextmanager
 
-# Startup event to trigger initial cache warming
-@app.on_event("startup")
-async def startup_event():
-    """Trigger cache warming on server startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown events."""
+    # Startup
     if CACHE_WARMING_ENABLED and cache_warmer:
         # Wait a moment for the server to fully start
         await asyncio.sleep(2)
@@ -1327,6 +1331,17 @@ async def startup_event():
         asyncio.create_task(scheduled_cache_warming())
         if DEBUG:
             logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
+    
+    yield  # Application runs here
+    
+    # Shutdown (if needed)
+    if DEBUG:
+        logger.info("🛑 APPLICATION SHUTDOWN: Cleaning up resources")
+
+app = FastAPI(lifespan=lifespan)
+
+# Include the records aggregation router
+app.include_router(records_agg_router)
 redis_client = redis.from_url(REDIS_URL)
 
 # Initialize cache statistics (now that Redis client is available)
@@ -1345,7 +1360,7 @@ else:
 
 # HTTP client configuration
 HTTP_TIMEOUT = 30.0
-MAX_CONCURRENT_REQUESTS = 5
+MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
 visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 # HTTP client for external API calls
@@ -1656,7 +1671,7 @@ async def fetch_weather_from_api(location: str, date: str):
         logger.debug(f"🔗 URL: {url}")
     
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        response = await client.get(url)
+        response = await client.get(url, headers={"Accept-Encoding": "gzip"})
         if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
             data = response.json()
             days = data.get('days')
@@ -1786,7 +1801,7 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
         logger.info(f"[DEBUG] Creating aiohttp session with 30-second timeout")
         async with aiohttp.ClientSession(timeout=timeout) as session:
             logger.info(f"[DEBUG] Session created successfully, making GET request to: {url}")
-            async with session.get(url) as resp:
+            async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
                 logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
                 if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
                     logger.info(f"[DEBUG] Parsing JSON response...")
@@ -1838,7 +1853,7 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                     logger.info(f"[DEBUG] Remote fallback URL: {url_with_remote}")
                     
                     logger.info(f"[DEBUG] Making remote fallback request...")
-                    async with session.get(url_with_remote) as remote_resp:
+                    async with session.get(url_with_remote, headers={"Accept-Encoding": "gzip"}) as remote_resp:
                         logger.info(f"[DEBUG] Remote response received: status={remote_resp.status}, content-type={remote_resp.headers.get('Content-Type')}")
                         if remote_resp.status == 200 and 'application/json' in remote_resp.headers.get('Content-Type', ''):
                             logger.info(f"[DEBUG] Parsing remote JSON response...")
@@ -1953,6 +1968,9 @@ async def summary(location: str, month_day: str, request: Request):
                 "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}/summary"
             }
         )
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (like 400 for invalid input) to preserve status codes
+        raise e
     except Exception as e:
         logger.error(f"Error in deprecated /summary endpoint: {e}")
         return JSONResponse(
@@ -1980,83 +1998,103 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
     return round(avg_temp, 1)
 
+def get_friendly_date(date: datetime) -> str:
+    """Get a friendly date string with ordinal suffix."""
+    day = date.day
+    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix} {date.strftime('%B')}"
+
+def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily") -> str:
+    """Generate a summary text for temperature data."""
+    # Filter out data points with None temperature
+    data = [d for d in data if d.get('y') is not None]
+    if not data or len(data) < 2:
+        return "Not enough data to generate summary."
+
+    latest = data[-1]
+    if latest.get('y') is None:
+        return "No valid temperature data for the latest year."
+
+    avg_temp = calculate_historical_average(data)
+    diff = latest['y'] - avg_temp
+    rounded_diff = round(diff, 1)
+
+    friendly_date = get_friendly_date(date)
+    warm_summary = ''
+    cold_summary = ''
+    temperature = f"{latest['y']}°C."
+
+    previous = [p for p in data[:-1] if p.get('y') is not None]
+    is_warmest = all(latest['y'] >= p['y'] for p in previous)
+    is_coldest = all(latest['y'] <= p['y'] for p in previous)
+
+    # Check against last year first for consistency
+    last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
+    
+    # Generate mutually exclusive summaries to avoid contradictions
+    if is_warmest:
+        warm_summary = f"This is the warmest {friendly_date} on record."
+    elif is_coldest:
+        cold_summary = f"This is the coldest {friendly_date} on record."
+    elif last_year_temp is not None:
+        # Compare against last year first
+        if latest['y'] > last_year_temp:
+            # Warmer than last year - find last warmer year
+            last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
+            if last_warmer:
+                years_since = int(latest['x'] - last_warmer)
+                if years_since == 2:
+                    warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
+                elif years_since <= 10:
+                    warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
+                else:
+                    warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
+            else:
+                warm_summary = f"It's warmer than last year."
+        elif latest['y'] < last_year_temp:
+            # Colder than last year - find last colder year
+            last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
+            if last_colder:
+                years_since = int(latest['x'] - last_colder)
+                if years_since == 2:
+                    cold_summary = f"It's colder than last year but not as cold as {last_colder}."
+                elif years_since <= 10:
+                    cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
+                else:
+                    cold_summary = f"This is the coldest {friendly_date} in {years_since} years."
+            else:
+                cold_summary = f"It's colder than last year."
+        # If equal to last year, no warm/cold summary is generated
+
+    # Generate period-appropriate language
+    if period == "daily":
+        period_context = "today"
+        period_context_alt = "this date"
+    elif period == "weekly":
+        period_context = "this week"
+        period_context_alt = "this week"
+    elif period == "monthly":
+        period_context = "this month"
+        period_context_alt = "this month"
+    elif period == "yearly":
+        period_context = "this past year"
+        period_context_alt = "this year"
+    else:
+        period_context = "this period"
+        period_context_alt = "this period"
+
+    if abs(diff) < 0.05:
+        avg_summary = f"It is about average for {period_context_alt}."
+    elif diff > 0:
+        avg_summary = "However, it is " if cold_summary else "It is "
+        avg_summary += f"{rounded_diff}°C warmer than average {period_context}."
+    else:
+        avg_summary = "However, it is " if warm_summary else "It is "
+        avg_summary += f"{abs(rounded_diff)}°C cooler than average {period_context}."
+
+    return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
+
 async def get_summary(location: str, month_day: str, weather_data: Optional[List[Dict]] = None) -> str:
-    def get_friendly_date(date: datetime) -> str:
-        day = date.day
-        suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-        return f"{day}{suffix} {date.strftime('%B')}"
-
-    def generate_summary(data: List[Dict[str, float]], date: datetime) -> str:
-        # Filter out data points with None temperature
-        data = [d for d in data if d.get('y') is not None]
-        if not data or len(data) < 2:
-            return "Not enough data to generate summary."
-
-        latest = data[-1]
-        if latest.get('y') is None:
-            return "No valid temperature data for the latest year."
-
-        avg_temp = calculate_historical_average(data)
-        diff = latest['y'] - avg_temp
-        rounded_diff = round(diff, 1)
-
-        friendly_date = get_friendly_date(date)
-        warm_summary = ''
-        cold_summary = ''
-        temperature = f"{latest['y']}°C."
-
-        previous = [p for p in data[:-1] if p.get('y') is not None]
-        is_warmest = all(latest['y'] >= p['y'] for p in previous)
-        is_coldest = all(latest['y'] <= p['y'] for p in previous)
-
-        # Check against last year first for consistency
-        last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
-        
-        # Generate mutually exclusive summaries to avoid contradictions
-        if is_warmest:
-            warm_summary = f"This is the warmest {friendly_date} on record."
-        elif is_coldest:
-            cold_summary = f"This is the coldest {friendly_date} on record."
-        elif last_year_temp is not None:
-            # Compare against last year first
-            if latest['y'] > last_year_temp:
-                # Warmer than last year - find last warmer year
-                last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
-                if last_warmer:
-                    years_since = int(latest['x'] - last_warmer)
-                    if years_since == 2:
-                        warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
-                    elif years_since <= 10:
-                        warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
-                    else:
-                        warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
-                else:
-                    warm_summary = f"It's warmer than last year."
-            elif latest['y'] < last_year_temp:
-                # Colder than last year - find last colder year
-                last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
-                if last_colder:
-                    years_since = int(latest['x'] - last_colder)
-                    if years_since == 2:
-                        cold_summary = f"It's colder than last year but not as cold as {last_colder}."
-                    elif years_since <= 10:
-                        cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
-                    else:
-                        cold_summary = f"This is the coldest {friendly_date} in {years_since} years."
-                else:
-                    cold_summary = f"It's colder than last year."
-            # If equal to last year, no warm/cold summary is generated
-
-        if abs(diff) < 0.05:
-            avg_summary = "It is about average for this date."
-        elif diff > 0:
-            avg_summary = "However, it is " if cold_summary else "It is "
-            avg_summary += f"{rounded_diff}°C warmer than average today."
-        else:
-            avg_summary = "However, it is " if warm_summary else "It is "
-            avg_summary += f"{abs(rounded_diff)}°C cooler than average today."
-
-        return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
     try:
         if weather_data is None:
@@ -2079,7 +2117,7 @@ async def get_summary(location: str, month_day: str, weather_data: Optional[List
             return "Failed to get today's temperature data."
 
         date = datetime.strptime(f"{latest_year}-{month_day}", "%Y-%m-%d")
-        return generate_summary(weather_data, date)
+        return generate_summary(weather_data, date, "daily")
 
     except Exception as e:
         logger.error(f"Error in get_summary: {e}")
@@ -2123,6 +2161,9 @@ async def trend(location: str, month_day: str):
                 "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}/trend"
             }
         )
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (like 400 for invalid input) to preserve status codes
+        raise e
     except Exception as e:
         logger.error(f"Error in deprecated /trend endpoint: {e}")
         return JSONResponse(
@@ -2176,6 +2217,9 @@ async def average(location: str, month_day: str):
                 "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}/average"
             }
         )
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (like 400 for invalid input) to preserve status codes
+        raise e
     except Exception as e:
         logger.error(f"Error in deprecated /average endpoint: {e}")
         return JSONResponse(
@@ -2710,6 +2754,9 @@ async def get_all_data(location: str, month_day: str):
                 "X-New-Endpoint": f"/v1/records/daily/{location}/{month_day}"
             }
         )
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (like 400 for invalid input) to preserve status codes
+        raise e
     except Exception as e:
         logger.error(f"Error in deprecated /data endpoint: {e}")
         return JSONResponse(
@@ -2944,7 +2991,7 @@ async def get_forecast_data(location: str, date) -> Dict:
     url = build_visual_crossing_url(location, date_str, remote=False)
     
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        response = await client.get(url)
+        response = await client.get(url, headers={"Accept-Encoding": "gzip"})
         if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
             data = response.json()
             if data.get('days') and len(data['days']) > 0:
@@ -3011,7 +3058,8 @@ def parse_identifier(period: str, identifier: str) -> tuple:
 
 async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, unit_group: str = "metric"):
     """Fetch yearly summary data from Visual Crossing historysummary endpoint."""
-    url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/weatherdata/historysummary"
+    from constants import VC_BASE_URL
+    url = f"{VC_BASE_URL}/weatherdata/historysummary"
     params = {
         "aggregateHours": 24,
         "minYear": start_year,
@@ -3045,7 +3093,7 @@ async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, u
     return yearly_data
 
 async def get_temperature_data_v1(location: str, period: str, identifier: str) -> Dict:
-    """Get temperature data for v1 API with unified logic."""
+    """Get temperature data for v1 API with unified logic using historysummary for weekly/monthly/yearly."""
     # Parse identifier based on period (all use MM-DD format representing end date)
     month, day, period_type = parse_identifier(period, identifier)
     
@@ -3098,38 +3146,122 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
                     ))
     
     elif period in ["weekly", "monthly"]:
-        # For weekly/monthly, sample a few representative days within the period
-        sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
-        step = max(1, date_range_days // sample_days)
-        
-        for year in range(start_year, current_year + 1):
-            year_temps = []
-            for day_offset in range(0, date_range_days, step):
-                current_date = start_date.replace(year=year) + timedelta(days=day_offset)
-                
-                try:
-                    weather_data = await get_temperature_series(location, current_date.month, current_date.day)
-                    if weather_data and 'data' in weather_data:
-                        for data_point in weather_data['data']:
-                            if int(data_point['x']) == year and data_point['y'] is not None:
-                                year_temps.append(data_point['y'])
-                                break
-                except Exception as e:
-                    if DEBUG:
-                        logger.debug(f"Error getting data for {current_date}: {e}")
-                    continue
+        # Use historysummary endpoint for weekly/monthly data (much more efficient)
+        try:
+            from routers.records_agg import fetch_historysummary, _historysummary_values, _row_year, _row_mean_temp
             
-            # Calculate average for the year (only add one value per year)
-            if year_temps:
-                avg_temp = sum(year_temps) / len(year_temps)
-                all_temps.append(avg_temp)  # Add to all_temps only once per year
-                values.append(TemperatureValue(
-                    date=end_date.replace(year=year).strftime("%Y-%m-%d"),
-                    year=year,
-                    temperature=round(avg_temp, 1),
-                    temp_min=None,
-                    temp_max=None
-                ))
+            # Determine chrono_unit based on period
+            chrono_unit = "weeks" if period == "weekly" else "months"
+            
+            if DEBUG:
+                logger.debug(f"Fetching {period} summary for {location} from {start_year} to {current_year}")
+            
+            payload = await fetch_historysummary(
+                location, 
+                start_year, 
+                current_year, 
+                chrono_unit=chrono_unit, 
+                break_by="years"
+            )
+            
+            rows = _historysummary_values(payload)
+            if DEBUG:
+                logger.debug(f"Got {len(rows)} {period} data points")
+            
+            # For weekly, we need to match by ISO week number
+            if period == "weekly":
+                desired_week = datetime(current_year, month, day).isocalendar().week
+                for r in rows:
+                    y = _row_year(r)
+                    t = _row_mean_temp(r)
+                    if y is not None and t is not None:
+                        # Check if this row corresponds to the desired week
+                        try:
+                            # Try to extract week info from the row
+                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
+                            if period_str:
+                                row_date = datetime.strptime(period_str[:10], "%Y-%m-%d")
+                                row_week = row_date.isocalendar().week
+                                if row_week == desired_week:
+                                    all_temps.append(t)
+                                    values.append(TemperatureValue(
+                                        date=f"{y}-{month:02d}-{day:02d}",
+                                        year=y,
+                                        temperature=round(t, 1),
+                                        temp_min=None,
+                                        temp_max=None
+                                    ))
+                        except Exception as e:
+                            if DEBUG:
+                                logger.debug(f"Error processing weekly row: {e}")
+                            continue
+            
+            # For monthly, we need to match by month
+            elif period == "monthly":
+                for r in rows:
+                    y = _row_year(r)
+                    t = _row_mean_temp(r)
+                    if y is not None and t is not None:
+                        # Check if this row corresponds to the desired month
+                        try:
+                            # Try to extract month info from the row
+                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
+                            if period_str:
+                                row_month = int(period_str[5:7])
+                                if row_month == month:
+                                    all_temps.append(t)
+                                    values.append(TemperatureValue(
+                                        date=f"{y}-{month:02d}-{day:02d}",
+                                        year=y,
+                                        temperature=round(t, 1),
+                                        temp_min=None,
+                                        temp_max=None
+                                    ))
+                        except Exception as e:
+                            if DEBUG:
+                                logger.debug(f"Error processing monthly row: {e}")
+                            continue
+            
+            if not values:
+                if DEBUG:
+                    logger.debug(f"No {period} data found, falling back to sampling")
+                raise Exception(f"No {period} data found")
+                
+        except Exception as e:
+            if DEBUG:
+                logger.debug(f"Error fetching {period} summary: {e}, falling back to sampling")
+            # Fallback to sampling approach if historysummary fails
+            sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
+            step = max(1, date_range_days // sample_days)
+            
+            for year in range(start_year, current_year + 1):
+                year_temps = []
+                for day_offset in range(0, date_range_days, step):
+                    current_date = start_date.replace(year=year) + timedelta(days=day_offset)
+                    
+                    try:
+                        weather_data = await get_temperature_series(location, current_date.month, current_date.day)
+                        if weather_data and 'data' in weather_data:
+                            for data_point in weather_data['data']:
+                                if int(data_point['x']) == year and data_point['y'] is not None:
+                                    year_temps.append(data_point['y'])
+                                    break
+                    except Exception as e:
+                        if DEBUG:
+                            logger.debug(f"Error getting data for {current_date}: {e}")
+                        continue
+                
+                # Calculate average for the year (only add one value per year)
+                if year_temps:
+                    avg_temp = sum(year_temps) / len(year_temps)
+                    all_temps.append(avg_temp)  # Add to all_temps only once per year
+                    values.append(TemperatureValue(
+                        date=end_date.replace(year=year).strftime("%Y-%m-%d"),
+                        year=year,
+                        temperature=round(avg_temp, 1),
+                        temp_min=None,
+                        temp_max=None
+                    ))
     
     elif period == "yearly":
         # For yearly, use the Visual Crossing historysummary endpoint for efficiency
@@ -3236,13 +3368,13 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
     if period == "daily":
         friendly_date = get_friendly_date(end_date)
     elif period == "weekly":
-        friendly_date = f"week ending {end_date.strftime('%d %B')}"
+        friendly_date = f"week ending {get_friendly_date(end_date)}"
     elif period == "monthly":
-        friendly_date = f"month ending {end_date.strftime('%d %B')}"
+        friendly_date = f"month ending {get_friendly_date(end_date)}"
     elif period == "yearly":
-        friendly_date = f"year ending {end_date.strftime('%d %B')}"
+        friendly_date = f"year ending {get_friendly_date(end_date)}"
     else:
-        friendly_date = end_date.strftime('%d %B')
+        friendly_date = get_friendly_date(end_date)
     
     # Convert values to the format expected by generate_summary
     summary_data = []
@@ -3253,7 +3385,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
         })
     
     # Generate summary text
-    summary_text = generate_summary(summary_data, end_date)
+    summary_text = generate_summary(summary_data, end_date, period)
     
     # Replace the friendly date in the summary with our period-specific version
     summary_text = summary_text.replace(get_friendly_date(end_date), friendly_date)
@@ -3262,11 +3394,11 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
         "period": period,
         "location": location,
         "identifier": identifier,
-        "range": range_data.dict(),
+        "range": range_data.model_dump(),
         "unit_group": "metric",
-        "values": [v.dict() for v in values],
-        "average": avg_data.dict(),
-        "trend": trend_data.dict(),
+        "values": [v.model_dump() for v in values],
+        "average": avg_data.model_dump(),
+        "trend": trend_data.model_dump(),
         "summary": summary_text,
         "metadata": {"period_days": date_range_days, "end_date": end_date.strftime("%Y-%m-%d")}
     }
@@ -3340,9 +3472,9 @@ async def get_record_average(
         # Cache the result
         if CACHE_ENABLED:
             cache_duration = LONG_CACHE_DURATION
-            set_cache(cache_key, cache_duration, json.dumps(response_data.dict()))
+            set_cache(cache_key, cache_duration, json.dumps(response_data.model_dump()))
         
-        return JSONResponse(content=response_data.dict(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+        return JSONResponse(content=response_data.model_dump(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
     
     except HTTPException:
         raise
@@ -3384,9 +3516,9 @@ async def get_record_trend(
         # Cache the result
         if CACHE_ENABLED:
             cache_duration = LONG_CACHE_DURATION
-            set_cache(cache_key, cache_duration, json.dumps(response_data.dict()))
+            set_cache(cache_key, cache_duration, json.dumps(response_data.model_dump()))
         
-        return JSONResponse(content=response_data.dict(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+        return JSONResponse(content=response_data.model_dump(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
     
     except HTTPException:
         raise
@@ -3428,9 +3560,9 @@ async def get_record_summary(
         # Cache the result
         if CACHE_ENABLED:
             cache_duration = LONG_CACHE_DURATION
-            set_cache(cache_key, cache_duration, json.dumps(response_data.dict()))
+            set_cache(cache_key, cache_duration, json.dumps(response_data.model_dump()))
         
-        return JSONResponse(content=response_data.dict(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
+        return JSONResponse(content=response_data.model_dump(), headers={"Cache-Control": CACHE_CONTROL_HEADER})
     
     except HTTPException:
         raise
