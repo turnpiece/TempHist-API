@@ -110,6 +110,8 @@ The new v1 API provides a unified structure for accessing temperature records ac
 | ---------------------------------------------------- | ------------------------------------------- | ------------ |
 | `GET /v1/records/rolling-bundle/{location}/{anchor}` | Cross-year series for multiple time periods | `YYYY-MM-DD` |
 
+Aggregates daily, weekly, monthly and yearly endpoint responses into one.
+
 #### Period Types and Identifier Formats
 
 All periods use the same `MM-DD` identifier format, representing the **end date** of the period:
@@ -153,6 +155,7 @@ The rolling bundle endpoint provides cross-year temperature series for multiple 
 - `anchor`: Anchor date in YYYY-MM-DD format (e.g., "2024-01-15")
 - `unit_group`: Temperature unit group - "metric" (default) or "us"
 - `month_mode`: Month calculation mode - "rolling1m" (default), "calendar", or "rolling30d"
+- `days_back`: Number of previous days to include (0-10, default: 0)
 
 **Example Rolling Bundle Requests:**
 

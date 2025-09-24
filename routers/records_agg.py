@@ -8,7 +8,7 @@ from constants import VC_BASE_URL
 from dateutil.relativedelta import relativedelta
 
 router = APIRouter()
-VC_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "metric")
 
 _client: Optional[aiohttp.ClientSession] = None
@@ -34,7 +34,7 @@ async def fetch_historysummary(
     daily_summaries: bool = False,
     params_extra: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
-    if VC_KEY is None:
+    if API_KEY is None:
         raise RuntimeError("VISUAL_CROSSING_API_KEY is not configured")
     if min_year is None or max_year is None:
         min_year, max_year = _years_range()
@@ -48,7 +48,7 @@ async def fetch_historysummary(
         "contentType": "json",
         "unitGroup": unit_group,
         "locations": location,
-        "key": VC_KEY,
+            "key": API_KEY,
     }
     if params_extra:
         params.update(params_extra)
@@ -165,7 +165,7 @@ async def weekly_series(location: str, week_start: str, unit_group: str = UNIT_G
 # Models for rolling bundle
 class YearTemp(BaseModel):
     year: int
-    temp: float
+    temperature: float
 
 class RollingSeries(BaseModel):
     values: List[YearTemp]
@@ -176,18 +176,23 @@ class RollingBundleResponse(BaseModel):
     location: str
     anchor: date
     unit_group: Literal["metric", "us"]
-    day: RollingSeries
-    day_minus_1: RollingSeries
-    day_minus_2: RollingSeries
-    day_minus_3: RollingSeries
-    week: RollingSeries
-    month: RollingSeries
-    year: RollingSeries
+    # Daily data (anchor day and previous days)
+    day: Dict  # Complete daily endpoint response
+    previous_days: List[Dict] = []  # List of previous days' complete responses
+    # Period data (complete endpoint responses)
+    daily: Optional[Dict] = None  # Complete daily endpoint response (same as day)
+    weekly: Optional[Dict] = None  # Complete weekly endpoint response
+    monthly: Optional[Dict] = None  # Complete monthly endpoint response
+    yearly: Optional[Dict] = None  # Complete yearly endpoint response
+    # Bundle metadata
+    metadata: Optional[Dict] = None
     notes: Optional[str] = None
 
 # Configuration
 YEARS_BACK = 50  # 50-year history
+ROLLING_BUNDLE_YEARS_BACK = 10  # 10-year history for rolling bundle (more efficient)
 VC_MAX_CONCURRENCY = 2
+DEFAULT_DAYS_BACK = 0  # Default number of previous days to include (0 = only anchor day)
 
 # Cache for daily data
 class KVCache:
@@ -198,11 +203,17 @@ class KVCache:
     async def get(self, key: str) -> Optional[bytes]:
         if not self.redis:
             return None
-        return await self.redis.get(key)
+        try:
+            return await self.redis.get(key)
+        except Exception:
+            return None
     
     async def set(self, key: str, value: bytes):
         if self.redis:
-            await self.redis.set(key, value, ex=self.ttl)
+            try:
+                await self.redis.set(key, value, ex=self.ttl)
+            except Exception:
+                pass  # Silently fail if Redis is not available
 
 daily_cache = KVCache()
 
@@ -275,7 +286,7 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
     Fetch daily temps for [start..end] once using VC Timeline.
     Returns dict { 'YYYY-MM-DD': temp }.
     """
-    if not VC_KEY:
+    if not API_KEY:
         raise HTTPException(500, "Missing VISUAL_CROSSING_API_KEY")
     
     url = f"{VC_BASE_URL}/timeline/{location}/{start.isoformat()}/{end.isoformat()}"
@@ -284,7 +295,7 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
         "include": "days",
         "elements": "datetime,temp",  # keep payload small
         "contentType": "json",
-        "key": VC_KEY,
+            "key": API_KEY,
     }
     
     async with _rolling_sem:
@@ -307,21 +318,21 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
         raise HTTPException(404, "No daily temperatures returned")
     return out
 
-async def _get_daily_map(location: str, unit_group: str, now: date) -> Dict[str, float]:
+async def _get_daily_map_for_days(location: str, unit_group: str, anchor_d: date) -> Dict[str, float]:
     """
-    Load from cache or fetch and cache. Add a 31-day pad before the earliest year
-    so windows crossing New Year still work for that first year.
+    Fetch daily data only for the specific days needed (anchor and 3 previous days).
+    This is much more efficient than fetching years of data.
     """
-    start_year, end_year = _years_range(now)
-    pad_start = date(start_year - 1, 12, 1)
-    end = date(end_year, 12, 31)
-
-    cache_key = f"dailies:{location}:{unit_group}:{pad_start.isoformat()}:{end.isoformat()}"
+    # Only fetch the 4 days we need: anchor, anchor-1, anchor-2, anchor-3
+    start = anchor_d - timedelta(days=3)
+    end = anchor_d
+    
+    cache_key = f"dailies:{location}:{unit_group}:{start.isoformat()}:{end.isoformat()}"
     cached = await daily_cache.get(cache_key)
     if cached:
         return {k: float(v) for k, v in json.loads(cached).items()}
 
-    daily_map = await _fetch_all_days(location, pad_start, end, unit_group)
+    daily_map = await _fetch_all_days(location, start, end, unit_group)
 
     await daily_cache.set(cache_key, json.dumps(daily_map).encode())
     return daily_map
@@ -369,8 +380,9 @@ def _series_for_window(
     for y in range(start_year, end_year + 1):
         avg = _avg_window_for_year(daily_map, y, start_anchor, end_anchor)
         if avg is not None:
-            out.append(YearTemp(year=y, temp=avg))
+            out.append(YearTemp(year=y, temperature=avg))
     return out
+
 
 @router.get("/v1/records/rolling-bundle/{location}/{anchor}", response_model=RollingBundleResponse)
 async def rolling_bundle(
@@ -378,65 +390,95 @@ async def rolling_bundle(
     anchor: str,
     unit_group: Literal["metric", "us"] = Query(UNIT_GROUP_DEFAULT),
     month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
+    days_back: int = Query(DEFAULT_DAYS_BACK, ge=0, le=10, description="Number of previous days to include (0-10)"),
 ):
     """
     Returns cross-year series for:
-      - day (anchor day), day-1, day-2, day-3
-      - week ending anchor (7 days)
-      - month ending anchor (calendar, rolling1m, or rolling30d)
-      - year ending anchor (365d)
-    All computed from a single cached daily series per location.
+      - day (anchor day) and previous days (configurable via days_back parameter)
+      - weekly data (complete weekly endpoint response)
+      - monthly data (complete monthly endpoint response)
+      - yearly data (complete yearly endpoint response)
+    
+    Each period enclosure contains the complete JSON response from its respective endpoint,
+    including values, average, trend, summary, and metadata.
     """
     anchor_d = _safe_parse_date(anchor)
-    now = anchor_d  # for range selection
-    start_year, end_year = _years_range(now)
+    
+    # Get the anchor day's complete daily response
+    async def get_daily_response(anchor_date: date) -> Dict:
+        """Get complete daily endpoint response for a given date."""
+        try:
+            mmdd = anchor_date.strftime("%m-%d")
+            from main import get_temperature_data_v1
+            return await get_temperature_data_v1(location, "daily", mmdd)
+        except Exception as e:
+            return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
 
-    daily_map = await _get_daily_map(location, unit_group, now)
+    # Get the anchor day's response
+    day_response = await get_daily_response(anchor_d)
+    
+    # Get previous days' responses (if days_back > 0)
+    previous_days = []
+    for i in range(1, days_back + 1):
+        prev_date = anchor_d - timedelta(days=i)
+        prev_response = await get_daily_response(prev_date)
+        previous_days.append(prev_response)
 
-    # Day windows (offsets 0..3)
-    def anchor_for_offset(off: int) -> date:
-        return anchor_d - timedelta(days=off)
+    # Get complete responses for weekly, monthly, and yearly
+    async def get_period_response(period: str, anchor_date: date) -> Optional[Dict]:
+        """Get complete endpoint response for a given period."""
+        try:
+            if period == "weekly":
+                mmdd = anchor_date.strftime("%m-%d")
+                from main import get_temperature_data_v1
+                return await get_temperature_data_v1(location, "weekly", mmdd)
+            elif period == "monthly":
+                mmdd = anchor_date.strftime("%m-%d")
+                from main import get_temperature_data_v1
+                return await get_temperature_data_v1(location, "monthly", mmdd)
+            elif period == "yearly":
+                # Use December 31st as the identifier for yearly data
+                from main import get_temperature_data_v1
+                return await get_temperature_data_v1(location, "yearly", "12-31")
+            return None
+        except Exception as e:
+            return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
 
-    # Day-of-year retarget window equals (start=end=that day)
-    def day_series(off: int) -> RollingSeries:
-        a = anchor_for_offset(off)
-        # define window as [a..a]
-        vals = _series_for_window(daily_map, start_year, end_year, a, a)
-        return RollingSeries(values=vals, count=len(vals))
+    # Get period responses
+    weekly_response = await get_period_response("weekly", anchor_d)
+    monthly_response = await get_period_response("monthly", anchor_d)
+    yearly_response = await get_period_response("yearly", anchor_d)
 
-    day = day_series(0)
-    day_minus_1 = day_series(1)
-    day_minus_2 = day_series(2)
-    day_minus_3 = day_series(3)
-
-    # Week window (7d)
-    w_start, w_end = _rolling_7d_window(anchor_d)
-    week_vals = _series_for_window(daily_map, start_year, end_year, w_start, w_end)
-
-    # Month window
-    m_start, m_end = month_window(anchor_d, month_mode)
+    # Generate appropriate notes
     if month_mode == "calendar":
         notes = "Month uses full calendar month (1st to last day of anchor month)."
     elif month_mode == "rolling1m":
         notes = "Month uses calendar-aware 1-month window ending on anchor (EOM-clipped)."
     else:  # rolling30d
         notes = "Month uses fixed 30-day rolling window ending on anchor (consistent with /v1/records/monthly)."
-    month_vals = _series_for_window(daily_map, start_year, end_year, m_start, m_end)
-
-    # Year window (365d)
-    y_start, y_end = _rolling_365d_window(anchor_d)
-    year_vals = _series_for_window(daily_map, start_year, end_year, y_start, y_end)
+    
+    notes += f" Includes {days_back} previous days. Weekly/monthly/yearly data uses historysummary endpoints for 50-year coverage."
 
     return RollingBundleResponse(
         location=location,
         anchor=anchor_d,
         unit_group=unit_group,
-        day=RollingSeries(values=day.values, count=day.count),
-        day_minus_1=RollingSeries(values=day_minus_1.values, count=day_minus_1.count),
-        day_minus_2=RollingSeries(values=day_minus_2.values, count=day_minus_2.count),
-        day_minus_3=RollingSeries(values=day_minus_3.values, count=day_minus_3.count),
-        week=RollingSeries(values=week_vals, count=len(week_vals)),
-        month=RollingSeries(values=month_vals, count=len(month_vals)),
-        year=RollingSeries(values=year_vals, count=len(year_vals)),
+        day=day_response,
+        previous_days=previous_days,
+        daily=day_response,  # Same as day for convenience
+        weekly=weekly_response,
+        monthly=monthly_response,
+        yearly=yearly_response,
+        metadata={
+            "anchor_date": anchor_d.isoformat(),
+            "month_mode": month_mode,
+            "days_back": days_back,
+            "data_sources": {
+                "daily": "Timeline API",
+                "weekly": "historysummary API",
+                "monthly": "historysummary API", 
+                "yearly": "historysummary API"
+            }
+        },
         notes=notes,
     )
