@@ -207,8 +207,15 @@ class KVCache:
 daily_cache = KVCache()
 
 # HTTP client and semaphore for rolling bundle
-_http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
+_http: Optional[aiohttp.ClientSession] = None
 _rolling_sem = asyncio.Semaphore(VC_MAX_CONCURRENCY)
+
+async def _get_rolling_http_client() -> aiohttp.ClientSession:
+    """Get or create the rolling bundle HTTP client."""
+    global _http
+    if _http is None or _http.closed:
+        _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
+    return _http
 
 # Helper functions
 def _safe_parse_date(s: str) -> date:
@@ -232,16 +239,26 @@ def _leap_clamp(md: Tuple[int, int], year: int) -> Tuple[int, int]:
             return (2, 28)
     return (m, d)
 
-def _rolling_month_window(anchor: date) -> Tuple[date, date]:
-    # calendar-aware "one month ending today", EOM-clipped
-    end = anchor
-    start = (anchor - relativedelta(months=1)) + timedelta(days=1)
-    return start, end
-
-def _rolling_30d_window(anchor: date) -> Tuple[date, date]:
-    end = anchor
-    start = anchor - timedelta(days=29)
-    return start, end
+def month_window(anchor: date, mode: str) -> Tuple[date, date]:
+    """
+    Returns (start, end) inclusive.
+    - calendar: first day of anchor.month to its last day
+    - rolling1m: anchor minus one calendar month (clipped) + 1 day .. anchor
+    - rolling30d: last 30 days ending at anchor (inclusive)
+    """
+    if mode == "calendar":
+        start = anchor.replace(day=1)
+        end = (start + relativedelta(months=+1)) - timedelta(days=1)
+        return start, end
+    if mode == "rolling1m":
+        end = anchor
+        start = (anchor - relativedelta(months=+1)) + timedelta(days=1)
+        return start, end
+    if mode == "rolling30d":
+        end = anchor
+        start = anchor - timedelta(days=29)
+        return start, end
+    raise ValueError("mode must be one of: calendar, rolling1m, rolling30d")
 
 def _rolling_7d_window(anchor: date) -> Tuple[date, date]:
     end = anchor
@@ -271,7 +288,8 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
     }
     
     async with _rolling_sem:
-        async with _http.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as r:
+        http_client = await _get_rolling_http_client()
+        async with http_client.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as r:
             if r.status >= 400:
                 text = await r.text()
                 raise HTTPException(r.status, f"Visual Crossing error: {text[:200]}")
@@ -359,13 +377,13 @@ async def rolling_bundle(
     location: str,
     anchor: str,
     unit_group: Literal["metric", "us"] = Query(UNIT_GROUP_DEFAULT),
-    month_mode: Literal["rolling1m", "rolling30d"] = Query("rolling30d"),
+    month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
 ):
     """
     Returns cross-year series for:
       - day (anchor day), day-1, day-2, day-3
       - week ending anchor (7 days)
-      - month ending anchor (calendar-aware or fixed 30d)
+      - month ending anchor (calendar, rolling1m, or rolling30d)
       - year ending anchor (365d)
     All computed from a single cached daily series per location.
     """
@@ -396,11 +414,12 @@ async def rolling_bundle(
     week_vals = _series_for_window(daily_map, start_year, end_year, w_start, w_end)
 
     # Month window
-    if month_mode == "rolling1m":
-        m_start, m_end = _rolling_month_window(anchor_d)
+    m_start, m_end = month_window(anchor_d, month_mode)
+    if month_mode == "calendar":
+        notes = "Month uses full calendar month (1st to last day of anchor month)."
+    elif month_mode == "rolling1m":
         notes = "Month uses calendar-aware 1-month window ending on anchor (EOM-clipped)."
-    else:
-        m_start, m_end = _rolling_30d_window(anchor_d)
+    else:  # rolling30d
         notes = "Month uses fixed 30-day rolling window ending on anchor (consistent with /v1/records/monthly)."
     month_vals = _series_for_window(daily_map, start_year, end_year, m_start, m_end)
 

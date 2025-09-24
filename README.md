@@ -4,7 +4,7 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 
 ## 🚀 Features
 
-- **Historical Temperature Data**: 50+ years of temperature data for any location
+- **Historical Temperature Data**: 50 years of temperature data for any location
 - **Smart Caching**: Redis-based caching with intelligent cache durations
 - **Rate Limiting**: Built-in protection against API abuse and misuse
 - **Weather Forecasts**: Current weather data and forecasts
@@ -104,6 +104,12 @@ The new v1 API provides a unified structure for accessing temperature records ac
 | `GET /v1/records/{period}/{location}/{identifier}/trend`   | Temperature trend data      | Subresource                  |
 | `GET /v1/records/{period}/{location}/{identifier}/summary` | Text summary                | Subresource                  |
 
+#### Rolling Bundle Endpoint
+
+| Endpoint                                             | Description                                 | Format       |
+| ---------------------------------------------------- | ------------------------------------------- | ------------ |
+| `GET /v1/records/rolling-bundle/{location}/{anchor}` | Cross-year series for multiple time periods | `YYYY-MM-DD` |
+
 #### Period Types and Identifier Formats
 
 All periods use the same `MM-DD` identifier format, representing the **end date** of the period:
@@ -136,6 +142,50 @@ GET /v1/records/daily/london/01-15/average
 # Get just the trend for a daily record
 GET /v1/records/daily/london/01-15/trend
 ```
+
+#### Rolling Bundle Endpoint Details
+
+The rolling bundle endpoint provides cross-year temperature series for multiple time periods in a single request, computed efficiently from cached daily data.
+
+**Parameters:**
+
+- `location`: Location name (e.g., "london", "new_york")
+- `anchor`: Anchor date in YYYY-MM-DD format (e.g., "2024-01-15")
+- `unit_group`: Temperature unit group - "metric" (default) or "us"
+- `month_mode`: Month calculation mode - "rolling1m" (default), "calendar", or "rolling30d"
+
+**Example Rolling Bundle Requests:**
+
+```bash
+# Get rolling bundle for January 15th, 2024
+GET /v1/records/rolling-bundle/london/2024-01-15
+
+# With custom month mode (calendar month)
+GET /v1/records/rolling-bundle/london/2024-01-15?month_mode=calendar
+
+# With US units
+GET /v1/records/rolling-bundle/london/2024-01-15?unit_group=us
+```
+
+**Month Mode Options:**
+
+- `rolling1m`: Calendar-aware 1-month window ending on anchor (default)
+- `calendar`: Full calendar month (1st to last day of anchor month)
+- `rolling30d`: Fixed 30-day rolling window ending on anchor
+
+**Benefits of Rolling Bundle:**
+
+- **Efficiency**: Single API call returns 7 different time series
+- **Performance**: Uses cached daily data for fast computation
+- **Consistency**: All series use the same anchor date for comparison
+- **Flexibility**: Multiple month calculation modes for different use cases
+
+**Use Cases:**
+
+- **Weather Dashboards**: Display multiple time periods simultaneously
+- **Climate Analysis**: Compare daily, weekly, monthly, and yearly trends
+- **Data Visualization**: Create comprehensive temperature charts
+- **Research**: Analyze temperature patterns across different time scales
 
 ### Legacy Endpoints (Deprecated)
 
@@ -175,15 +225,15 @@ GET /v1/records/daily/london/01-15/trend
   "location": "london",
   "identifier": "01-15",
   "range": {
-    "start": "1970-01-15",
+    "start": "1975-01-15",
     "end": "2024-01-15",
-    "years": 55
+    "years": 50
   },
   "unit_group": "metric",
   "values": [
     {
-      "date": "1970-01-15",
-      "year": 1970,
+      "date": "1975-01-15",
+      "year": 1975,
       "temperature": 15.0,
       "temp_min": null,
       "temp_max": null
@@ -194,21 +244,91 @@ GET /v1/records/daily/london/01-15/trend
     "temp_min": null,
     "temp_max": null,
     "unit": "celsius",
-    "data_points": 55
+    "data_points": 50
   },
   "trend": {
     "slope": 0.25,
     "unit": "°C/decade",
-    "data_points": 55,
+    "data_points": 50,
     "r_squared": null
   },
   "summary": "15.0°C. It is 2.5°C warmer than average today.",
   "metadata": {
-    "total_years": 55,
-    "available_years": 55,
+    "total_years": 50,
+    "available_years": 50,
     "missing_years": [],
     "completeness": 100.0
   }
+}
+```
+
+#### Rolling Bundle Response Format
+
+**GET `/v1/records/rolling-bundle/london/2024-01-15`** returns:
+
+```json
+{
+  "period": "rolling",
+  "location": "london",
+  "anchor": "2024-01-15",
+  "unit_group": "metric",
+  "day": {
+    "values": [
+      { "year": 1975, "temp": 7.8 },
+      { "year": 1976, "temp": 8.2 },
+      { "year": 2024, "temp": 9.1 }
+    ],
+    "count": 50
+  },
+  "day_minus_1": {
+    "values": [
+      { "year": 1975, "temp": 8.1 },
+      { "year": 1976, "temp": 7.9 },
+      { "year": 2024, "temp": 8.8 }
+    ],
+    "count": 50
+  },
+  "day_minus_2": {
+    "values": [
+      { "year": 1975, "temp": 7.7 },
+      { "year": 1976, "temp": 8.0 },
+      { "year": 2024, "temp": 8.5 }
+    ],
+    "count": 50
+  },
+  "day_minus_3": {
+    "values": [
+      { "year": 1975, "temp": 8.3 },
+      { "year": 1976, "temp": 7.8 },
+      { "year": 2024, "temp": 8.2 }
+    ],
+    "count": 50
+  },
+  "week": {
+    "values": [
+      { "year": 1975, "temp": 7.9 },
+      { "year": 1976, "temp": 8.1 },
+      { "year": 2024, "temp": 8.7 }
+    ],
+    "count": 50
+  },
+  "month": {
+    "values": [
+      { "year": 1975, "temp": 8.0 },
+      { "year": 1976, "temp": 7.8 },
+      { "year": 2024, "temp": 8.4 }
+    ],
+    "count": 50
+  },
+  "year": {
+    "values": [
+      { "year": 1975, "temp": 9.8 },
+      { "year": 1976, "temp": 10.2 },
+      { "year": 2024, "temp": 11.1 }
+    ],
+    "count": 50
+  },
+  "notes": "Month uses calendar-aware 1-month window ending on anchor (EOM-clipped)."
 }
 ```
 
@@ -220,14 +340,14 @@ GET /v1/records/daily/london/01-15/trend
 {
   "weather": {
     "data": [
-      { "x": 1970, "y": 15.0 },
-      { "x": 1971, "y": 15.5 },
-      { "x": 1972, "y": 16.0 },
+      { "x": 1975, "y": 15.0 },
+      { "x": 1976, "y": 15.5 },
+      { "x": 1977, "y": 16.0 },
       { "x": 2024, "y": 17.0 }
     ],
     "metadata": {
-      "total_years": 55,
-      "available_years": 55,
+      "total_years": 50,
+      "available_years": 50,
       "missing_years": [],
       "completeness": 100.0
     }
@@ -240,8 +360,8 @@ GET /v1/records/daily/london/01-15/trend
   "average": {
     "average": 15.0,
     "unit": "celsius",
-    "data_points": 55,
-    "year_range": { "start": 1970, "end": 2024 },
+    "data_points": 50,
+    "year_range": { "start": 1975, "end": 2024 },
     "missing_years": [],
     "completeness": 100.0
   }
