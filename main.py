@@ -2086,11 +2086,13 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     if abs(diff) < 0.05:
         avg_summary = f"It is about average for {period_context_alt}."
     elif diff > 0:
-        avg_summary = "However, it is " if cold_summary else "It is "
-        avg_summary += f"{rounded_diff}°C warmer than average {period_context}."
+        period_capitalized = period_context.capitalize()
+        avg_summary = "However, " if cold_summary else ""
+        avg_summary += f"{period_capitalized} has been {rounded_diff}°C warmer than average."
     else:
-        avg_summary = "However, it is " if warm_summary else "It is "
-        avg_summary += f"{abs(rounded_diff)}°C cooler than average {period_context}."
+        period_capitalized = period_context.capitalize()
+        avg_summary = "However, " if warm_summary else ""
+        avg_summary += f"{period_capitalized} has been {abs(rounded_diff)}°C cooler than average."
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
@@ -3053,8 +3055,6 @@ def parse_identifier(period: str, identifier: str) -> tuple:
         return month, day, period
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Identifier must be in MM-DD format: {str(e)}")
-    else:
-        raise HTTPException(status_code=400, detail="Invalid period. Must be daily, weekly, monthly, or yearly")
 
 async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, unit_group: str = "metric"):
     """Fetch yearly summary data from Visual Crossing historysummary endpoint."""
