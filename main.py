@@ -22,7 +22,7 @@ from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field, validator
 
 # Import the new router
-from routers.records_agg import router as records_agg_router
+from routers.records_agg import router as records_agg_router, daily_cache
 
 load_dotenv()
 
@@ -579,15 +579,15 @@ class CacheWarmer:
             for month_day in month_days:
                 for period in ["daily", "weekly", "monthly"]:
                     # Main record endpoint
-                    try:
+                try:
                         v1_url = f"http://localhost:8000/v1/records/{period}/{location}/{month_day}"
-                        async with aiohttp.ClientSession() as session:
+                    async with aiohttp.ClientSession() as session:
                             async with session.get(v1_url, headers={"Authorization": "Bearer test_token"}) as resp:
-                                if resp.status == 200:
+                            if resp.status == 200:
                                     results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
-                                else:
+                            else:
                                     results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
-                    except Exception as e:
+                except Exception as e:
                         results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
                     
                     # Subresource endpoints (average, trend, summary)
@@ -1259,7 +1259,7 @@ else:
         logger.info("Cache invalidation disabled")
 
 # Initialize cache statistics (after Redis client is available)
-cache_stats = None
+    cache_stats = None
 
 # Initialize cache warmer
 if CACHE_WARMING_ENABLED:
@@ -1343,6 +1343,9 @@ app = FastAPI(lifespan=lifespan)
 # Include the records aggregation router
 app.include_router(records_agg_router)
 redis_client = redis.from_url(REDIS_URL)
+
+# Wire up Redis cache for rolling bundle
+daily_cache.redis = redis_client
 
 # Initialize cache statistics (now that Redis client is available)
 if CACHE_STATS_ENABLED:
@@ -1600,19 +1603,23 @@ async def root():
                 "/v1/records/{period}/{location}/{identifier}/trend",
                 "/v1/records/{period}/{location}/{identifier}/summary"
             ],
+            "rolling_bundle": [
+                "/v1/records/rolling-bundle/{location}/{anchor}"
+            ],
             "periods": ["daily", "weekly", "monthly", "yearly"],
             "examples": [
                 "/v1/records/daily/london/01-15",
                 "/v1/records/weekly/london/01-15",
                 "/v1/records/monthly/london/01-15",
-                "/v1/records/yearly/london/01-15"
+                "/v1/records/yearly/london/01-15",
+                "/v1/records/rolling-bundle/london/2024-01-15"
             ]
         },
         "legacy_endpoints": {
             "deprecated": [
-                "/data/{location}/{month_day}",
-                "/average/{location}/{month_day}",
-                "/trend/{location}/{month_day}",
+            "/data/{location}/{month_day}",
+            "/average/{location}/{month_day}",
+            "/trend/{location}/{month_day}",
                 "/summary/{location}/{month_day}"
             ],
             "note": "Legacy endpoints are deprecated. Please migrate to v1 endpoints."
@@ -1672,50 +1679,50 @@ async def fetch_weather_from_api(location: str, date: str):
     
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         response = await client.get(url, headers={"Accept-Encoding": "gzip"})
-        if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-            data = response.json()
-            days = data.get('days')
-            if days is not None and len(days) > 0:
-                # Check if we got valid temperature data
-                day_data = days[0]
-                temp = day_data.get('temp')
-                
-                if temp is not None:
-                    # Success! Return the data
-                    logger.debug(f"fetch_weather_from_api successful without remote data for {date}")
-                    return data
-                else:
-                    logger.debug(f"No temperature data in first attempt for {date}")
-            else:
-                logger.debug(f"No 'days' data in first attempt for {date}")
-        else:
-            logger.debug(f"First attempt failed with status {response.status_code}")
-        
-        # If we reach here, the first attempt didn't provide valid temperature data
-        # Check if we should try with remote data parameters
-        if not is_today_date and year >= 2005:
-            if DEBUG:
-                logger.debug(f"🔄 API FALLBACK: {location} | {date} | Year: {year}")
-            url_with_remote = build_visual_crossing_url(location, date, remote=True)
+    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
+        data = response.json()
+        days = data.get('days')
+        if days is not None and len(days) > 0:
+            # Check if we got valid temperature data
+            day_data = days[0]
+            temp = day_data.get('temp')
             
-            remote_response = await client.get(url_with_remote)
-            if remote_response.status_code == 200 and 'application/json' in remote_response.headers.get('Content-Type', ''):
-                remote_data = remote_response.json()
-                remote_days = remote_data.get('days')
-                if remote_days is not None and len(remote_days) > 0:
-                    remote_day_data = remote_days[0]
-                    remote_temp = remote_day_data.get('temp')
-                    
-                    if remote_temp is not None:
-                        # Success with remote data!
-                        logger.debug(f"Remote data fallback successful for {date}")
-                        return remote_data
-                    else:
-                        logger.debug(f"No temperature data in remote fallback for {date}")
-                else:
-                    logger.debug(f"No 'days' data in remote fallback for {date}")
+            if temp is not None:
+                # Success! Return the data
+                logger.debug(f"fetch_weather_from_api successful without remote data for {date}")
+                return data
             else:
-                logger.debug(f"Remote fallback failed with status {remote_response.status_code}")
+                logger.debug(f"No temperature data in first attempt for {date}")
+        else:
+            logger.debug(f"No 'days' data in first attempt for {date}")
+    else:
+        logger.debug(f"First attempt failed with status {response.status_code}")
+    
+    # If we reach here, the first attempt didn't provide valid temperature data
+    # Check if we should try with remote data parameters
+    if not is_today_date and year >= 2005:
+        if DEBUG:
+            logger.debug(f"🔄 API FALLBACK: {location} | {date} | Year: {year}")
+        url_with_remote = build_visual_crossing_url(location, date, remote=True)
+        
+            remote_response = await client.get(url_with_remote)
+        if remote_response.status_code == 200 and 'application/json' in remote_response.headers.get('Content-Type', ''):
+            remote_data = remote_response.json()
+            remote_days = remote_data.get('days')
+            if remote_days is not None and len(remote_days) > 0:
+                remote_day_data = remote_days[0]
+                remote_temp = remote_day_data.get('temp')
+                
+                if remote_temp is not None:
+                    # Success with remote data!
+                    logger.debug(f"Remote data fallback successful for {date}")
+                    return remote_data
+                else:
+                    logger.debug(f"No temperature data in remote fallback for {date}")
+            else:
+                logger.debug(f"No 'days' data in remote fallback for {date}")
+        else:
+            logger.debug(f"Remote fallback failed with status {remote_response.status_code}")
     
     # If we reach here, neither attempt provided valid temperature data
     return {"error": "No temperature data available", "status": response.status_code}
@@ -1951,7 +1958,7 @@ async def summary(location: str, month_day: str, request: Request):
         # Handle the response properly - it's a JSONResponse object
         if hasattr(v1_response, 'body'):
             v1_data = json.loads(v1_response.body.decode())
-        else:
+    else:
             # If it's already a dict, use it directly
             v1_data = v1_response
         
@@ -1998,73 +2005,73 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
     return round(avg_temp, 1)
 
-def get_friendly_date(date: datetime) -> str:
+    def get_friendly_date(date: datetime) -> str:
     """Get a friendly date string with ordinal suffix."""
-    day = date.day
-    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-    return f"{day}{suffix} {date.strftime('%B')}"
+        day = date.day
+        suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+        return f"{day}{suffix} {date.strftime('%B')}"
 
 def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily") -> str:
     """Generate a summary text for temperature data."""
-    # Filter out data points with None temperature
-    data = [d for d in data if d.get('y') is not None]
-    if not data or len(data) < 2:
-        return "Not enough data to generate summary."
+        # Filter out data points with None temperature
+        data = [d for d in data if d.get('y') is not None]
+        if not data or len(data) < 2:
+            return "Not enough data to generate summary."
 
-    latest = data[-1]
-    if latest.get('y') is None:
-        return "No valid temperature data for the latest year."
+        latest = data[-1]
+        if latest.get('y') is None:
+            return "No valid temperature data for the latest year."
 
-    avg_temp = calculate_historical_average(data)
-    diff = latest['y'] - avg_temp
-    rounded_diff = round(diff, 1)
+        avg_temp = calculate_historical_average(data)
+        diff = latest['y'] - avg_temp
+        rounded_diff = round(diff, 1)
 
-    friendly_date = get_friendly_date(date)
-    warm_summary = ''
-    cold_summary = ''
-    temperature = f"{latest['y']}°C."
+        friendly_date = get_friendly_date(date)
+        warm_summary = ''
+        cold_summary = ''
+        temperature = f"{latest['y']}°C."
 
-    previous = [p for p in data[:-1] if p.get('y') is not None]
-    is_warmest = all(latest['y'] >= p['y'] for p in previous)
-    is_coldest = all(latest['y'] <= p['y'] for p in previous)
+        previous = [p for p in data[:-1] if p.get('y') is not None]
+        is_warmest = all(latest['y'] >= p['y'] for p in previous)
+        is_coldest = all(latest['y'] <= p['y'] for p in previous)
 
-    # Check against last year first for consistency
-    last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
-    
-    # Generate mutually exclusive summaries to avoid contradictions
-    if is_warmest:
-        warm_summary = f"This is the warmest {friendly_date} on record."
-    elif is_coldest:
-        cold_summary = f"This is the coldest {friendly_date} on record."
-    elif last_year_temp is not None:
-        # Compare against last year first
-        if latest['y'] > last_year_temp:
-            # Warmer than last year - find last warmer year
-            last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
-            if last_warmer:
-                years_since = int(latest['x'] - last_warmer)
-                if years_since == 2:
-                    warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
-                elif years_since <= 10:
-                    warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
+        # Check against last year first for consistency
+        last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
+        
+        # Generate mutually exclusive summaries to avoid contradictions
+        if is_warmest:
+            warm_summary = f"This is the warmest {friendly_date} on record."
+        elif is_coldest:
+            cold_summary = f"This is the coldest {friendly_date} on record."
+        elif last_year_temp is not None:
+            # Compare against last year first
+            if latest['y'] > last_year_temp:
+                # Warmer than last year - find last warmer year
+                last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
+                if last_warmer:
+                    years_since = int(latest['x'] - last_warmer)
+                    if years_since == 2:
+                        warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
+                    elif years_since <= 10:
+                        warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
+                    else:
+                        warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
                 else:
-                    warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
-            else:
-                warm_summary = f"It's warmer than last year."
-        elif latest['y'] < last_year_temp:
-            # Colder than last year - find last colder year
-            last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
-            if last_colder:
-                years_since = int(latest['x'] - last_colder)
-                if years_since == 2:
-                    cold_summary = f"It's colder than last year but not as cold as {last_colder}."
-                elif years_since <= 10:
-                    cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
+                    warm_summary = f"It's warmer than last year."
+            elif latest['y'] < last_year_temp:
+                # Colder than last year - find last colder year
+                last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
+                if last_colder:
+                    years_since = int(latest['x'] - last_colder)
+                    if years_since == 2:
+                        cold_summary = f"It's colder than last year but not as cold as {last_colder}."
+                    elif years_since <= 10:
+                        cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
+                    else:
+                        cold_summary = f"This is the coldest {friendly_date} in {years_since} years."
                 else:
-                    cold_summary = f"This is the coldest {friendly_date} in {years_since} years."
-            else:
-                cold_summary = f"It's colder than last year."
-        # If equal to last year, no warm/cold summary is generated
+                    cold_summary = f"It's colder than last year."
+            # If equal to last year, no warm/cold summary is generated
 
     # Generate period-appropriate language
     if period == "daily":
@@ -2083,18 +2090,18 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         period_context = "this period"
         period_context_alt = "this period"
 
-    if abs(diff) < 0.05:
+        if abs(diff) < 0.05:
         avg_summary = f"It is about average for {period_context_alt}."
-    elif diff > 0:
+        elif diff > 0:
         period_capitalized = period_context.capitalize()
         avg_summary = "However, " if cold_summary else ""
         avg_summary += f"{period_capitalized} has been {rounded_diff}°C warmer than average."
-    else:
+        else:
         period_capitalized = period_context.capitalize()
         avg_summary = "However, " if warm_summary else ""
         avg_summary += f"{period_capitalized} has been {abs(rounded_diff)}°C cooler than average."
 
-    return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
+        return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
 async def get_summary(location: str, month_day: str, weather_data: Optional[List[Dict]] = None) -> str:
 
@@ -2203,7 +2210,7 @@ async def average(location: str, month_day: str):
             "average": v1_data["data"]["mean"],
             "unit": v1_data["data"]["unit"],
             "data_points": v1_data["data"]["data_points"],
-            "year_range": {
+        "year_range": {
                 "start": v1_data["metadata"].get("start_year", 0),
                 "end": v1_data["metadata"].get("end_year", 0)
             },
@@ -2720,7 +2727,7 @@ async def get_all_data(location: str, month_day: str):
         # Handle the response properly - it's a JSONResponse object
         if hasattr(v1_response, 'body'):
             v1_data = json.loads(v1_response.body.decode())
-        else:
+            else:
             # If it's already a dict, use it directly
             v1_data = v1_response
         
@@ -2747,7 +2754,7 @@ async def get_all_data(location: str, month_day: str):
                 "completeness": v1_data["metadata"].get("completeness", 0)
             }
         }
-        
+
         return JSONResponse(
             content=legacy_response,
             headers={
@@ -2994,22 +3001,22 @@ async def get_forecast_data(location: str, date) -> Dict:
     
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         response = await client.get(url, headers={"Accept-Encoding": "gzip"})
-        if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-            data = response.json()
-            if data.get('days') and len(data['days']) > 0:
-                day_data = data['days'][0]
-                temp = day_data.get('temp')
-                if temp is None:
-                    return {"error": "No temperature data in forecast response"}
-                return {
-                    "location": location,
-                    "date": date,
-                    "average_temperature": round(temp, 1),
-                    "unit": "celsius"
-                }
-            else:
-                return {"error": "No days data in forecast response"}
-        return {"error": response.text, "status": response.status_code}
+    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
+        data = response.json()
+        if data.get('days') and len(data['days']) > 0:
+            day_data = data['days'][0]
+            temp = day_data.get('temp')
+            if temp is None:
+                return {"error": "No temperature data in forecast response"}
+            return {
+                "location": location,
+                "date": date,
+                "average_temperature": round(temp, 1),
+                "unit": "celsius"
+            }
+        else:
+            return {"error": "No days data in forecast response"}
+    return {"error": response.text, "status": response.status_code}
 
 async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: int = None) -> dict:
     """
@@ -3025,7 +3032,7 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
     if max_concurrent is None:
         semaphore = visual_crossing_semaphore
     else:
-        semaphore = asyncio.Semaphore(max_concurrent)
+    semaphore = asyncio.Semaphore(max_concurrent)
     
     results = {}
     

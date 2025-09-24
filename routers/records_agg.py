@@ -1,9 +1,11 @@
 # routers/records_agg.py
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any, Optional, Tuple
-import os, aiohttp, asyncio
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Query
+from typing import List, Dict, Any, Optional, Tuple, Literal
+import os, aiohttp, asyncio, json
+from datetime import datetime, date, timedelta
+from pydantic import BaseModel
 from constants import VC_BASE_URL
+from dateutil.relativedelta import relativedelta
 
 router = APIRouter()
 VC_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
@@ -155,3 +157,267 @@ async def weekly_series(location: str, week_start: str, unit_group: str = UNIT_G
             items.append({"year": y, "temp": round(t, 2)})
     items.sort(key=lambda x: x["year"])
     return {"period": "weekly", "location": location, "identifier": mmdd, "unit_group": unit_group, "values": items, "count": len(items), "note": "historysummary uses week bins; we align via ISO week number"}
+
+# ============================================================================
+# ROLLING BUNDLE ENDPOINT
+# ============================================================================
+
+# Models for rolling bundle
+class YearTemp(BaseModel):
+    year: int
+    temp: float
+
+class RollingSeries(BaseModel):
+    values: List[YearTemp]
+    count: int
+
+class RollingBundleResponse(BaseModel):
+    period: str = "rolling"
+    location: str
+    anchor: date
+    unit_group: Literal["metric", "us"]
+    day: RollingSeries
+    day_minus_1: RollingSeries
+    day_minus_2: RollingSeries
+    day_minus_3: RollingSeries
+    week: RollingSeries
+    month: RollingSeries
+    year: RollingSeries
+    notes: Optional[str] = None
+
+# Configuration
+YEARS_BACK = 50  # 50-year history
+VC_MAX_CONCURRENCY = 2
+
+# Cache for daily data
+class KVCache:
+    def __init__(self, redis=None, ttl_seconds: int = 24 * 60 * 60):
+        self.redis = redis
+        self.ttl = ttl_seconds
+    
+    async def get(self, key: str) -> Optional[bytes]:
+        if not self.redis:
+            return None
+        return await self.redis.get(key)
+    
+    async def set(self, key: str, value: bytes):
+        if self.redis:
+            await self.redis.set(key, value, ex=self.ttl)
+
+daily_cache = KVCache()
+
+# HTTP client and semaphore for rolling bundle
+_http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
+_rolling_sem = asyncio.Semaphore(VC_MAX_CONCURRENCY)
+
+# Helper functions
+def _safe_parse_date(s: str) -> date:
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(400, "anchor must be YYYY-MM-DD")
+
+def _years_range(now: date) -> Tuple[int, int]:
+    end = now.year
+    start = end - YEARS_BACK
+    return start, end
+
+def _leap_clamp(md: Tuple[int, int], year: int) -> Tuple[int, int]:
+    m, d = md
+    # clamp Feb 29 -> Feb 28 on non-leap years
+    if m == 2 and d == 29:
+        try:
+            date(year, 2, 29)
+        except ValueError:
+            return (2, 28)
+    return (m, d)
+
+def _rolling_month_window(anchor: date) -> Tuple[date, date]:
+    # calendar-aware "one month ending today", EOM-clipped
+    end = anchor
+    start = (anchor - relativedelta(months=1)) + timedelta(days=1)
+    return start, end
+
+def _rolling_30d_window(anchor: date) -> Tuple[date, date]:
+    end = anchor
+    start = anchor - timedelta(days=29)
+    return start, end
+
+def _rolling_7d_window(anchor: date) -> Tuple[date, date]:
+    end = anchor
+    start = anchor - timedelta(days=6)
+    return start, end
+
+def _rolling_365d_window(anchor: date) -> Tuple[date, date]:
+    end = anchor
+    start = anchor - timedelta(days=364)
+    return start, end
+
+async def _fetch_all_days(location: str, start: date, end: date, unit_group: str) -> Dict[str, float]:
+    """
+    Fetch daily temps for [start..end] once using VC Timeline.
+    Returns dict { 'YYYY-MM-DD': temp }.
+    """
+    if not VC_KEY:
+        raise HTTPException(500, "Missing VISUAL_CROSSING_API_KEY")
+    
+    url = f"{VC_BASE_URL}/timeline/{location}/{start.isoformat()}/{end.isoformat()}"
+    params = {
+        "unitGroup": unit_group,
+        "include": "days",
+        "elements": "datetime,temp",  # keep payload small
+        "contentType": "json",
+        "key": VC_KEY,
+    }
+    
+    async with _rolling_sem:
+        async with _http.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as r:
+            if r.status >= 400:
+                text = await r.text()
+                raise HTTPException(r.status, f"Visual Crossing error: {text[:200]}")
+            data = await r.json()
+    
+    days = data.get("days") or []
+    out: Dict[str, float] = {}
+    for d in days:
+        dt = d.get("datetime")
+        t = d.get("temp")
+        if isinstance(dt, str) and isinstance(t, (int, float)):
+            out[dt] = float(t)
+    
+    if not out:
+        raise HTTPException(404, "No daily temperatures returned")
+    return out
+
+async def _get_daily_map(location: str, unit_group: str, now: date) -> Dict[str, float]:
+    """
+    Load from cache or fetch and cache. Add a 31-day pad before the earliest year
+    so windows crossing New Year still work for that first year.
+    """
+    start_year, end_year = _years_range(now)
+    pad_start = date(start_year - 1, 12, 1)
+    end = date(end_year, 12, 31)
+
+    cache_key = f"dailies:{location}:{unit_group}:{pad_start.isoformat()}:{end.isoformat()}"
+    cached = await daily_cache.get(cache_key)
+    if cached:
+        return {k: float(v) for k, v in json.loads(cached).items()}
+
+    daily_map = await _fetch_all_days(location, pad_start, end, unit_group)
+
+    await daily_cache.set(cache_key, json.dumps(daily_map).encode())
+    return daily_map
+
+def _avg_window_for_year(
+    daily_map: Dict[str, float],
+    year: int,
+    start: date,
+    end: date,
+) -> Optional[float]:
+    """
+    Compute average temp for [start..end] in the given year, where start/end are *month/day* on anchor year.
+    We retarget them into `year` (and cross into year-1 if the start underflows).
+    """
+    # Convert anchor-year window into this `year`
+    delta_days = (end - start).days
+    # Anchor end in this year (clamp 29 Feb)
+    m_end, d_end = _leap_clamp((end.month, end.day), year)
+    end_y = date(year, m_end, d_end)
+    start_y = end_y - timedelta(days=delta_days)
+
+    # Iterate [start_y .. end_y]
+    total = 0.0
+    n = 0
+    cur = start_y
+    while cur <= end_y:
+        key = cur.isoformat()
+        val = daily_map.get(key)
+        if val is not None:
+            total += val
+            n += 1
+        cur += timedelta(days=1)
+    if n == 0:
+        return None
+    return round(total / n, 2)
+
+def _series_for_window(
+    daily_map: Dict[str, float],
+    start_year: int,
+    end_year: int,
+    start_anchor: date,  # in anchor year
+    end_anchor: date,
+) -> List[YearTemp]:
+    out: List[YearTemp] = []
+    for y in range(start_year, end_year + 1):
+        avg = _avg_window_for_year(daily_map, y, start_anchor, end_anchor)
+        if avg is not None:
+            out.append(YearTemp(year=y, temp=avg))
+    return out
+
+@router.get("/v1/records/rolling-bundle/{location}/{anchor}", response_model=RollingBundleResponse)
+async def rolling_bundle(
+    location: str,
+    anchor: str,
+    unit_group: Literal["metric", "us"] = Query(UNIT_GROUP_DEFAULT),
+    month_mode: Literal["rolling1m", "rolling30d"] = Query("rolling30d"),
+):
+    """
+    Returns cross-year series for:
+      - day (anchor day), day-1, day-2, day-3
+      - week ending anchor (7 days)
+      - month ending anchor (calendar-aware or fixed 30d)
+      - year ending anchor (365d)
+    All computed from a single cached daily series per location.
+    """
+    anchor_d = _safe_parse_date(anchor)
+    now = anchor_d  # for range selection
+    start_year, end_year = _years_range(now)
+
+    daily_map = await _get_daily_map(location, unit_group, now)
+
+    # Day windows (offsets 0..3)
+    def anchor_for_offset(off: int) -> date:
+        return anchor_d - timedelta(days=off)
+
+    # Day-of-year retarget window equals (start=end=that day)
+    def day_series(off: int) -> RollingSeries:
+        a = anchor_for_offset(off)
+        # define window as [a..a]
+        vals = _series_for_window(daily_map, start_year, end_year, a, a)
+        return RollingSeries(values=vals, count=len(vals))
+
+    day = day_series(0)
+    day_minus_1 = day_series(1)
+    day_minus_2 = day_series(2)
+    day_minus_3 = day_series(3)
+
+    # Week window (7d)
+    w_start, w_end = _rolling_7d_window(anchor_d)
+    week_vals = _series_for_window(daily_map, start_year, end_year, w_start, w_end)
+
+    # Month window
+    if month_mode == "rolling1m":
+        m_start, m_end = _rolling_month_window(anchor_d)
+        notes = "Month uses calendar-aware 1-month window ending on anchor (EOM-clipped)."
+    else:
+        m_start, m_end = _rolling_30d_window(anchor_d)
+        notes = "Month uses fixed 30-day rolling window ending on anchor (consistent with /v1/records/monthly)."
+    month_vals = _series_for_window(daily_map, start_year, end_year, m_start, m_end)
+
+    # Year window (365d)
+    y_start, y_end = _rolling_365d_window(anchor_d)
+    year_vals = _series_for_window(daily_map, start_year, end_year, y_start, y_end)
+
+    return RollingBundleResponse(
+        location=location,
+        anchor=anchor_d,
+        unit_group=unit_group,
+        day=RollingSeries(values=day.values, count=day.count),
+        day_minus_1=RollingSeries(values=day_minus_1.values, count=day_minus_1.count),
+        day_minus_2=RollingSeries(values=day_minus_2.values, count=day_minus_2.count),
+        day_minus_3=RollingSeries(values=day_minus_3.values, count=day_minus_3.count),
+        week=RollingSeries(values=week_vals, count=len(week_vals)),
+        month=RollingSeries(values=month_vals, count=len(month_vals)),
+        year=RollingSeries(values=year_vals, count=len(year_vals)),
+        notes=notes,
+    )
