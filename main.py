@@ -579,15 +579,15 @@ class CacheWarmer:
             for month_day in month_days:
                 for period in ["daily", "weekly", "monthly"]:
                     # Main record endpoint
-                try:
+                    try:
                         v1_url = f"http://localhost:8000/v1/records/{period}/{location}/{month_day}"
-                    async with aiohttp.ClientSession() as session:
+                        async with aiohttp.ClientSession() as session:
                             async with session.get(v1_url, headers={"Authorization": "Bearer test_token"}) as resp:
-                            if resp.status == 200:
+                                if resp.status == 200:
                                     results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
-                            else:
+                                else:
                                     results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
-                except Exception as e:
+                    except Exception as e:
                         results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
                     
                     # Subresource endpoints (average, trend, summary)
@@ -1705,7 +1705,7 @@ async def fetch_weather_from_api(location: str, date: str):
             logger.debug(f"🔄 API FALLBACK: {location} | {date} | Year: {year}")
         url_with_remote = build_visual_crossing_url(location, date, remote=True)
         
-            remote_response = await client.get(url_with_remote)
+        remote_response = await client.get(url_with_remote)
         if remote_response.status_code == 200 and 'application/json' in remote_response.headers.get('Content-Type', ''):
             remote_data = remote_response.json()
             remote_days = remote_data.get('days')
@@ -1958,7 +1958,7 @@ async def summary(location: str, month_day: str, request: Request):
         # Handle the response properly - it's a JSONResponse object
         if hasattr(v1_response, 'body'):
             v1_data = json.loads(v1_response.body.decode())
-    else:
+        else:
             # If it's already a dict, use it directly
             v1_data = v1_response
         
@@ -2005,73 +2005,73 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
     return round(avg_temp, 1)
 
-    def get_friendly_date(date: datetime) -> str:
+def get_friendly_date(date: datetime) -> str:
     """Get a friendly date string with ordinal suffix."""
-        day = date.day
-        suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-        return f"{day}{suffix} {date.strftime('%B')}"
+    day = date.day
+    suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix} {date.strftime('%B')}"
 
 def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily") -> str:
     """Generate a summary text for temperature data."""
-        # Filter out data points with None temperature
-        data = [d for d in data if d.get('y') is not None]
-        if not data or len(data) < 2:
-            return "Not enough data to generate summary."
+    # Filter out data points with None temperature
+    data = [d for d in data if d.get('y') is not None]
+    if not data or len(data) < 2:
+        return "Not enough data to generate summary."
 
-        latest = data[-1]
-        if latest.get('y') is None:
-            return "No valid temperature data for the latest year."
+    latest = data[-1]
+    if latest.get('y') is None:
+        return "No valid temperature data for the latest year."
 
-        avg_temp = calculate_historical_average(data)
-        diff = latest['y'] - avg_temp
-        rounded_diff = round(diff, 1)
+    avg_temp = calculate_historical_average(data)
+    diff = latest['y'] - avg_temp
+    rounded_diff = round(diff, 1)
 
-        friendly_date = get_friendly_date(date)
-        warm_summary = ''
-        cold_summary = ''
-        temperature = f"{latest['y']}°C."
+    friendly_date = get_friendly_date(date)
+    warm_summary = ''
+    cold_summary = ''
+    temperature = f"{latest['y']}°C."
 
-        previous = [p for p in data[:-1] if p.get('y') is not None]
-        is_warmest = all(latest['y'] >= p['y'] for p in previous)
-        is_coldest = all(latest['y'] <= p['y'] for p in previous)
+    previous = [p for p in data[:-1] if p.get('y') is not None]
+    is_warmest = all(latest['y'] >= p['y'] for p in previous)
+    is_coldest = all(latest['y'] <= p['y'] for p in previous)
 
-        # Check against last year first for consistency
-        last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
-        
-        # Generate mutually exclusive summaries to avoid contradictions
-        if is_warmest:
-            warm_summary = f"This is the warmest {friendly_date} on record."
-        elif is_coldest:
-            cold_summary = f"This is the coldest {friendly_date} on record."
-        elif last_year_temp is not None:
-            # Compare against last year first
-            if latest['y'] > last_year_temp:
-                # Warmer than last year - find last warmer year
-                last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
-                if last_warmer:
-                    years_since = int(latest['x'] - last_warmer)
-                    if years_since == 2:
-                        warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
-                    elif years_since <= 10:
-                        warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
-                    else:
-                        warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
+    # Check against last year first for consistency
+    last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
+    
+    # Generate mutually exclusive summaries to avoid contradictions
+    if is_warmest:
+        warm_summary = f"This is the warmest {friendly_date} on record."
+    elif is_coldest:
+        cold_summary = f"This is the coldest {friendly_date} on record."
+    elif last_year_temp is not None:
+        # Compare against last year first
+        if latest['y'] > last_year_temp:
+            # Warmer than last year - find last warmer year
+            last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
+            if last_warmer:
+                years_since = int(latest['x'] - last_warmer)
+                if years_since == 2:
+                    warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
+                elif years_since <= 10:
+                    warm_summary = f"This is the warmest {friendly_date} since {last_warmer}."
                 else:
-                    warm_summary = f"It's warmer than last year."
-            elif latest['y'] < last_year_temp:
-                # Colder than last year - find last colder year
-                last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
-                if last_colder:
-                    years_since = int(latest['x'] - last_colder)
-                    if years_since == 2:
-                        cold_summary = f"It's colder than last year but not as cold as {last_colder}."
-                    elif years_since <= 10:
-                        cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
-                    else:
-                        cold_summary = f"This is the coldest {friendly_date} in {years_since} years."
+                    warm_summary = f"This is the warmest {friendly_date} in {years_since} years."
+            else:
+                warm_summary = f"It's warmer than last year."
+        elif latest['y'] < last_year_temp:
+            # Colder than last year - find last colder year
+            last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
+            if last_colder:
+                years_since = int(latest['x'] - last_colder)
+                if years_since == 2:
+                    cold_summary = f"It's colder than last year but not as cold as {last_colder}."
+                elif years_since <= 10:
+                    cold_summary = f"This is the coldest {friendly_date} since {last_colder}."
                 else:
-                    cold_summary = f"It's colder than last year."
-            # If equal to last year, no warm/cold summary is generated
+                    cold_summary = f"This is the coldest {friendly_date} in {years_since} years."
+            else:
+                cold_summary = f"It's colder than last year."
+        # If equal to last year, no warm/cold summary is generated
 
     # Generate period-appropriate language
     if period == "daily":
@@ -2090,18 +2090,18 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         period_context = "this period"
         period_context_alt = "this period"
 
-        if abs(diff) < 0.05:
+    if abs(diff) < 0.05:
         avg_summary = f"It is about average for {period_context_alt}."
-        elif diff > 0:
+    elif diff > 0:
         period_capitalized = period_context.capitalize()
         avg_summary = "However, " if cold_summary else ""
         avg_summary += f"{period_capitalized} has been {rounded_diff}°C warmer than average."
-        else:
+    else:
         period_capitalized = period_context.capitalize()
         avg_summary = "However, " if warm_summary else ""
         avg_summary += f"{period_capitalized} has been {abs(rounded_diff)}°C cooler than average."
 
-        return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
+    return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
 async def get_summary(location: str, month_day: str, weather_data: Optional[List[Dict]] = None) -> str:
 
@@ -2727,7 +2727,7 @@ async def get_all_data(location: str, month_day: str):
         # Handle the response properly - it's a JSONResponse object
         if hasattr(v1_response, 'body'):
             v1_data = json.loads(v1_response.body.decode())
-            else:
+        else:
             # If it's already a dict, use it directly
             v1_data = v1_response
         
@@ -3032,7 +3032,7 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
     if max_concurrent is None:
         semaphore = visual_crossing_semaphore
     else:
-    semaphore = asyncio.Semaphore(max_concurrent)
+        semaphore = asyncio.Semaphore(max_concurrent)
     
     results = {}
     
