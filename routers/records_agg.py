@@ -1,6 +1,6 @@
 # routers/records_agg.py
 from fastapi import APIRouter, HTTPException, Query
-from typing import List, Dict, Any, Optional, Tuple, Literal
+from typing import List, Dict, Any, Optional, Tuple, Literal, Set
 import os, aiohttp, asyncio, json
 from datetime import datetime, date, timedelta
 from pydantic import BaseModel
@@ -177,7 +177,7 @@ class RollingBundleResponse(BaseModel):
     anchor: date
     unit_group: Literal["metric", "us"]
     # Daily data (anchor day and previous days)
-    day: Dict  # Complete daily endpoint response
+    day: Optional[Dict] = None  # Complete daily endpoint response
     previous_days: List[Dict] = []  # List of previous days' complete responses
     # Period data (complete endpoint responses)
     daily: Optional[Dict] = None  # Complete daily endpoint response (same as day)
@@ -193,6 +193,9 @@ YEARS_BACK = 50  # 50-year history
 ROLLING_BUNDLE_YEARS_BACK = 10  # 10-year history for rolling bundle (more efficient)
 VC_MAX_CONCURRENCY = 2
 DEFAULT_DAYS_BACK = 0  # Default number of previous days to include (0 = only anchor day)
+
+# Allowed sections for include/exclude parameters
+ALLOWED_SECTIONS = {"day", "week", "month", "year"}
 
 # Cache for daily data
 class KVCache:
@@ -391,6 +394,8 @@ async def rolling_bundle(
     unit_group: Literal["metric", "us"] = Query(UNIT_GROUP_DEFAULT),
     month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
     days_back: int = Query(DEFAULT_DAYS_BACK, ge=0, le=10, description="Number of previous days to include (0-10)"),
+    include: str | None = Query(None, description="CSV of sections to include"),
+    exclude: str | None = Query(None, description="CSV of sections to exclude (ignored if include is present)"),
 ):
     """
     Returns cross-year series for:
@@ -401,8 +406,29 @@ async def rolling_bundle(
     
     Each period enclosure contains the complete JSON response from its respective endpoint,
     including values, average, trend, summary, and metadata.
+    
+    Query params:
+    - include: CSV of sections to include. If present, exclude is ignored.
+    - exclude: CSV of sections to exclude (valid: day,week,month,year).
+    - days_back: Number of previous days to include (0-10, controlled separately from include/exclude).
+    Examples:
+    - ?include=week,month,year
+    - ?exclude=day
+    - ?days_back=3 (includes 3 previous days regardless of include/exclude)
     """
     anchor_d = _safe_parse_date(anchor)
+    
+    # Parse CSV parameters and determine which sections to include
+    def _parse_csv(s: str | None) -> Set[str]:
+        return {p.strip() for p in s.split(",")} if s else set()
+
+    inc = (_parse_csv(include) & ALLOWED_SECTIONS) if include else set()
+    exc = (_parse_csv(exclude) & ALLOWED_SECTIONS) if exclude else set()
+
+    if inc:
+        wanted = inc
+    else:
+        wanted = ALLOWED_SECTIONS - exc
     
     # Get the anchor day's complete daily response
     async def get_daily_response(anchor_date: date) -> Dict:
@@ -414,15 +440,18 @@ async def rolling_bundle(
         except Exception as e:
             return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
 
-    # Get the anchor day's response
-    day_response = await get_daily_response(anchor_d)
+    # Get the anchor day's response (only if day is wanted)
+    day_response = None
+    if "day" in wanted:
+        day_response = await get_daily_response(anchor_d)
     
-    # Get previous days' responses (if days_back > 0)
+    # Get previous days' responses (controlled by days_back parameter)
     previous_days = []
-    for i in range(1, days_back + 1):
-        prev_date = anchor_d - timedelta(days=i)
-        prev_response = await get_daily_response(prev_date)
-        previous_days.append(prev_response)
+    if days_back > 0:
+        for i in range(1, days_back + 1):
+            prev_date = anchor_d - timedelta(days=i)
+            prev_response = await get_daily_response(prev_date)
+            previous_days.append(prev_response)
 
     # Get complete responses for weekly, monthly, and yearly
     async def get_period_response(period: str, anchor_date: date) -> Optional[Dict]:
@@ -444,10 +473,18 @@ async def rolling_bundle(
         except Exception as e:
             return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
 
-    # Get period responses
-    weekly_response = await get_period_response("weekly", anchor_d)
-    monthly_response = await get_period_response("monthly", anchor_d)
-    yearly_response = await get_period_response("yearly", anchor_d)
+    # Get period responses (only if requested)
+    weekly_response = None
+    if "week" in wanted:
+        weekly_response = await get_period_response("weekly", anchor_d)
+    
+    monthly_response = None
+    if "month" in wanted:
+        monthly_response = await get_period_response("monthly", anchor_d)
+    
+    yearly_response = None
+    if "year" in wanted:
+        yearly_response = await get_period_response("yearly", anchor_d)
 
     # Generate appropriate notes
     if month_mode == "calendar":
@@ -459,20 +496,16 @@ async def rolling_bundle(
     
     notes += f" Includes {days_back} previous days. Weekly/monthly/yearly data uses historysummary endpoints for 50-year coverage."
 
-    return RollingBundleResponse(
-        location=location,
-        anchor=anchor_d,
-        unit_group=unit_group,
-        day=day_response,
-        previous_days=previous_days,
-        daily=day_response,  # Same as day for convenience
-        weekly=weekly_response,
-        monthly=monthly_response,
-        yearly=yearly_response,
-        metadata={
+    # Build response with only requested sections
+    response_data = {
+        "location": location,
+        "anchor": anchor_d,
+        "unit_group": unit_group,
+        "metadata": {
             "anchor_date": anchor_d.isoformat(),
             "month_mode": month_mode,
             "days_back": days_back,
+            "included_sections": list(wanted),
             "data_sources": {
                 "daily": "Timeline API",
                 "weekly": "historysummary API",
@@ -480,5 +513,25 @@ async def rolling_bundle(
                 "yearly": "historysummary API"
             }
         },
-        notes=notes,
-    )
+        "notes": notes,
+    }
+    
+    # Only include sections that were requested
+    if "day" in wanted and day_response is not None:
+        response_data["day"] = day_response
+        response_data["daily"] = day_response  # Same as day for convenience
+    
+    # Always include previous_days if we have any (controlled by days_back parameter)
+    if previous_days:
+        response_data["previous_days"] = previous_days
+    
+    if "week" in wanted and weekly_response is not None:
+        response_data["weekly"] = weekly_response
+    
+    if "month" in wanted and monthly_response is not None:
+        response_data["monthly"] = monthly_response
+    
+    if "year" in wanted and yearly_response is not None:
+        response_data["yearly"] = yearly_response
+
+    return RollingBundleResponse(**response_data)

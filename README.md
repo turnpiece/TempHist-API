@@ -156,6 +156,8 @@ The rolling bundle endpoint provides cross-year temperature series for multiple 
 - `unit_group`: Temperature unit group - "metric" (default) or "us"
 - `month_mode`: Month calculation mode - "rolling1m" (default), "calendar", or "rolling30d"
 - `days_back`: Number of previous days to include (0-10, default: 0)
+- `include`: CSV of sections to include (valid: day, week, month, year). If present, exclude is ignored.
+- `exclude`: CSV of sections to exclude (valid: day, week, month, year). Ignored if include is present.
 
 **Example Rolling Bundle Requests:**
 
@@ -168,7 +170,32 @@ GET /v1/records/rolling-bundle/london/2024-01-15?month_mode=calendar
 
 # With US units
 GET /v1/records/rolling-bundle/london/2024-01-15?unit_group=us
+
+# Include only weekly, monthly, and yearly data (exclude daily)
+GET /v1/records/rolling-bundle/london/2024-01-15?include=week,month,year
+
+# Exclude daily data (include everything else)
+GET /v1/records/rolling-bundle/london/2024-01-15?exclude=day
+
+# Include 3 previous days with only weekly and monthly data
+GET /v1/records/rolling-bundle/london/2024-01-15?days_back=3&include=week,month
 ```
+
+**Include/Exclude Parameters:**
+
+The `include` and `exclude` parameters allow you to control which sections are returned in the response:
+
+- **Valid sections**: `day`, `week`, `month`, `year`
+- **Include parameter**: Returns only the specified sections. If present, `exclude` is ignored.
+- **Exclude parameter**: Returns all sections except the specified ones. Ignored if `include` is present.
+- **Previous days**: Controlled separately by `days_back` parameter and are not affected by include/exclude.
+- **Performance**: Only requested sections are computed, improving response times.
+
+**Examples:**
+
+- `?include=week,month,year` - Returns only weekly, monthly, and yearly data
+- `?exclude=day` - Returns everything except daily data
+- `?days_back=3&exclude=day` - Returns 3 previous days + weekly/monthly/yearly data
 
 **Month Mode Options:**
 
@@ -178,8 +205,9 @@ GET /v1/records/rolling-bundle/london/2024-01-15?unit_group=us
 
 **Benefits of Rolling Bundle:**
 
-- **Efficiency**: Single API call returns 7 different time series
+- **Efficiency**: Single API call returns multiple time series
 - **Performance**: Uses cached daily data for fast computation
+- **Selective Loading**: Include/exclude parameters allow fetching only needed sections
 - **Consistency**: All series use the same anchor date for comparison
 - **Flexibility**: Multiple month calculation modes for different use cases
 
