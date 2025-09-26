@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field, validator
+from typing import List, Optional, Dict, Any
 
 # Load environment variables before importing routers
 load_dotenv()
@@ -34,6 +35,8 @@ API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+TEST_TOKEN = os.getenv("TEST_TOKEN", "test_token")
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
@@ -97,6 +100,37 @@ class SubResourceResponse(BaseModel):
     identifier: str = Field(..., description="Date identifier")
     data: Union[AverageData, TrendData, str] = Field(..., description="Subresource data")
     metadata: Dict = Field(default_factory=dict, description="Additional metadata")
+
+# Analytics Models
+class ErrorDetail(BaseModel):
+    """Individual error detail."""
+    timestamp: str = Field(..., description="Error timestamp in ISO format")
+    error_type: str = Field(..., description="Type of error (network, api, validation, etc.)")
+    message: str = Field(..., description="Error message")
+    location: Optional[str] = Field(None, description="Location where error occurred")
+    endpoint: Optional[str] = Field(None, description="API endpoint that failed")
+    status_code: Optional[int] = Field(None, description="HTTP status code if applicable")
+
+class AnalyticsData(BaseModel):
+    """Analytics data from client applications."""
+    session_duration: int = Field(..., ge=0, description="Session duration in seconds")
+    api_calls: int = Field(..., ge=0, description="Total number of API calls made")
+    api_failure_rate: str = Field(..., description="API failure rate as percentage (e.g., '0%', '15%')")
+    retry_attempts: int = Field(..., ge=0, description="Number of retry attempts made")
+    location_failures: int = Field(..., ge=0, description="Number of location-related failures")
+    error_count: int = Field(..., ge=0, description="Total number of errors encountered")
+    recent_errors: List[ErrorDetail] = Field(default_factory=list, description="Recent error details")
+    app_version: Optional[str] = Field(None, description="Client application version")
+    platform: Optional[str] = Field(None, description="Platform (web, mobile, desktop)")
+    user_agent: Optional[str] = Field(None, description="User agent string")
+    session_id: Optional[str] = Field(None, description="Unique session identifier")
+
+class AnalyticsResponse(BaseModel):
+    """Response for analytics submission."""
+    status: str = Field(..., description="Submission status")
+    message: str = Field(..., description="Response message")
+    analytics_id: str = Field(..., description="Unique analytics record ID")
+    timestamp: str = Field(..., description="Submission timestamp")
 
 # Configure logging
 logging.basicConfig(
@@ -585,9 +619,9 @@ class CacheWarmer:
         try:
             # Warm forecast data
             try:
-                forecast_url = f"http://localhost:8000/forecast/{location}"
+                forecast_url = f"{BASE_URL}/forecast/{location}"
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(forecast_url, headers={"Authorization": "Bearer test_token"}) as resp:
+                    async with session.get(forecast_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
                         if resp.status == 200:
                             results["warmed_endpoints"].append("forecast")
                         else:
@@ -599,43 +633,40 @@ class CacheWarmer:
             month_days = self.get_month_days_to_warm()
             
             # Warm v1 endpoints (daily, weekly, monthly) - skipping yearly for phase 1
-            # TODO: Fix indentation issue in cache warming section
-            # Temporarily commented out to allow module import
-            pass
-            # for month_day in month_days:
-            #     for period in ["daily", "weekly", "monthly"]:
-            #         # Main record endpoint
-            #         try:
-            #             v1_url = f"http://localhost:8000/v1/records/{period}/{location}/{month_day}"
-            #             async with aiohttp.ClientSession() as session:
-            #                 async with session.get(v1_url, headers={"Authorization": "Bearer test_token"}) as resp:
-            #                     if resp.status == 200:
-            #                         results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
-            #                     else:
-            #                         results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
-            #         except Exception as e:
-            #             results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
-            #         
-            #         # Subresource endpoints (average, trend, summary)
-            #         for subresource in ["average", "trend", "summary"]:
-            #             try:
-            #                 sub_url = f"http://localhost:8000/v1/records/{period}/{location}/{month_day}/{subresource}"
-            #                 async with aiohttp.ClientSession() as session:
-            #                     async with session.get(sub_url, headers={"Authorization": "Bearer test_token"}) as resp:
-            #                         if resp.status == 200:
-            #                             results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}/{subresource}")
-            #                         else:
-            #                             results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {resp.status}")
-            #             except Exception as e:
-            #                 results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {str(e)}")
+            for month_day in month_days:
+                for period in ["daily", "weekly", "monthly"]:
+                    # Main record endpoint
+                    try:
+                        v1_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}"
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(v1_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
+                                if resp.status == 200:
+                                    results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
+                                else:
+                                    results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
+                    except Exception as e:
+                        results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
+                    
+                    # Subresource endpoints (average, trend, summary)
+                    for subresource in ["average", "trend", "summary"]:
+                        try:
+                            sub_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}/{subresource}"
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(sub_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
+                                    if resp.status == 200:
+                                        results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}/{subresource}")
+                                    else:
+                                        results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {resp.status}")
+                        except Exception as e:
+                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {str(e)}")
             
             # Warm individual weather data for recent dates
             dates = self.get_dates_to_warm()
             for date in dates[:5]:  # Limit to last 5 dates to avoid too many requests
                 try:
-                    weather_url = f"http://localhost:8000/weather/{location}/{date}"
+                    weather_url = f"{BASE_URL}/weather/{location}/{date}"
                     async with aiohttp.ClientSession() as session:
-                        async with session.get(weather_url, headers={"Authorization": "Bearer test_token"}) as resp:
+                        async with session.get(weather_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
                             if resp.status == 200:
                                 results["warmed_endpoints"].append(f"weather/{date}")
                             else:
@@ -993,6 +1024,163 @@ class CacheStats:
         self._store_stats_in_redis()
         if DEBUG:
             logger.info("📊 CACHE STATS RESET: All statistics cleared")
+
+class AnalyticsStorage:
+    """Store and manage client analytics data."""
+    
+    def __init__(self):
+        self.analytics_prefix = "analytics_"
+        self.retention_seconds = 7 * 24 * 3600  # 7 days retention
+        self.max_errors_per_session = 50  # Limit errors per session
+    
+    def store_analytics(self, analytics_data: AnalyticsData, client_ip: str) -> str:
+        """Store analytics data and return unique ID."""
+        analytics_id = f"analytics_{int(time.time() * 1000)}_{hash(client_ip) % 10000}"
+        
+        # Prepare data for storage
+        analytics_record = {
+            "id": analytics_id,
+            "timestamp": datetime.now().isoformat(),
+            "client_ip": client_ip,
+            "session_duration": analytics_data.session_duration,
+            "api_calls": analytics_data.api_calls,
+            "api_failure_rate": analytics_data.api_failure_rate,
+            "retry_attempts": analytics_data.retry_attempts,
+            "location_failures": analytics_data.location_failures,
+            "error_count": analytics_data.error_count,
+            "recent_errors": [error.dict() for error in analytics_data.recent_errors[:self.max_errors_per_session]],
+            "app_version": analytics_data.app_version,
+            "platform": analytics_data.platform,
+            "user_agent": analytics_data.user_agent,
+            "session_id": analytics_data.session_id
+        }
+        
+        try:
+            # Store in Redis with expiration
+            redis_client.setex(
+                f"{self.analytics_prefix}{analytics_id}",
+                self.retention_seconds,
+                json.dumps(analytics_record)
+            )
+            
+            # Add to analytics index for easy retrieval
+            redis_client.lpush("analytics_index", analytics_id)
+            redis_client.expire("analytics_index", self.retention_seconds)
+            
+            # Update analytics summary stats
+            self._update_analytics_summary(analytics_record)
+            
+            if DEBUG:
+                logger.info(f"📊 ANALYTICS STORED: {analytics_id} | Errors: {analytics_data.error_count} | Duration: {analytics_data.session_duration}s")
+            
+            return analytics_id
+            
+        except Exception as e:
+            logger.error(f"Failed to store analytics data: {e}")
+            raise HTTPException(status_code=500, detail="Failed to store analytics data")
+    
+    def _update_analytics_summary(self, analytics_record: dict):
+        """Update analytics summary statistics."""
+        try:
+            # Get current summary
+            summary_key = "analytics_summary"
+            summary = redis_client.get(summary_key)
+            if summary:
+                summary_data = json.loads(summary)
+            else:
+                summary_data = {
+                    "total_sessions": 0,
+                    "total_api_calls": 0,
+                    "total_errors": 0,
+                    "avg_session_duration": 0,
+                    "avg_failure_rate": 0,
+                    "platforms": {},
+                    "error_types": {},
+                    "last_updated": datetime.now().isoformat()
+                }
+            
+            # Update counters
+            summary_data["total_sessions"] += 1
+            summary_data["total_api_calls"] += analytics_record["api_calls"]
+            summary_data["total_errors"] += analytics_record["error_count"]
+            
+            # Update averages
+            total_sessions = summary_data["total_sessions"]
+            summary_data["avg_session_duration"] = (
+                (summary_data["avg_session_duration"] * (total_sessions - 1) + analytics_record["session_duration"]) / total_sessions
+            )
+            
+            # Update platform stats
+            platform = analytics_record.get("platform", "unknown")
+            summary_data["platforms"][platform] = summary_data["platforms"].get(platform, 0) + 1
+            
+            # Update error type stats
+            for error in analytics_record["recent_errors"]:
+                error_type = error.get("error_type", "unknown")
+                summary_data["error_types"][error_type] = summary_data["error_types"].get(error_type, 0) + 1
+            
+            # Store updated summary
+            redis_client.setex(summary_key, self.retention_seconds, json.dumps(summary_data))
+            
+        except Exception as e:
+            logger.error(f"Failed to update analytics summary: {e}")
+    
+    def get_analytics_summary(self) -> dict:
+        """Get analytics summary statistics."""
+        try:
+            summary_key = "analytics_summary"
+            summary = redis_client.get(summary_key)
+            if summary:
+                return json.loads(summary)
+            else:
+                return {
+                    "total_sessions": 0,
+                    "total_api_calls": 0,
+                    "total_errors": 0,
+                    "avg_session_duration": 0,
+                    "avg_failure_rate": 0,
+                    "platforms": {},
+                    "error_types": {},
+                    "last_updated": datetime.now().isoformat()
+                }
+        except Exception as e:
+            logger.error(f"Failed to get analytics summary: {e}")
+            return {"error": "Failed to retrieve analytics summary"}
+    
+    def get_recent_analytics(self, limit: int = 100) -> List[dict]:
+        """Get recent analytics records."""
+        try:
+            # Get recent analytics IDs
+            analytics_ids = redis_client.lrange("analytics_index", 0, limit - 1)
+            analytics_records = []
+            
+            for analytics_id in analytics_ids:
+                analytics_id = analytics_id.decode('utf-8')
+                record = redis_client.get(f"{self.analytics_prefix}{analytics_id}")
+                if record:
+                    analytics_records.append(json.loads(record))
+            
+            return analytics_records
+            
+        except Exception as e:
+            logger.error(f"Failed to get recent analytics: {e}")
+            return []
+    
+    def get_analytics_by_session(self, session_id: str) -> List[dict]:
+        """Get analytics records for a specific session."""
+        try:
+            # This would require a more sophisticated indexing system
+            # For now, we'll search through recent analytics
+            recent_analytics = self.get_recent_analytics(1000)  # Get more records
+            session_analytics = [
+                record for record in recent_analytics 
+                if record.get("session_id") == session_id
+            ]
+            return session_analytics
+            
+        except Exception as e:
+            logger.error(f"Failed to get analytics by session: {e}")
+            return []
 
 class CacheInvalidator:
     """Manage cache invalidation with various strategies and patterns."""
@@ -1384,8 +1572,11 @@ if CACHE_STATS_ENABLED:
 else:
     if DEBUG:
         logger.info("⚠️  CACHE STATS DISABLED")
-    else:
-        logger.info("Cache statistics disabled")
+
+# Initialize analytics storage
+analytics_storage = AnalyticsStorage()
+if DEBUG:
+    logger.info("📊 ANALYTICS STORAGE INITIALIZED: 7 days retention, 50 errors per session limit")
 
 # HTTP client configuration
 HTTP_TIMEOUT = 30.0
@@ -1546,7 +1737,7 @@ async def verify_token_middleware(request: Request, call_next):
                 usage_tracker.track_location_request(location, endpoint)
 
     # Public paths that don't require a token
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/api/analytics"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
@@ -1564,7 +1755,7 @@ async def verify_token_middleware(request: Request, call_next):
     id_token = auth_header.split(" ")[1]
     
     # Special bypass for testing
-    if id_token == "test_token":
+    if id_token == TEST_TOKEN:
         logger.info(f"[DEBUG] Middleware: Using test token bypass")
         request.state.user = {"uid": "testuser"}
     else:
@@ -1680,6 +1871,12 @@ async def root():
             "/cache/invalidate/today",
             "/cache/invalidate/expired",
             "/cache/clear"
+        ],
+        "analytics_endpoints": [
+            "/api/analytics",
+            "/api/analytics/summary", 
+            "/api/analytics/recent",
+            "/api/analytics/session/{session_id}"
         ]
     }
 
@@ -3627,6 +3824,72 @@ async def removed_summary_endpoint():
 def protected_route(user=Depends(verify_firebase_token)):
     """Protected endpoint that requires Firebase authentication."""
     return {"message": "You are authenticated!", "user": user}
+
+# Analytics Endpoints
+@app.post("/api/analytics", response_model=AnalyticsResponse)
+async def submit_analytics(analytics_data: AnalyticsData, request: Request):
+    """Submit client analytics data for monitoring and error tracking."""
+    try:
+        client_ip = get_client_ip(request)
+        
+        # Store analytics data
+        analytics_id = analytics_storage.store_analytics(analytics_data, client_ip)
+        
+        return AnalyticsResponse(
+            status="success",
+            message="Analytics data submitted successfully",
+            analytics_id=analytics_id,
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        logger.error(f"Error submitting analytics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to submit analytics data")
+
+@app.get("/api/analytics/summary")
+async def get_analytics_summary():
+    """Get analytics summary statistics."""
+    try:
+        summary = analytics_storage.get_analytics_summary()
+        return {
+            "status": "success",
+            "data": summary,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting analytics summary: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve analytics summary")
+
+@app.get("/api/analytics/recent")
+async def get_recent_analytics(limit: int = Query(100, ge=1, le=1000)):
+    """Get recent analytics records."""
+    try:
+        analytics_records = analytics_storage.get_recent_analytics(limit)
+        return {
+            "status": "success",
+            "data": analytics_records,
+            "count": len(analytics_records),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting recent analytics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve recent analytics")
+
+@app.get("/api/analytics/session/{session_id}")
+async def get_analytics_by_session(session_id: str):
+    """Get analytics records for a specific session."""
+    try:
+        session_analytics = analytics_storage.get_analytics_by_session(session_id)
+        return {
+            "status": "success",
+            "data": session_analytics,
+            "count": len(session_analytics),
+            "session_id": session_id,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting session analytics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve session analytics")
 
 # For local testing
 if __name__ == "__main__":
