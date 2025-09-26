@@ -1737,7 +1737,7 @@ async def verify_token_middleware(request: Request, call_next):
                 usage_tracker.track_location_request(location, endpoint)
 
     # Public paths that don't require a token
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/api/analytics"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
@@ -1873,10 +1873,10 @@ async def root():
             "/cache/clear"
         ],
         "analytics_endpoints": [
-            "/api/analytics",
-            "/api/analytics/summary", 
-            "/api/analytics/recent",
-            "/api/analytics/session/{session_id}"
+            "/analytics",
+            "/analytics/summary", 
+            "/analytics/recent",
+            "/analytics/session/{session_id}"
         ]
     }
 
@@ -3826,7 +3826,7 @@ def protected_route(user=Depends(verify_firebase_token)):
     return {"message": "You are authenticated!", "user": user}
 
 # Analytics Endpoints
-@app.post("/api/analytics", response_model=AnalyticsResponse)
+@app.post("/analytics", response_model=AnalyticsResponse)
 async def submit_analytics(analytics_data: AnalyticsData, request: Request):
     """Submit client analytics data for monitoring and error tracking."""
     try:
@@ -3846,7 +3846,7 @@ async def submit_analytics(analytics_data: AnalyticsData, request: Request):
         logger.error(f"Error submitting analytics: {e}")
         raise HTTPException(status_code=500, detail="Failed to submit analytics data")
 
-@app.get("/api/analytics/summary")
+@app.get("/analytics/summary")
 async def get_analytics_summary():
     """Get analytics summary statistics."""
     try:
@@ -3860,7 +3860,7 @@ async def get_analytics_summary():
         logger.error(f"Error getting analytics summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve analytics summary")
 
-@app.get("/api/analytics/recent")
+@app.get("/analytics/recent")
 async def get_recent_analytics(limit: int = Query(100, ge=1, le=1000)):
     """Get recent analytics records."""
     try:
@@ -3875,7 +3875,7 @@ async def get_recent_analytics(limit: int = Query(100, ge=1, le=1000)):
         logger.error(f"Error getting recent analytics: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve recent analytics")
 
-@app.get("/api/analytics/session/{session_id}")
+@app.get("/analytics/session/{session_id}")
 async def get_analytics_by_session(session_id: str):
     """Get analytics records for a specific session."""
     try:
