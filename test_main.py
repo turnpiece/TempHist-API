@@ -83,58 +83,7 @@ def test_calculate_trend_slope_insufficient_data():
     assert calculate_trend_slope([]) == 0.0
     assert calculate_trend_slope([{"x": 2024, "y": 17.0}]) == 0.0
 
-@pytest.mark.parametrize("location,month_day,expected_status", [
-    ("London", "05-15", 200),  # Valid date
-    ("London", "13-15", 400),  # Invalid month
-    ("London", "05-32", 400),  # Invalid day
-    ("London", "invalid", 400),  # Invalid format
-])
-def test_average_endpoint(client, location, month_day, expected_status):
-    """Test the average endpoint with various inputs"""
-    with patch('main.get_temperature_series', return_value=SAMPLE_TEMPERATURE_DATA):
-        response = client.get(
-            f"/average/{location}/{month_day}",
-            headers={"Authorization": "Bearer test_token"}
-        )
-        assert response.status_code == expected_status
-        if expected_status == 200:
-            data = response.json()
-            assert "average" in data
-            assert "unit" in data
-            assert data["unit"] == "celsius"
-            assert "data_points" in data
-            assert "year_range" in data
-            assert "completeness" in data
-            assert "missing_years" in data
-
-def test_average_endpoint_no_token(client):
-    """Test the average endpoint without an API token"""
-    response = client.get("/average/London/05-15")
-    assert response.status_code == 401
-    assert "Missing or invalid Authorization header." in response.json()["detail"]
-
-@pytest.mark.parametrize("location,month_day,expected_status", [
-    ("London", "05-15", 200),  # Valid date
-    ("London", "13-15", 400),  # Invalid month
-    ("London", "05-32", 400),  # Invalid day
-    ("London", "invalid", 400),  # Invalid format
-])
-def test_trend_endpoint(client, location, month_day, expected_status):
-    """Test the trend endpoint with various inputs"""
-    with patch('main.get_temperature_series', return_value=SAMPLE_TEMPERATURE_DATA):
-        response = client.get(
-            f"/trend/{location}/{month_day}",
-            headers={"Authorization": "Bearer test_token"}
-        )
-        assert response.status_code == expected_status
-        if expected_status == 200:
-            data = response.json()
-            assert "slope" in data
-            assert "units" in data
-            assert data["units"] == "°C/decade"
-            assert "data_points" in data
-            assert "completeness" in data
-            assert "missing_years" in data
+# Legacy endpoint tests removed - endpoints have been removed
 
 def test_weather_endpoint(client):
     """Test the weather endpoint"""
@@ -154,18 +103,7 @@ def test_weather_endpoint(client):
         assert len(data["days"]) > 0
         assert "temp" in data["days"][0]
 
-def test_summary_endpoint(client):
-    """Test the summary endpoint"""
-    with patch('main.get_temperature_series', return_value=SAMPLE_TEMPERATURE_DATA):
-        response = client.get(
-            "/summary/London/05-15",
-            headers={"Authorization": "Bearer test_token"}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "summary" in data
-        assert isinstance(data["summary"], str)
-        assert len(data["summary"]) > 0
+# Legacy summary endpoint test removed - endpoint has been removed
 
 @pytest.mark.asyncio
 async def test_get_temperature_series_success():
@@ -701,7 +639,7 @@ class TestRateLimitingManual:
         # Make a few requests to see rate limiting in action
         for i in range(3):
             response = client.get(
-                "/average/London/05-15",
+                "/v1/records/daily/London/05-15",
                 headers={"Authorization": "Bearer test_token"}
             )
             # Should succeed initially
@@ -944,22 +882,23 @@ class TestV1API:
             assert "identifier" in data
             assert "metadata" in data
     
-    def test_v1_legacy_compatibility(self, client):
-        """Test that legacy endpoints show deprecation headers"""
-        # Test that legacy endpoints exist and show deprecation warnings
-        response = client.get(
+    def test_removed_endpoints_return_410(self, client):
+        """Test that removed legacy endpoints return 410 Gone"""
+        removed_endpoints = [
             "/data/london/01-15",
-            headers={"Authorization": "Bearer test_token"}
-        )
-        # Legacy endpoint should either work or show proper error handling
-        assert response.status_code in [200, 500]  # Allow for errors in test environment
+            "/average/london/01-15", 
+            "/trend/london/01-15",
+            "/summary/london/01-15"
+        ]
         
-        # If it works, check for deprecation headers
-        if response.status_code == 200:
-            assert "X-Deprecated" in response.headers
-            assert "X-New-Endpoint" in response.headers
-            assert response.headers["X-Deprecated"] == "true"
-            assert "/v1/records/daily/london/01-15" in response.headers["X-New-Endpoint"]
+        for endpoint in removed_endpoints:
+            response = client.get(endpoint, headers={"Authorization": "Bearer test_token"})
+            assert response.status_code == 410
+            data = response.json()
+            assert "error" in data
+            assert "Endpoint removed" in data["error"]
+            assert "X-Removed" in response.headers
+            assert response.headers["X-Removed"] == "true"
     
     def test_v1_error_handling(self, client):
         """Test v1 API error handling"""

@@ -1,22 +1,24 @@
 # Migration Guide: Legacy to V1 API
 
-This guide helps you migrate from the legacy TempHist API endpoints to the new v1 API structure.
+⚠️ **IMPORTANT: Legacy endpoints have been removed as of the latest version.**
+
+This guide documents the migration from the removed legacy TempHist API endpoints to the new v1 API structure.
 
 ## Overview
 
-The new v1 API provides a unified structure for accessing temperature records across different time periods (daily, weekly, monthly, yearly) with consistent response formats and subresource endpoints.
+The legacy endpoints have been completely removed and now return `410 Gone` responses. The new v1 API provides a unified structure for accessing temperature records across different time periods (daily, weekly, monthly, yearly) with consistent response formats and subresource endpoints.
 
 ## Key Changes
 
-### 1. New Endpoint Structure
+### 1. Endpoint Structure
 
-**Old (Legacy):**
+**Removed (Legacy):**
 
 ```
-/data/{location}/{month_day}
-/average/{location}/{month_day}
-/trend/{location}/{month_day}
-/summary/{location}/{month_day}
+/data/{location}/{month_day}          → 410 Gone
+/average/{location}/{month_day}       → 410 Gone
+/trend/{location}/{month_day}         → 410 Gone
+/summary/{location}/{month_day}       → 410 Gone
 ```
 
 **New (V1):**
@@ -227,16 +229,16 @@ console.log(`Available years: ${metadata.available_years}`);
 
 ## Backward Compatibility
 
-- Legacy endpoints continue to work but are marked as deprecated
-- Legacy endpoints proxy to the new v1 logic internally
-- Response format is converted to maintain compatibility
-- Deprecation headers are included in responses
+- **Legacy endpoints have been removed** and return `410 Gone` responses
+- Removed endpoints include helpful migration information in the response
+- Response includes `X-Removed` header and `X-New-Endpoint` header
+- All functionality is now available through v1 endpoints only
 
 ## Timeline
 
-- **Phase 1 (Current)**: Both legacy and v1 endpoints available
-- **Phase 2 (Future)**: Legacy endpoints show deprecation warnings
-- **Phase 3 (Future)**: Legacy endpoints removed
+- **Phase 1 (Completed)**: Legacy endpoints were deprecated
+- **Phase 2 (Completed)**: Legacy endpoints showed deprecation warnings
+- **Phase 3 (Current)**: Legacy endpoints have been removed (410 Gone)
 
 ## Getting Help
 

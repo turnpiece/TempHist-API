@@ -218,16 +218,18 @@ The `include` and `exclude` parameters allow you to control which sections are r
 - **Data Visualization**: Create comprehensive temperature charts
 - **Research**: Analyze temperature patterns across different time scales
 
-### Legacy Endpoints (Deprecated)
+### Removed Endpoints
 
-⚠️ **These endpoints are deprecated and will be removed in a future version. Please migrate to v1 endpoints.**
+❌ **These endpoints have been removed. Please use v1 endpoints instead.**
 
-| Endpoint                              | Description                      | Format  | V1 Equivalent                                      |
-| ------------------------------------- | -------------------------------- | ------- | -------------------------------------------------- |
-| `GET /data/{location}/{month_day}`    | Complete data package            | `MM-DD` | `/v1/records/daily/{location}/{month_day}`         |
-| `GET /average/{location}/{month_day}` | Historical average temperature   | `MM-DD` | `/v1/records/daily/{location}/{month_day}/average` |
-| `GET /trend/{location}/{month_day}`   | Temperature trend over time      | `MM-DD` | `/v1/records/daily/{location}/{month_day}/trend`   |
-| `GET /summary/{location}/{month_day}` | Text summary of temperature data | `MM-DD` | `/v1/records/daily/{location}/{month_day}/summary` |
+| Removed Endpoint                      | V1 Equivalent                                      |
+| ------------------------------------- | -------------------------------------------------- |
+| `GET /data/{location}/{month_day}`    | `/v1/records/daily/{location}/{month_day}`         |
+| `GET /average/{location}/{month_day}` | `/v1/records/daily/{location}/{month_day}/average` |
+| `GET /trend/{location}/{month_day}`   | `/v1/records/daily/{location}/{month_day}/trend`   |
+| `GET /summary/{location}/{month_day}` | `/v1/records/daily/{location}/{month_day}/summary` |
+
+**Note:** Removed endpoints return `410 Gone` with migration information.
 
 ### Other Endpoints
 

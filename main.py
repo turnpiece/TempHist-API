@@ -1641,14 +1641,16 @@ async def root():
                 "/v1/records/rolling-bundle/london/2024-01-15"
             ]
         },
-        "legacy_endpoints": {
-            "deprecated": [
-            "/data/{location}/{month_day}",
-            "/average/{location}/{month_day}",
-            "/trend/{location}/{month_day}",
+        "removed_endpoints": {
+            "status": "removed",
+            "endpoints": [
+                "/data/{location}/{month_day}",
+                "/average/{location}/{month_day}",
+                "/trend/{location}/{month_day}",
                 "/summary/{location}/{month_day}"
             ],
-            "note": "Legacy endpoints are deprecated. Please migrate to v1 endpoints."
+            "note": "These endpoints have been removed. Please use v1 endpoints instead.",
+            "migration": "Use /v1/records/daily/{location}/{month_day} and subresources"
         },
         "other_endpoints": [
             "/weather/{location}/{date}",
@@ -3530,6 +3532,82 @@ async def get_record_summary(
     except Exception as e:
         logger.error(f"Error in v1 records summary endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+# ============================================================================
+# REMOVED ENDPOINTS (410 Gone)
+# ============================================================================
+
+@app.get("/data/{location}/{month_day}")
+async def removed_data_endpoint():
+    """Legacy data endpoint has been removed. Use /v1/records/daily/{location}/{month_day} instead."""
+    return JSONResponse(
+        content={
+            "error": "Endpoint removed",
+            "message": "This endpoint has been removed. Please use the v1 API instead.",
+            "new_endpoint": "/v1/records/daily/{location}/{month_day}",
+            "migration_guide": "/"
+        },
+        status_code=410,
+        headers={
+            "X-Removed": "true",
+            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}",
+            "Cache-Control": "no-cache"
+        }
+    )
+
+@app.get("/average/{location}/{month_day}")
+async def removed_average_endpoint():
+    """Legacy average endpoint has been removed. Use /v1/records/daily/{location}/{month_day}/average instead."""
+    return JSONResponse(
+        content={
+            "error": "Endpoint removed",
+            "message": "This endpoint has been removed. Please use the v1 API instead.",
+            "new_endpoint": "/v1/records/daily/{location}/{month_day}/average",
+            "migration_guide": "/"
+        },
+        status_code=410,
+        headers={
+            "X-Removed": "true",
+            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/average",
+            "Cache-Control": "no-cache"
+        }
+    )
+
+@app.get("/trend/{location}/{month_day}")
+async def removed_trend_endpoint():
+    """Legacy trend endpoint has been removed. Use /v1/records/daily/{location}/{month_day}/trend instead."""
+    return JSONResponse(
+        content={
+            "error": "Endpoint removed",
+            "message": "This endpoint has been removed. Please use the v1 API instead.",
+            "new_endpoint": "/v1/records/daily/{location}/{month_day}/trend",
+            "migration_guide": "/"
+        },
+        status_code=410,
+        headers={
+            "X-Removed": "true",
+            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/trend",
+            "Cache-Control": "no-cache"
+        }
+    )
+
+@app.get("/summary/{location}/{month_day}")
+async def removed_summary_endpoint():
+    """Legacy summary endpoint has been removed. Use /v1/records/daily/{location}/{month_day}/summary instead."""
+    return JSONResponse(
+        content={
+            "error": "Endpoint removed",
+            "message": "This endpoint has been removed. Please use the v1 API instead.",
+            "new_endpoint": "/v1/records/daily/{location}/{month_day}/summary",
+            "migration_guide": "/"
+        },
+        status_code=410,
+        headers={
+            "X-Removed": "true",
+            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/summary",
+            "Cache-Control": "no-cache"
+        }
+    )
 
 @app.get("/protected-endpoint")
 def protected_route(user=Depends(verify_firebase_token)):
