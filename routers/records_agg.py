@@ -9,7 +9,7 @@ from dateutil.relativedelta import relativedelta
 
 router = APIRouter()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
-UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "metric")
+UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
 _client: Optional[aiohttp.ClientSession] = None
 _sem = asyncio.Semaphore(2)
@@ -175,7 +175,7 @@ class RollingBundleResponse(BaseModel):
     period: str = "rolling"
     location: str
     anchor: date
-    unit_group: Literal["metric", "us"]
+    unit_group: Literal["celsius", "fahrenheit"]
     # Daily data (anchor day and previous days)
     day: Optional[Dict] = None  # Complete daily endpoint response
     previous_days: List[Dict] = []  # List of previous days' complete responses
@@ -391,7 +391,7 @@ def _series_for_window(
 async def rolling_bundle(
     location: str,
     anchor: str,
-    unit_group: Literal["metric", "us"] = Query(UNIT_GROUP_DEFAULT),
+    unit_group: Literal["celsius", "fahrenheit"] = Query(UNIT_GROUP_DEFAULT),
     month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
     days_back: int = Query(DEFAULT_DAYS_BACK, ge=0, le=10, description="Number of previous days to include (0-10)"),
     include: str | None = Query(None, description="CSV of sections to include"),

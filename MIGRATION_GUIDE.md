@@ -128,7 +128,7 @@ async with httpx.AsyncClient() as client:
     "end": "2024-01-15",
     "years": 55
   },
-  "unit_group": "metric",
+  "unit_group": "celsius",
   "values": [
     {
       "date": "1970-01-15",

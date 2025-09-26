@@ -153,7 +153,7 @@ The rolling bundle endpoint provides cross-year temperature series for multiple 
 
 - `location`: Location name (e.g., "london", "new_york")
 - `anchor`: Anchor date in YYYY-MM-DD format (e.g., "2024-01-15")
-- `unit_group`: Temperature unit group - "metric" (default) or "us"
+- `unit_group`: Temperature unit - "celsius" (default) or "fahrenheit"
 - `month_mode`: Month calculation mode - "rolling1m" (default), "calendar", or "rolling30d"
 - `days_back`: Number of previous days to include (0-10, default: 0)
 - `include`: CSV of sections to include (valid: day, week, month, year). If present, exclude is ignored.

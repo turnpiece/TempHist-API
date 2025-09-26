@@ -56,7 +56,7 @@ class TemperatureValue(BaseModel):
     """Individual temperature data point."""
     date: str = Field(..., description="Date in YYYY-MM-DD format")
     year: int = Field(..., description="Year")
-    temperature: float = Field(..., description="Temperature in Celsius")
+    temperature: float = Field(..., description="Temperature value")
 
 class DateRange(BaseModel):
     """Date range for the data."""
@@ -67,13 +67,13 @@ class DateRange(BaseModel):
 class AverageData(BaseModel):
     """Average temperature statistics."""
     mean: float = Field(..., description="Mean temperature")
-    unit: str = Field("celsius", description="Temperature unit")
+    unit: str = Field("celsius", description="Temperature unit (celsius or fahrenheit)")
     data_points: int = Field(..., description="Number of data points used")
 
 class TrendData(BaseModel):
     """Temperature trend analysis."""
-    slope: float = Field(..., description="Temperature change per decade in Celsius")
-    unit: str = Field("°C/decade", description="Trend unit")
+    slope: float = Field(..., description="Temperature change per decade")
+    unit: str = Field("°C/decade", description="Trend unit (changes based on temperature unit)")
     data_points: int = Field(..., description="Number of data points used")
     r_squared: Optional[float] = Field(None, description="R-squared value for trend fit")
 
@@ -83,7 +83,7 @@ class RecordResponse(BaseModel):
     location: str = Field(..., description="Location name")
     identifier: str = Field(..., description="Date identifier (MM-DD for daily, YYYY-MM for monthly, etc.)")
     range: DateRange = Field(..., description="Date range covered")
-    unit_group: str = Field("metric", description="Unit group used")
+    unit_group: str = Field("celsius", description="Temperature unit used")
     values: List[TemperatureValue] = Field(..., description="Temperature data points")
     average: AverageData = Field(..., description="Average temperature statistics")
     trend: TrendData = Field(..., description="Temperature trend analysis")
@@ -436,7 +436,7 @@ else:
 
 # API Configuration
 VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
-VISUAL_CROSSING_UNIT_GROUP = "metric"
+VISUAL_CROSSING_UNIT_GROUP = "metric"  # Visual Crossing API still uses "metric"/"us"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
 VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 
@@ -2004,7 +2004,11 @@ def get_friendly_date(date: datetime) -> str:
     return f"{day}{suffix} {date.strftime('%B')}"
 
 def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily") -> str:
-    """Generate a summary text for temperature data."""
+    """Generate a summary text for temperature data.
+    
+    Note: Time-sensitive summaries (e.g., "the past week/month/year") should have
+    very short cache durations (minutes) as they become invalid quickly.
+    """
     # Filter out data points with None temperature
     data = [d for d in data if d.get('y') is not None]
     if not data or len(data) < 2:
@@ -2078,6 +2082,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             tense_warm_cold = "is"
         elif period_ended_recently:
             # Period ended recently - use past tense with "past" qualifier
+            # For very recent periods, we could use "has been" but "was" is clearer
             tense_context = "was"
             tense_context_alt = "was"
             tense_warm_cold = "was"
@@ -2129,7 +2134,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
                 cold_summary = f"It's colder than last year."
         # If equal to last year, no warm/cold summary is generated
 
-    # Generate period-appropriate language with correct tense
+    # Generate period-appropriate language with correct tense and context
     if period == "daily":
         if target_date == today:
             period_context = "today"
@@ -2148,8 +2153,11 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = "the past week"
             period_context_alt = "the past week"
         else:
-            period_context = "that week"
-            period_context_alt = "that week"
+            # For distant past weeks, use more specific language
+            day = target_date.day
+            suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+            period_context = f"the week ending {day}{suffix} {target_date.strftime('%B')}"
+            period_context_alt = period_context
     elif period == "monthly":
         if tense_context == "is":
             period_context = "this month"
@@ -2158,8 +2166,11 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = "the past month"
             period_context_alt = "the past month"
         else:
-            period_context = "that month"
-            period_context_alt = "that month"
+            # For distant past months, use more specific language
+            day = target_date.day
+            suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+            period_context = f"the month ending {day}{suffix} {target_date.strftime('%B')}"
+            period_context_alt = period_context
     elif period == "yearly":
         if tense_context == "is":
             period_context = "this year"
@@ -2168,8 +2179,11 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = "the past year"
             period_context_alt = "the past year"
         else:
-            period_context = "that year"
-            period_context_alt = "that year"
+            # For distant past years, use more specific language
+            day = target_date.day
+            suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+            period_context = f"the year ending {day}{suffix} {target_date.strftime('%B %Y')}"
+            period_context_alt = period_context
     else:
         if tense_context == "is":
             period_context = "this period"
@@ -3017,7 +3031,7 @@ async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, u
     
     return yearly_data
 
-async def get_temperature_data_v1(location: str, period: str, identifier: str) -> Dict:
+async def get_temperature_data_v1(location: str, period: str, identifier: str, unit_group: str = "celsius") -> Dict:
     """Get temperature data for v1 API with unified logic using historysummary for weekly/monthly/yearly."""
     # Parse identifier based on period (all use MM-DD format representing end date)
     month, day, period_type = parse_identifier(period, identifier)
@@ -3252,11 +3266,11 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
     if all_temps:
         avg_data = AverageData(
             mean=round(sum(all_temps) / len(all_temps), 1),
-            unit="celsius",
+            unit=unit_group,
             data_points=len(all_temps)
         )
     else:
-        avg_data = AverageData(mean=0.0, unit="celsius", data_points=0)
+        avg_data = AverageData(mean=0.0, unit=unit_group, data_points=0)
     
     # Calculate trend
     if len(values) >= 2:
@@ -3264,12 +3278,12 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
         slope = calculate_trend_slope(trend_input)
         trend_data = TrendData(
             slope=slope,
-            unit="°C/decade",
+            unit="°C/decade" if unit_group == "celsius" else "°F/decade",
             data_points=len(values),
             r_squared=None
         )
     else:
-        trend_data = TrendData(slope=0.0, unit="°C/decade", data_points=len(values))
+        trend_data = TrendData(slope=0.0, unit="°C/decade" if unit_group == "celsius" else "°F/decade", data_points=len(values))
     
     # Generate summary using existing logic
     from datetime import datetime
@@ -3306,7 +3320,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str) -
         "location": location,
         "identifier": identifier,
         "range": range_data.model_dump(),
-        "unit_group": "metric",
+        "unit_group": unit_group,
         "values": [v.model_dump() for v in values],
         "average": avg_data.model_dump(),
         "trend": trend_data.model_dump(),

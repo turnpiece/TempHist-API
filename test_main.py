@@ -824,8 +824,8 @@ class TestV1API:
                     "range": {"start": "1974-01-15", "end": "2024-01-15"},
                     "unit_group": "celsius",
                     "values": [{"date": "2024-01-15", "temp": 15.0}],
-                    "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1},
-                    "trend": {"slope": 0.1, "data_points": 1},
+                    "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1, "unit": "celsius"},
+                    "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
                     "summary": "Test summary"
                 }
             
@@ -862,8 +862,8 @@ class TestV1API:
                 "range": {"start": "1974-01-15", "end": "2024-01-15"},
                 "unit_group": "celsius",
                 "values": [{"date": "2024-01-15", "temp": 15.0}],
-                "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1},
-                "trend": {"slope": 0.1, "data_points": 1},
+                "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1, "unit": "celsius"},
+                "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
                 "summary": "Test summary",
                 "metadata": {"total_years": 1, "available_years": 1, "missing_years": [], "completeness": 100.0}
             }
