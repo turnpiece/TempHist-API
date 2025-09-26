@@ -457,18 +457,10 @@ async def rolling_bundle(
     async def get_period_response(period: str, anchor_date: date) -> Optional[Dict]:
         """Get complete endpoint response for a given period."""
         try:
-            if period == "weekly":
+            if period in ["weekly", "monthly", "yearly"]:
                 mmdd = anchor_date.strftime("%m-%d")
                 from main import get_temperature_data_v1
-                return await get_temperature_data_v1(location, "weekly", mmdd)
-            elif period == "monthly":
-                mmdd = anchor_date.strftime("%m-%d")
-                from main import get_temperature_data_v1
-                return await get_temperature_data_v1(location, "monthly", mmdd)
-            elif period == "yearly":
-                # Use December 31st as the identifier for yearly data
-                from main import get_temperature_data_v1
-                return await get_temperature_data_v1(location, "yearly", "12-31")
+                return await get_temperature_data_v1(location, period, mmdd)
             return None
         except Exception as e:
             return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
