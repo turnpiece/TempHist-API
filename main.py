@@ -1737,7 +1737,7 @@ async def verify_token_middleware(request: Request, call_next):
                 usage_tracker.track_location_request(location, endpoint)
 
     # Public paths that don't require a token
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
@@ -2229,6 +2229,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     yesterday = today - timedelta(days=1)
     target_date = date.date()
     
+    
     # For non-daily periods, determine if the period includes today or ended recently
     if period == "daily":
         if target_date == today:
@@ -2273,21 +2274,21 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_ended_recently = target_date == yesterday
         
         if period_includes_today:
-            # Period includes today - use present tense
-            tense_context = "is"
-            tense_context_alt = "is"
-            tense_warm_cold = "is"
+            # Period includes today - use present perfect for consistency
+            tense_context = "has been"
+            tense_context_alt = "has been"
+            tense_warm_cold = "has been"
         elif period_ended_recently:
-            # Period ended recently - use past tense with "past" qualifier
-            # For very recent periods, we could use "has been" but "was" is clearer
-            tense_context = "was"
-            tense_context_alt = "was"
-            tense_warm_cold = "was"
+            # Period ended recently - use past perfect for consistency
+            tense_context = "had been"
+            tense_context_alt = "had been"
+            tense_warm_cold = "had been"
         else:
             # Period is in the past - use past tense
             tense_context = "was"
             tense_context_alt = "was"
             tense_warm_cold = "was"
+        
 
     previous = [p for p in data[:-1] if p.get('y') is not None]
     is_warmest = all(latest['y'] >= p['y'] for p in previous)
@@ -2343,10 +2344,10 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = "that day"
             period_context_alt = "that date"
     elif period == "weekly":
-        if tense_context == "is":
+        if tense_context == "has been":
             period_context = "this week"
             period_context_alt = "this week"
-        elif period_ended_recently:
+        elif tense_context == "had been":
             period_context = "the past week"
             period_context_alt = "the past week"
         else:
@@ -2356,10 +2357,10 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = f"the week ending {day}{suffix} {target_date.strftime('%B')}"
             period_context_alt = period_context
     elif period == "monthly":
-        if tense_context == "is":
+        if tense_context == "has been":
             period_context = "this month"
             period_context_alt = "this month"
-        elif period_ended_recently:
+        elif tense_context == "had been":
             period_context = "the past month"
             period_context_alt = "the past month"
         else:
@@ -2369,10 +2370,10 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = f"the month ending {day}{suffix} {target_date.strftime('%B')}"
             period_context_alt = period_context
     elif period == "yearly":
-        if tense_context == "is":
+        if tense_context == "has been":
             period_context = "this year"
             period_context_alt = "this year"
-        elif period_ended_recently:
+        elif tense_context == "had been":
             period_context = "the past year"
             period_context_alt = "the past year"
         else:
@@ -2382,10 +2383,10 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = f"the year ending {day}{suffix} {target_date.strftime('%B %Y')}"
             period_context_alt = period_context
     else:
-        if tense_context == "is":
+        if tense_context == "has been":
             period_context = "this period"
             period_context_alt = "this period"
-        elif period_ended_recently:
+        elif tense_context == "had been":
             period_context = "the past period"
             period_context_alt = "the past period"
         else:
@@ -2395,13 +2396,31 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     if abs(diff) < 0.05:
         avg_summary = f"It {tense_context_alt} about average for {period_context_alt}."
     elif diff > 0:
-        period_capitalized = period_context.capitalize()
-        avg_summary = "However, " if cold_summary else ""
-        avg_summary += f"{period_capitalized} {tense_context} {rounded_diff}°C warmer than average."
+        # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
+        if period in ["weekly", "monthly", "yearly"]:
+            avg_summary = "However, " if cold_summary else ""
+            avg_summary += f"It was {rounded_diff}°C warmer than average."
+        else:
+            # For daily periods, use the period context
+            if period == "daily" and period_context in ["today", "yesterday"]:
+                period_capitalized = period_context
+            else:
+                period_capitalized = period_context.capitalize()
+            avg_summary = "However, " if cold_summary else ""
+            avg_summary += f"{period_capitalized} {tense_context} {rounded_diff}°C warmer than average."
     else:
-        period_capitalized = period_context.capitalize()
-        avg_summary = "However, " if warm_summary else ""
-        avg_summary += f"{period_capitalized} {tense_context} {abs(rounded_diff)}°C cooler than average."
+        # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
+        if period in ["weekly", "monthly", "yearly"]:
+            avg_summary = "However, " if warm_summary else ""
+            avg_summary += f"It was {abs(rounded_diff)}°C cooler than average."
+        else:
+            # For daily periods, use the period context
+            if period == "daily" and period_context in ["today", "yesterday"]:
+                period_capitalized = period_context
+            else:
+                period_capitalized = period_context.capitalize()
+            avg_summary = "However, " if warm_summary else ""
+            avg_summary += f"{period_capitalized} {tense_context} {abs(rounded_diff)}°C cooler than average."
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
@@ -2522,6 +2541,94 @@ async def get_forecast(location: str):
             content={"error": f"Forecast error: {str(e)}"},
             status_code=500
         )
+
+@app.get("/health")
+async def health_check():
+    """Comprehensive health check endpoint for load balancers and monitoring."""
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "services": {}
+    }
+    
+    overall_healthy = True
+    
+    # Check Redis connection
+    try:
+        set_cache("health_check", timedelta(minutes=1), "test_value")
+        test_value = get_cache("health_check", endpoint="health", location="test")
+        if test_value and test_value.decode('utf-8') == "test_value":
+            health_status["services"]["redis"] = {
+                "status": "healthy",
+                "message": "Connection successful"
+            }
+        else:
+            health_status["services"]["redis"] = {
+                "status": "unhealthy",
+                "message": "Cache test failed"
+            }
+            overall_healthy = False
+    except Exception as e:
+        health_status["services"]["redis"] = {
+            "status": "unhealthy",
+            "message": f"Connection error: {str(e)}"
+        }
+        overall_healthy = False
+    
+    # Check API keys
+    api_keys_healthy = True
+    if not API_KEY:
+        health_status["services"]["visual_crossing_api"] = {
+            "status": "unhealthy",
+            "message": "API key not configured"
+        }
+        api_keys_healthy = False
+    else:
+        health_status["services"]["visual_crossing_api"] = {
+            "status": "healthy",
+            "message": "API key configured"
+        }
+    
+    if not OPENWEATHER_API_KEY:
+        health_status["services"]["openweather_api"] = {
+            "status": "unhealthy",
+            "message": "API key not configured"
+        }
+        api_keys_healthy = False
+    else:
+        health_status["services"]["openweather_api"] = {
+            "status": "healthy",
+            "message": "API key configured"
+        }
+    
+    if not api_keys_healthy:
+        overall_healthy = False
+    
+    # Check cache statistics if available
+    try:
+        if hasattr(cache_stats, 'get_cache_health'):
+            cache_health = cache_stats.get_cache_health()
+            health_status["services"]["cache"] = cache_health
+            if cache_health.get("status") != "healthy":
+                overall_healthy = False
+    except Exception as e:
+        health_status["services"]["cache"] = {
+            "status": "unknown",
+            "message": f"Cache stats unavailable: {str(e)}"
+        }
+    
+    # Set overall status
+    health_status["status"] = "healthy" if overall_healthy else "unhealthy"
+    
+    # Return appropriate HTTP status code
+    status_code = 200 if overall_healthy else 503
+    
+    return JSONResponse(
+        content=health_status,
+        status_code=status_code,
+        headers={"Cache-Control": "no-cache"}
+    )
 
 @app.get("/test-redis")
 async def test_redis():
