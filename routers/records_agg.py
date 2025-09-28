@@ -552,9 +552,9 @@ async def _rolling_bundle_impl(
     if inc:
         wanted = inc
     else:
-        # Default to only day and week to prevent timeouts
-        # Users can explicitly request month/year if needed
-        wanted = {"day", "week"} - exc
+        # Default to all sections for full functionality
+        # Users can exclude sections if needed
+        wanted = ALLOWED_SECTIONS - exc
     
     # Get the anchor day's complete daily response
     async def get_daily_response(anchor_date: date) -> Dict:
@@ -566,18 +566,28 @@ async def _rolling_bundle_impl(
         except Exception as e:
             return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
 
-    # Get the anchor day's response (only if day is wanted)
-    day_response = None
+    # Get daily responses concurrently (anchor day + previous days)
+    daily_tasks = []
     if "day" in wanted:
-        day_response = await get_daily_response(anchor_d)
+        daily_tasks.append(("anchor", get_daily_response(anchor_d)))
     
-    # Get previous days' responses (controlled by days_back parameter)
-    previous_days = []
     if days_back > 0:
         for i in range(1, days_back + 1):
             prev_date = anchor_d - timedelta(days=i)
-            prev_response = await get_daily_response(prev_date)
-            previous_days.append(prev_response)
+            daily_tasks.append((f"day_{i}", get_daily_response(prev_date)))
+    
+    # Execute all daily requests concurrently
+    daily_results = {}
+    if daily_tasks:
+        results = await asyncio.gather(*[task[1] for task in daily_tasks], return_exceptions=True)
+        for i, (day_name, result) in enumerate(zip([task[0] for task in daily_tasks], results)):
+            if isinstance(result, Exception):
+                daily_results[day_name] = {"error": str(result), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+            else:
+                daily_results[day_name] = result
+    
+    day_response = daily_results.get("anchor")
+    previous_days = [daily_results[f"day_{i}"] for i in range(1, days_back + 1) if f"day_{i}" in daily_results]
 
     # Get complete responses for weekly, monthly, and yearly
     async def get_period_response(period: str, anchor_date: date) -> Optional[Dict]:
@@ -622,7 +632,7 @@ async def _rolling_bundle_impl(
     else:  # rolling30d
         notes = "Month uses fixed 30-day rolling window ending on anchor (consistent with /v1/records/monthly)."
     
-    notes += f" Includes {days_back} previous days. Weekly/monthly/yearly data uses historysummary endpoints for 50-year coverage. Default includes only day and week data to prevent timeouts - use ?include=day,week,month,year to get all sections."
+    notes += f" Includes {days_back} previous days. Weekly/monthly/yearly data uses historysummary endpoints for 50-year coverage. All API calls are optimized to run concurrently for better performance."
 
     # Build response with only requested sections
     response_data = {
