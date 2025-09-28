@@ -11,6 +11,11 @@ router = APIRouter()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
+@router.api_route("/v1/records/rolling-bundle/test-cors", methods=["GET", "OPTIONS"])
+async def test_rolling_bundle_cors():
+    """Test CORS for rolling-bundle endpoint"""
+    return {"message": "CORS is working for rolling-bundle", "path": "/v1/records/rolling-bundle/test-cors"}
+
 @router.get("/v1/records/rolling-bundle/{location}/{anchor}/preload")
 async def rolling_bundle_preload(
     location: str,
@@ -514,6 +519,27 @@ async def rolling_bundle(
     - ?exclude=day
     - ?days_back=3 (includes 3 previous days regardless of include/exclude)
     """
+    try:
+        # Add timeout protection to prevent 524 errors
+        return await asyncio.wait_for(
+            _rolling_bundle_impl(location, anchor, unit_group, month_mode, days_back, include, exclude),
+            timeout=90.0  # 90 seconds timeout - should be under Cloudflare's 100s limit
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504, 
+            detail="Request timeout - try reducing the number of included sections or contact support"
+        )
+
+async def _rolling_bundle_impl(
+    location: str,
+    anchor: str,
+    unit_group: Literal["celsius", "fahrenheit"],
+    month_mode: Literal["calendar", "rolling1m", "rolling30d"],
+    days_back: int,
+    include: str | None,
+    exclude: str | None,
+):
     anchor_d = _safe_parse_date(anchor)
     
     # Parse CSV parameters and determine which sections to include
@@ -526,6 +552,8 @@ async def rolling_bundle(
     if inc:
         wanted = inc
     else:
+        # Default to all sections for full functionality
+        # Users can exclude sections if needed
         wanted = ALLOWED_SECTIONS - exc
     
     # Get the anchor day's complete daily response
@@ -538,18 +566,28 @@ async def rolling_bundle(
         except Exception as e:
             return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
 
-    # Get the anchor day's response (only if day is wanted)
-    day_response = None
+    # Get daily responses concurrently (anchor day + previous days)
+    daily_tasks = []
     if "day" in wanted:
-        day_response = await get_daily_response(anchor_d)
+        daily_tasks.append(("anchor", get_daily_response(anchor_d)))
     
-    # Get previous days' responses (controlled by days_back parameter)
-    previous_days = []
     if days_back > 0:
         for i in range(1, days_back + 1):
             prev_date = anchor_d - timedelta(days=i)
-            prev_response = await get_daily_response(prev_date)
-            previous_days.append(prev_response)
+            daily_tasks.append((f"day_{i}", get_daily_response(prev_date)))
+    
+    # Execute all daily requests concurrently
+    daily_results = {}
+    if daily_tasks:
+        results = await asyncio.gather(*[task[1] for task in daily_tasks], return_exceptions=True)
+        for i, (day_name, result) in enumerate(zip([task[0] for task in daily_tasks], results)):
+            if isinstance(result, Exception):
+                daily_results[day_name] = {"error": str(result), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+            else:
+                daily_results[day_name] = result
+    
+    day_response = daily_results.get("anchor")
+    previous_days = [daily_results[f"day_{i}"] for i in range(1, days_back + 1) if f"day_{i}" in daily_results]
 
     # Get complete responses for weekly, monthly, and yearly
     async def get_period_response(period: str, anchor_date: date) -> Optional[Dict]:
@@ -563,18 +601,28 @@ async def rolling_bundle(
         except Exception as e:
             return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
 
-    # Get period responses (only if requested)
-    weekly_response = None
+    # Get period responses concurrently (only if requested)
+    period_tasks = []
     if "week" in wanted:
-        weekly_response = await get_period_response("weekly", anchor_d)
-    
-    monthly_response = None
+        period_tasks.append(("weekly", get_period_response("weekly", anchor_d)))
     if "month" in wanted:
-        monthly_response = await get_period_response("monthly", anchor_d)
-    
-    yearly_response = None
+        period_tasks.append(("monthly", get_period_response("monthly", anchor_d)))
     if "year" in wanted:
-        yearly_response = await get_period_response("yearly", anchor_d)
+        period_tasks.append(("yearly", get_period_response("yearly", anchor_d)))
+    
+    # Execute all period requests concurrently
+    period_results = {}
+    if period_tasks:
+        results = await asyncio.gather(*[task[1] for task in period_tasks], return_exceptions=True)
+        for i, (period_name, result) in enumerate(zip([task[0] for task in period_tasks], results)):
+            if isinstance(result, Exception):
+                period_results[period_name] = {"error": str(result), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+            else:
+                period_results[period_name] = result
+    
+    weekly_response = period_results.get("weekly")
+    monthly_response = period_results.get("monthly")
+    yearly_response = period_results.get("yearly")
 
     # Generate appropriate notes
     if month_mode == "calendar":
@@ -584,7 +632,7 @@ async def rolling_bundle(
     else:  # rolling30d
         notes = "Month uses fixed 30-day rolling window ending on anchor (consistent with /v1/records/monthly)."
     
-    notes += f" Includes {days_back} previous days. Weekly/monthly/yearly data uses historysummary endpoints for 50-year coverage."
+    notes += f" Includes {days_back} previous days. Weekly/monthly/yearly data uses historysummary endpoints for 50-year coverage. All API calls are optimized to run concurrently for better performance."
 
     # Build response with only requested sections
     response_data = {
@@ -625,3 +673,122 @@ async def rolling_bundle(
         response_data["yearly"] = yearly_response
 
     return RollingBundleResponse(**response_data)
+
+@router.get("/v1/records/rolling-bundle/{location}/{anchor}/status")
+async def rolling_bundle_status(
+    location: str,
+    anchor: str,
+    unit_group: Literal["celsius", "fahrenheit"] = Query(UNIT_GROUP_DEFAULT),
+):
+    """
+    Check if rolling-bundle data is available in cache.
+    Returns status and estimated completion time.
+    """
+    anchor_d = _safe_parse_date(anchor)
+    
+    # Check cache for recent data
+    cache_key = f"rolling_bundle:{location}:{anchor_d.isoformat()}:{unit_group}"
+    cached_data = await daily_cache.get(cache_key)
+    
+    if cached_data:
+        return {
+            "status": "ready",
+            "location": location,
+            "anchor": anchor_d,
+            "cached": True,
+            "message": "Data is available in cache"
+        }
+    else:
+        return {
+            "status": "not_cached",
+            "location": location,
+            "anchor": anchor_d,
+            "cached": False,
+            "message": "Data not in cache - request will take 30-90 seconds",
+            "suggestion": "Use /preload endpoint for faster response"
+        }
+
+@router.get("/v1/records/rolling-bundle/preload-example")
+async def preload_example():
+    """
+    Example of what the preload endpoint returns.
+    Shows the complete data structure with all chart data, summary, trend, and average.
+    """
+    return {
+        "description": "This is what the preload endpoint returns - complete data for your website",
+        "endpoint": "GET /v1/records/rolling-bundle/{location}/{anchor}/preload",
+        "example_url": "https://api.temphist.com/v1/records/rolling-bundle/London/2025-09-28/preload",
+        "data_structure": {
+            "location": "London, England, United Kingdom",
+            "anchor": "2025-09-28",
+            "unit_group": "celsius",
+            "metadata": {
+                "anchor_date": "2025-09-28",
+                "month_mode": "rolling1m",
+                "endpoint": "preload",
+                "optimized": True,
+                "included_sections": ["week", "month", "year"],
+                "data_sources": {
+                    "weekly": "historysummary API",
+                    "monthly": "historysummary API", 
+                    "yearly": "historysummary API"
+                }
+            },
+            "notes": "Preload endpoint - optimized for website data loading with complete chart data, summary, trend, and average.",
+            "weekly": {
+                "description": "Complete weekly endpoint response with all data",
+                "includes": ["values", "average", "trend", "summary", "metadata"],
+                "example": {
+                    "period": "weekly",
+                    "location": "London",
+                    "identifier": "09-28",
+                    "unit_group": "celsius",
+                    "values": [{"year": 2020, "temp": 15.2}, {"year": 2021, "temp": 16.1}],
+                    "count": 50,
+                    "average": {"mean": 15.8, "min": 12.3, "max": 19.2},
+                    "trend": {"slope": 0.05, "r_squared": 0.23},
+                    "summary": "Weekly temperatures show a slight warming trend...",
+                    "metadata": {"data_source": "Visual Crossing", "years_covered": "1975-2024"}
+                }
+            },
+            "monthly": {
+                "description": "Complete monthly endpoint response with all data",
+                "includes": ["values", "average", "trend", "summary", "metadata"],
+                "example": {
+                    "period": "monthly",
+                    "location": "London",
+                    "identifier": "09-28",
+                    "unit_group": "celsius",
+                    "values": [{"year": 2020, "temp": 15.2}, {"year": 2021, "temp": 16.1}],
+                    "count": 50,
+                    "average": {"mean": 15.8, "min": 12.3, "max": 19.2},
+                    "trend": {"slope": 0.05, "r_squared": 0.23},
+                    "summary": "Monthly temperatures show a slight warming trend...",
+                    "metadata": {"data_source": "Visual Crossing", "years_covered": "1975-2024"}
+                }
+            },
+            "yearly": {
+                "description": "Complete yearly endpoint response with all data",
+                "includes": ["values", "average", "trend", "summary", "metadata"],
+                "example": {
+                    "period": "yearly",
+                    "location": "London",
+                    "identifier": "09-28",
+                    "unit_group": "celsius",
+                    "values": [{"year": 2020, "temp": 15.2}, {"year": 2021, "temp": 16.1}],
+                    "count": 50,
+                    "average": {"mean": 15.8, "min": 12.3, "max": 19.2},
+                    "trend": {"slope": 0.05, "r_squared": 0.23},
+                    "summary": "Yearly temperatures show a slight warming trend...",
+                    "metadata": {"data_source": "Visual Crossing", "years_covered": "1975-2024"}
+                }
+            }
+        },
+        "key_differences_from_main_endpoint": {
+            "timeout": "60 seconds (vs 90 seconds for main endpoint)",
+            "sections": "Always includes week, month, year (no include/exclude params)",
+            "optimization": "Concurrent API calls instead of sequential",
+            "purpose": "Designed specifically for website preloading",
+            "data_completeness": "Same complete data structure as main endpoint"
+        }
+    }

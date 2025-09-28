@@ -1806,6 +1806,11 @@ async def test_cors():
     """Test endpoint for CORS"""
     return {"message": "CORS is working"}
 
+@app.api_route("/test-cors-rolling", methods=["GET", "OPTIONS"])
+async def test_cors_rolling():
+    """Test endpoint for CORS with rolling-bundle path"""
+    return {"message": "CORS is working for rolling-bundle", "path": "/test-cors-rolling"}
+
 @app.api_route("/", methods=["GET", "OPTIONS"])
 async def root():
     """Root endpoint that returns API information"""
@@ -2610,7 +2615,8 @@ async def health_check():
         if hasattr(cache_stats, 'get_cache_health'):
             cache_health = cache_stats.get_cache_health()
             health_status["services"]["cache"] = cache_health
-            if cache_health.get("status") != "healthy":
+            # Only consider cache "unhealthy" status as a failure, not "degraded"
+            if cache_health.get("status") == "unhealthy":
                 overall_healthy = False
     except Exception as e:
         health_status["services"]["cache"] = {
