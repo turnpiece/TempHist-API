@@ -11,6 +11,104 @@ router = APIRouter()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
+@router.get("/v1/records/rolling-bundle/{location}/{anchor}/preload")
+async def rolling_bundle_preload(
+    location: str,
+    anchor: str,
+    unit_group: Literal["celsius", "fahrenheit"] = Query(UNIT_GROUP_DEFAULT),
+    month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
+):
+    """
+    Optimized preload endpoint that returns complete chart data, summary, trend, and average.
+    Designed for website preloading with full data but optimized to prevent timeouts.
+    Returns the same data structure as the main rolling-bundle endpoint but with optimizations.
+    """
+    try:
+        return await asyncio.wait_for(
+            _rolling_bundle_preload_impl(location, anchor, unit_group, month_mode),
+            timeout=60.0  # 60 second timeout for preload (safer than 90s)
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504, 
+            detail="Preload timeout - try again later or use individual endpoints"
+        )
+
+async def _rolling_bundle_preload_impl(
+    location: str,
+    anchor: str,
+    unit_group: Literal["celsius", "fahrenheit"],
+    month_mode: Literal["calendar", "rolling1m", "rolling30d"],
+):
+    """Optimized implementation that returns complete data for website preloading"""
+    anchor_d = _safe_parse_date(anchor)
+    
+    # Get complete endpoint responses for weekly, monthly, and yearly
+    # This gives you the full data structure with chart data, summary, trend, and average
+    async def get_complete_period_response(period: str, anchor_date: date) -> Dict:
+        """Get complete endpoint response for a given period with all data"""
+        try:
+            if period in ["weekly", "monthly", "yearly"]:
+                mmdd = anchor_date.strftime("%m-%d")
+                from main import get_temperature_data_v1
+                return await get_temperature_data_v1(location, period, mmdd)
+            return {"error": "Invalid period", "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+        except Exception as e:
+            return {"error": str(e), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+    
+    # Get all period responses concurrently (this is the key optimization)
+    tasks = [
+        get_complete_period_response("weekly", anchor_d),
+        get_complete_period_response("monthly", anchor_d),
+        get_complete_period_response("yearly", anchor_d)
+    ]
+    
+    weekly_response, monthly_response, yearly_response = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Handle exceptions
+    if isinstance(weekly_response, Exception):
+        weekly_response = {"error": str(weekly_response), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+    if isinstance(monthly_response, Exception):
+        monthly_response = {"error": str(monthly_response), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+    if isinstance(yearly_response, Exception):
+        yearly_response = {"error": str(yearly_response), "values": [], "average": {}, "trend": {}, "summary": "", "metadata": {}}
+    
+    # Generate appropriate notes
+    if month_mode == "calendar":
+        notes = "Month uses full calendar month (1st to last day of anchor month)."
+    elif month_mode == "rolling1m":
+        notes = "Month uses calendar-aware 1-month window ending on anchor (EOM-clipped)."
+    else:  # rolling30d
+        notes = "Month uses fixed 30-day rolling window ending on anchor (consistent with /v1/records/monthly)."
+    
+    notes += " Preload endpoint - optimized for website data loading with complete chart data, summary, trend, and average."
+    
+    # Build response with complete data structure (same as main rolling-bundle)
+    response_data = {
+        "location": location,
+        "anchor": anchor_d,
+        "unit_group": unit_group,
+        "metadata": {
+            "anchor_date": anchor_d.isoformat(),
+            "month_mode": month_mode,
+            "endpoint": "preload",
+            "optimized": True,
+            "included_sections": ["week", "month", "year"],
+            "data_sources": {
+                "weekly": "historysummary API",
+                "monthly": "historysummary API", 
+                "yearly": "historysummary API"
+            }
+        },
+        "notes": notes,
+        # Include all the data your website needs
+        "weekly": weekly_response,
+        "monthly": monthly_response,
+        "yearly": yearly_response,
+    }
+    
+    return response_data
+
 _client: Optional[aiohttp.ClientSession] = None
 _sem = asyncio.Semaphore(2)
 
