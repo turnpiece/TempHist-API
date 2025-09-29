@@ -1728,55 +1728,62 @@ async def verify_token_middleware(request: Request, call_next):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
 
-    # Apply rate limiting if enabled and IP is not whitelisted
+    # Define endpoints that actually query Visual Crossing API (cost money)
+    vc_api_paths = ["/weather/", "/forecast/", "/v1/records/"]
+    
+    # Apply rate limiting only to Visual Crossing API endpoints
     if RATE_LIMIT_ENABLED and location_monitor and request_monitor and not is_ip_whitelisted(client_ip):
-        # Check request rate first
-        rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
-        if not rate_allowed:
-            if DEBUG:
-                logger.warning(f"🚫 RATE LIMIT EXCEEDED: {client_ip} | {request.method} {request.url.path} | {rate_reason}")
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "Rate limit exceeded",
-                    "reason": rate_reason,
-                    "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600
-                },
-                headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
-            )
+        # Check if this endpoint queries Visual Crossing API
+        is_vc_api_endpoint = any(request.url.path.startswith(path) for path in vc_api_paths)
+        
+        if is_vc_api_endpoint:
+            # Check request rate first
+            rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
+            if not rate_allowed:
+                if DEBUG:
+                    logger.warning(f"🚫 RATE LIMIT EXCEEDED: {client_ip} | {request.method} {request.url.path} | {rate_reason}")
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": "Rate limit exceeded",
+                        "reason": rate_reason,
+                        "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600
+                    },
+                    headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
+                )
+            elif DEBUG:
+                logger.debug(f"✅ RATE LIMIT CHECK: {client_ip} | {request.method} {request.url.path} | Rate: OK")
+            
+            # Check location diversity for Visual Crossing API endpoints
+            if location_monitor:
+                # Extract location from path
+                path_parts = request.url.path.split("/")
+                if len(path_parts) >= 3:
+                    location = path_parts[2]  # e.g., "/weather/london/2024-01-15" -> "london"
+                    location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
+                    if not location_allowed:
+                        if DEBUG:
+                            logger.warning(f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {location_reason}")
+                        return JSONResponse(
+                            status_code=429,
+                            content={
+                                "detail": "Location diversity limit exceeded",
+                                "reason": location_reason,
+                                "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600
+                            },
+                            headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
+                        )
+                    elif DEBUG:
+                        logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {location} | OK")
         elif DEBUG:
-            logger.debug(f"✅ RATE LIMIT CHECK: {client_ip} | {request.method} {request.url.path} | Rate: OK")
+            logger.debug(f"ℹ️  NON-VC ENDPOINT: {client_ip} | {request.method} {request.url.path} | Rate limiting skipped")
     elif is_ip_whitelisted(client_ip) and DEBUG:
         logger.info(f"⭐ WHITELISTED IP: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
     
-    # For weather-related endpoints, check location diversity (only for non-whitelisted IPs)
-    if RATE_LIMIT_ENABLED and location_monitor and not is_ip_whitelisted(client_ip):
-        weather_paths = ["/weather/", "/data/", "/summary/", "/trend/", "/average/", "/forecast/"]
-        if any(request.url.path.startswith(path) for path in weather_paths):
-            # Extract location from path
-            path_parts = request.url.path.split("/")
-            if len(path_parts) >= 3:
-                location = path_parts[2]  # e.g., "/weather/london/2024-01-15" -> "london"
-                location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
-                if not location_allowed:
-                    if DEBUG:
-                        logger.warning(f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {location_reason}")
-                    return JSONResponse(
-                        status_code=429,
-                        content={
-                            "detail": "Location diversity limit exceeded",
-                            "reason": location_reason,
-                            "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600
-                        },
-                        headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
-                    )
-                elif DEBUG:
-                    logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {location} | OK")
-    
-    # Track usage for weather-related endpoints
+    # Track usage for Visual Crossing API endpoints
     if USAGE_TRACKING_ENABLED and usage_tracker:
-        weather_paths = ["/weather/", "/data/", "/summary/", "/trend/", "/average/", "/forecast/"]
-        if any(request.url.path.startswith(path) for path in weather_paths):
+        vc_api_paths = ["/weather/", "/forecast/", "/v1/records/"]
+        if any(request.url.path.startswith(path) for path in vc_api_paths):
             path_parts = request.url.path.split("/")
             if len(path_parts) >= 3:
                 location = path_parts[2]
