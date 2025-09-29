@@ -345,6 +345,11 @@ class LocationUsageTracker:
             redis_client.incr(endpoint_key)
             redis_client.expire(endpoint_key, self.retention_seconds)
         
+        # Add location to tracked locations set (for easy retrieval without KEYS command)
+        tracked_locations_key = "tracked_locations"
+        redis_client.sadd(tracked_locations_key, location)
+        redis_client.expire(tracked_locations_key, self.retention_seconds)
+        
         if DEBUG:
             logger.debug(f"📊 USAGE TRACKED: {location} | Endpoint: {endpoint or 'unknown'}")
     
@@ -356,29 +361,24 @@ class LocationUsageTracker:
         cutoff_time = time.time() - (hours * 3600)
         location_counts = []
         
-        # Get all usage keys
-        usage_keys = redis_client.keys(f"{self.usage_prefix}*")
+        # Get all tracked locations from the set (no KEYS command needed)
+        tracked_locations_key = "tracked_locations"
+        tracked_locations = redis_client.smembers(tracked_locations_key)
         
-        for key in usage_keys:
-            key_str = key.decode()
-            if "_" in key_str and not key_str.endswith("_ts"):
-                # Skip endpoint-specific keys for now
-                if "_" in key_str.split("_", 2)[2:]:
-                    continue
-                    
-                location = key_str.replace(self.usage_prefix, "")
-                
-                # Check if location has recent activity
-                timestamp_key = f"{self.timestamp_prefix}{location}"
-                timestamps = redis_client.lrange(timestamp_key, 0, -1)
-                
-                recent_count = 0
-                for ts in timestamps:
-                    if float(ts) > cutoff_time:
-                        recent_count += 1
-                
-                if recent_count > 0:
-                    location_counts.append((location, recent_count))
+        for location_bytes in tracked_locations:
+            location = location_bytes.decode()
+            
+            # Check if location has recent activity
+            timestamp_key = f"{self.timestamp_prefix}{location}"
+            timestamps = redis_client.lrange(timestamp_key, 0, -1)
+            
+            recent_count = 0
+            for ts in timestamps:
+                if float(ts) > cutoff_time:
+                    recent_count += 1
+            
+            if recent_count > 0:
+                location_counts.append((location, recent_count))
         
         # Sort by count and return top locations
         return sorted(location_counts, key=lambda x: x[1], reverse=True)[:limit]
@@ -415,17 +415,12 @@ class LocationUsageTracker:
             return {}
             
         all_stats = {}
-        usage_keys = redis_client.keys(f"{self.usage_prefix}*")
+        tracked_locations_key = "tracked_locations"
+        tracked_locations = redis_client.smembers(tracked_locations_key)
         
-        for key in usage_keys:
-            key_str = key.decode()
-            if "_" in key_str and not key_str.endswith("_ts"):
-                # Skip endpoint-specific keys
-                if "_" in key_str.split("_", 2)[2:]:
-                    continue
-                    
-                location = key_str.replace(self.usage_prefix, "")
-                all_stats[location] = self.get_location_stats(location)
+        for location_bytes in tracked_locations:
+            location = location_bytes.decode()
+            all_stats[location] = self.get_location_stats(location)
         
         return all_stats
 
@@ -1226,8 +1221,20 @@ class CacheInvalidator:
             return {"status": "disabled", "message": "Cache invalidation is not enabled"}
         
         try:
-            # Find keys matching pattern
-            matching_keys = redis_client.keys(pattern)
+            # Try to find keys matching pattern (may fail on managed Redis)
+            try:
+                matching_keys = redis_client.keys(pattern)
+            except Exception as e:
+                # Handle Redis permissions error (e.g., KEYS command not allowed)
+                if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                    return {
+                        "status": "error",
+                        "pattern": pattern,
+                        "error": "Redis KEYS command not permitted on this instance",
+                        "message": "Cache invalidation by pattern is not available on managed Redis services"
+                    }
+                else:
+                    raise e
             
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
                 return {
@@ -1349,8 +1356,20 @@ class CacheInvalidator:
             return {"status": "disabled", "message": "Cache invalidation is not enabled"}
         
         try:
-            # Get all keys
-            all_keys = redis_client.keys("*")
+            # Try to get all keys (may fail on managed Redis)
+            try:
+                all_keys = redis_client.keys("*")
+            except Exception as e:
+                # Handle Redis permissions error (e.g., KEYS command not allowed)
+                if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                    return {
+                        "status": "error",
+                        "error": "Redis KEYS command not permitted on this instance",
+                        "message": "Expired key invalidation is not available on managed Redis services"
+                    }
+                else:
+                    raise e
+            
             expired_keys = []
             
             for key in all_keys:
@@ -1410,8 +1429,12 @@ class CacheInvalidator:
             
             pattern_counts = {}
             for name, pattern in patterns.items():
-                count = len(redis_client.keys(pattern))
-                pattern_counts[name] = count
+                try:
+                    count = len(redis_client.keys(pattern))
+                    pattern_counts[name] = count
+                except Exception:
+                    # Handle Redis permissions error (KEYS command not allowed)
+                    pattern_counts[name] = "N/A (permissions required)"
             
             return {
                 "redis_info": {
@@ -1437,13 +1460,23 @@ class CacheInvalidator:
         
         try:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
-                # Count keys without deleting
-                all_keys = redis_client.keys("*")
-                return {
-                    "status": "dry_run",
-                    "total_keys": len(all_keys),
-                    "action": "would_delete_all"
-                }
+                # Try to count keys without deleting (may fail on managed Redis)
+                try:
+                    all_keys = redis_client.keys("*")
+                    return {
+                        "status": "dry_run",
+                        "total_keys": len(all_keys),
+                        "action": "would_delete_all"
+                    }
+                except Exception as e:
+                    if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                        return {
+                            "status": "error",
+                            "error": "Redis KEYS command not permitted on this instance",
+                            "message": "Cannot count keys on managed Redis service for dry run"
+                        }
+                    else:
+                        raise e
             else:
                 # Flush all data
                 redis_client.flushdb()
