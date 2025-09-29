@@ -1620,7 +1620,7 @@ if DEBUG:
     logger.info("📊 ANALYTICS STORAGE INITIALIZED: 7 days retention, 50 errors per session limit")
 
 # HTTP client configuration
-HTTP_TIMEOUT = 30.0
+HTTP_TIMEOUT = 60.0  # Increased from 30s to 60s for better reliability
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
 visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
@@ -1853,6 +1853,7 @@ app.add_middleware(
         "https://www.temphist.com",  # www subdomain
         "https://dev.temphist.com",  # development site
     ],
+    allow_origin_regex=r"^https://.*\.onrender\.com$",  # Allow any Render subdomain
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=[
@@ -2098,8 +2099,8 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
     logger.debug(f"First attempt (no remote data): {url}")
     
     try:
-        timeout = aiohttp.ClientTimeout(total=30)
-        logger.info(f"[DEBUG] Creating aiohttp session with 30-second timeout")
+        timeout = aiohttp.ClientTimeout(total=60)  # Increased from 30s to 60s for better reliability
+        logger.info(f"[DEBUG] Creating aiohttp session with 60-second timeout")
         async with aiohttp.ClientSession(timeout=timeout) as session:
             logger.info(f"[DEBUG] Session created successfully, making GET request to: {url}")
             async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
