@@ -123,6 +123,13 @@ async def _client_session() -> aiohttp.ClientSession:
         _client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
     return _client
 
+async def _close_client_session():
+    """Close the global client session."""
+    global _client
+    if _client is not None and not _client.closed:
+        await _client.close()
+        _client = None
+
 def _years_range() -> tuple[int, int]:
     y = datetime.now().year
     return (y - 50, y)
@@ -333,6 +340,18 @@ async def _get_rolling_http_client() -> aiohttp.ClientSession:
     if _http is None or _http.closed:
         _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
     return _http
+
+async def _close_rolling_http_client():
+    """Close the rolling bundle HTTP client."""
+    global _http
+    if _http is not None and not _http.closed:
+        await _http.close()
+        _http = None
+
+async def cleanup_http_sessions():
+    """Clean up all HTTP client sessions."""
+    await _close_client_session()
+    await _close_rolling_http_client()
 
 # Helper functions
 def _safe_parse_date(s: str) -> date:

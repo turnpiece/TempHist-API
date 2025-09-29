@@ -26,7 +26,7 @@ from typing import List, Optional, Dict, Any
 load_dotenv()
 
 # Import the new router
-from routers.records_agg import router as records_agg_router, daily_cache
+from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
 
 # Environment variables
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
@@ -1548,9 +1548,17 @@ async def lifespan(app: FastAPI):
     
     yield  # Application runs here
     
-    # Shutdown (if needed)
+    # Shutdown
     if DEBUG:
         logger.info("🛑 APPLICATION SHUTDOWN: Cleaning up resources")
+    
+    # Clean up HTTP client sessions
+    try:
+        await cleanup_http_sessions()
+        if DEBUG:
+            logger.info("✅ HTTP client sessions closed successfully")
+    except Exception as e:
+        logger.error(f"⚠️  Error closing HTTP client sessions: {e}")
 
 app = FastAPI(lifespan=lifespan)
 
