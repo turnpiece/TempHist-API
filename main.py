@@ -3398,9 +3398,9 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
     # Calculate date range based on period and end date
     from datetime import datetime, timedelta
     
-    # Use 50 years of data ending at current year
+    # Use 50 years of data ending at current year (consistent with other endpoints)
     current_year = datetime.now().year
-    start_year = current_year - 49  # 50 years total
+    start_year = current_year - 50  # 50 years back + current year = 51 years total
     end_date = datetime(current_year, month, day)
     
     if period == "daily":

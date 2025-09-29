@@ -162,7 +162,7 @@ async def fetch_historysummary(
     }
     if params_extra:
         params.update(params_extra)
-        url = f"{VC_BASE_URL}/weatherdata/historysummary"
+    url = f"{VC_BASE_URL}/weatherdata/historysummary"
     sess = await _client_session()
     async with _sem:
         async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
