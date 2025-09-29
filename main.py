@@ -1673,12 +1673,12 @@ async def verify_token_middleware(request: Request, call_next):
         logger.info(f"[DEBUG] Middleware: OPTIONS request, allowing through")
         return await call_next(request)
 
-    # Get client IP for rate limiting
+    # Get client IP for security checks
     client_ip = get_client_ip(request)
     logger.info(f"[DEBUG] Middleware: Client IP: {client_ip}")
 
-    # Check if IP is blacklisted (block entirely)
-    if is_ip_blacklisted(client_ip):
+    # Check if IP is blacklisted (block entirely, except for health checks)
+    if is_ip_blacklisted(client_ip) and request.url.path != "/health":
         if DEBUG:
             logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {client_ip} | {request.method} {request.url.path}")
         return JSONResponse(
@@ -1688,6 +1688,12 @@ async def verify_token_middleware(request: Request, call_next):
                 "reason": "IP address is blacklisted"
             }
         )
+
+    # Public paths that don't require a token or rate limiting
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health"]
+    if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
+        logger.info(f"[DEBUG] Middleware: Public path, allowing through")
+        return await call_next(request)
 
     # Apply rate limiting if enabled and IP is not whitelisted
     if RATE_LIMIT_ENABLED and location_monitor and request_monitor and not is_ip_whitelisted(client_ip):
@@ -1744,11 +1750,6 @@ async def verify_token_middleware(request: Request, call_next):
                 endpoint = path_parts[1] if len(path_parts) > 1 else "unknown"
                 usage_tracker.track_location_request(location, endpoint)
 
-    # Public paths that don't require a token
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health"]
-    if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
-        logger.info(f"[DEBUG] Middleware: Public path, allowing through")
-        return await call_next(request)
 
     logger.info(f"[DEBUG] Middleware: Protected path, checking Firebase token...")
     # All other paths require a Firebase token
