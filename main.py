@@ -1826,6 +1826,22 @@ async def verify_token_middleware(request: Request, call_next):
     logger.info(f"[DEBUG] Middleware: Response received, returning")
     return response
 
+@app.middleware("http")
+async def health_check_cors_middleware(request: Request, call_next):
+    """Custom middleware to handle CORS for health check requests from Render."""
+    # Check if this is a health check request
+    if request.url.path == "/health":
+        # Add CORS headers for health check requests
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "authorization, content-type, accept, x-requested-with"
+        response.headers["Access-Control-Max-Age"] = "600"
+        return response
+    
+    # For all other requests, proceed normally
+    return await call_next(request)
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -1833,7 +1849,6 @@ app.add_middleware(
         "http://localhost:3000",  # Local development
         "http://localhost:5173",  # Vite default port
         "https://temphist.onrender.com",  # Render frontend
-        "https://*.onrender.com",  # Any Render subdomain
         "https://temphist.com",  # Main domain
         "https://www.temphist.com",  # www subdomain
         "https://dev.temphist.com",  # development site
