@@ -1710,8 +1710,8 @@ async def verify_token_middleware(request: Request, call_next):
     client_ip = get_client_ip(request)
     logger.info(f"[DEBUG] Middleware: Client IP: {client_ip}")
 
-    # Check if IP is blacklisted (block entirely, except for health checks)
-    if is_ip_blacklisted(client_ip) and request.url.path != "/health":
+    # Check if IP is blacklisted (block entirely, except for health checks and analytics)
+    if is_ip_blacklisted(client_ip) and request.url.path not in ["/health"] and not request.url.path.startswith("/analytics"):
         if DEBUG:
             logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {client_ip} | {request.method} {request.url.path}")
         return JSONResponse(
@@ -1724,7 +1724,7 @@ async def verify_token_middleware(request: Request, call_next):
 
     # Public paths that don't require a token or rate limiting
     public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health"]
-    if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static"]):
+    if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
 
