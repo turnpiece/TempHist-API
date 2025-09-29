@@ -1723,7 +1723,7 @@ async def verify_token_middleware(request: Request, call_next):
         )
 
     # Public paths that don't require a token or rate limiting
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
@@ -2614,7 +2614,12 @@ async def get_forecast(location: str):
 
 @app.get("/health")
 async def health_check():
-    """Comprehensive health check endpoint for load balancers and monitoring."""
+    """Simple health check endpoint for Render load balancers."""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@app.get("/health/detailed")
+async def detailed_health_check():
+    """Comprehensive health check endpoint for debugging and monitoring."""
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
