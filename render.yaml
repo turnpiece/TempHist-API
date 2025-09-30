@@ -9,6 +9,9 @@ services:
     domains:
       - api.temphist.com
     autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
 
   - type: web
     name: temphist-api-dev
@@ -20,3 +23,6 @@ services:
     domains:
       - devapi.temphist.com
     autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
