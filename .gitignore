@@ -8,7 +8,6 @@ server.js
 firebase-service-account.json
 venv/
 .venv/
-.python-version
 
 # Profiling files
 *.prof
