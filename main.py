@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Depends, Path, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
@@ -1595,6 +1597,64 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Global exception handlers for better error handling
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle Pydantic validation errors with detailed error messages."""
+    client_ip = get_client_ip(request)
+    
+    # Extract detailed error information
+    error_details = []
+    for error in exc.errors():
+        field = " -> ".join(str(loc) for loc in error['loc'])
+        error_details.append({
+            "field": field,
+            "message": error['msg'],
+            "type": error['type'],
+            "input": error.get('input', 'N/A')
+        })
+    
+    logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "Validation Error",
+            "message": "Request data validation failed",
+            "details": error_details,
+            "path": request.url.path,
+            "method": request.method
+        }
+    )
+
+@app.exception_handler(ValidationError)
+async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
+    """Handle Pydantic model validation errors."""
+    client_ip = get_client_ip(request)
+    
+    error_details = []
+    for error in exc.errors():
+        field = " -> ".join(str(loc) for loc in error['loc'])
+        error_details.append({
+            "field": field,
+            "message": error['msg'],
+            "type": error['type'],
+            "input": error.get('input', 'N/A')
+        })
+    
+    logger.error(f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "Model Validation Error",
+            "message": "Data model validation failed",
+            "details": error_details,
+            "path": request.url.path,
+            "method": request.method
+        }
+    )
+
 # Include the records aggregation router
 app.include_router(records_agg_router)
 redis_client = redis.from_url(REDIS_URL)
@@ -1695,6 +1755,49 @@ async def log_requests_middleware(request: Request, call_next):
     else:
         # Skip logging in production
         return await call_next(request)
+
+@app.middleware("http")
+async def request_size_middleware(request: Request, call_next):
+    """Middleware to enforce request size limits and validate content types."""
+    client_ip = get_client_ip(request)
+    
+    # Only apply to POST/PUT/PATCH requests with bodies
+    if request.method in ["POST", "PUT", "PATCH"]:
+        content_type = request.headers.get("content-type", "")
+        content_length = request.headers.get("content-length", "unknown")
+        
+        # Check content type for JSON endpoints
+        if request.url.path.startswith("/analytics") and not content_type.startswith("application/json"):
+            logger.warning(f"⚠️  INVALID CONTENT-TYPE: {content_type} | IP={client_ip} | Path={request.url.path}")
+            return JSONResponse(
+                status_code=415,
+                content={
+                    "error": "Unsupported Media Type",
+                    "message": "Content-Type must be application/json for this endpoint",
+                    "path": request.url.path
+                }
+            )
+        
+        # Check content length
+        max_size = 1024 * 1024  # 1MB default limit
+        if content_length != "unknown":
+            try:
+                content_length_int = int(content_length)
+                if content_length_int > max_size:
+                    logger.warning(f"⚠️  REQUEST TOO LARGE: {content_length_int} bytes | IP={client_ip} | Path={request.url.path}")
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": "Payload Too Large",
+                            "message": f"Request body too large. Maximum size is {max_size} bytes",
+                            "path": request.url.path
+                        }
+                    )
+            except ValueError:
+                logger.warning(f"⚠️  INVALID CONTENT-LENGTH: {content_length} | IP={client_ip} | Path={request.url.path}")
+    
+    response = await call_next(request)
+    return response
 
 @app.middleware("http")
 async def verify_token_middleware(request: Request, call_next):
@@ -4009,13 +4112,116 @@ def protected_route(user=Depends(verify_firebase_token)):
 
 # Analytics Endpoints
 @app.post("/analytics", response_model=AnalyticsResponse)
-async def submit_analytics(analytics_data: AnalyticsData, request: Request):
+async def submit_analytics(request: Request):
     """Submit client analytics data for monitoring and error tracking."""
+    client_ip = get_client_ip(request)
+    
     try:
-        client_ip = get_client_ip(request)
+        # Log request details for debugging
+        content_type = request.headers.get("content-type", "")
+        content_length = request.headers.get("content-length", "unknown")
+        
+        logger.info(f"📊 ANALYTICS REQUEST: IP={client_ip} | Content-Type={content_type} | Length={content_length}")
+        
+        # Validate content type
+        if not content_type.startswith("application/json"):
+            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-TYPE: {content_type} | IP={client_ip}")
+            raise HTTPException(
+                status_code=415, 
+                detail="Content-Type must be application/json"
+            )
+        
+        # Check content length (limit to 1MB for analytics data)
+        max_content_length = 1024 * 1024  # 1MB
+        try:
+            content_length_int = int(content_length) if content_length != "unknown" else None
+            if content_length_int and content_length_int > max_content_length:
+                logger.warning(f"⚠️  ANALYTICS REQUEST TOO LARGE: {content_length_int} bytes | IP={client_ip}")
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Request body too large. Maximum size is {max_content_length} bytes"
+                )
+        except ValueError:
+            # If we can't parse content-length, continue but log it
+            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-LENGTH: {content_length} | IP={client_ip}")
+        
+        # Read and parse request body
+        try:
+            body = await request.body()
+            if not body:
+                logger.warning(f"⚠️  ANALYTICS EMPTY BODY: IP={client_ip}")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Request body cannot be empty"
+                )
+            
+            # Check actual body size
+            if len(body) > max_content_length:
+                logger.warning(f"⚠️  ANALYTICS BODY TOO LARGE: {len(body)} bytes | IP={client_ip}")
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Request body too large. Maximum size is {max_content_length} bytes"
+                )
+            
+            # Log request body for debugging (truncated for security)
+            body_str = body.decode('utf-8')
+            body_preview = body_str[:500] + "..." if len(body_str) > 500 else body_str
+            logger.info(f"📊 ANALYTICS BODY PREVIEW: {body_preview}")
+            
+            # Parse JSON
+            try:
+                json_data = json.loads(body_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ ANALYTICS JSON PARSE ERROR: {e} | IP={client_ip} | Body: {body_preview}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid JSON format: {str(e)}"
+                )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ ANALYTICS BODY READ ERROR: {e} | IP={client_ip}")
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to read request body"
+            )
+        
+        # Validate data using Pydantic model
+        try:
+            analytics_data = AnalyticsData(**json_data)
+        except Exception as e:
+            logger.error(f"❌ ANALYTICS VALIDATION ERROR: {e} | IP={client_ip} | Data: {json_data}")
+            
+            # Provide detailed validation error information
+            if hasattr(e, 'errors'):
+                error_details = []
+                for error in e.errors():
+                    field = " -> ".join(str(loc) for loc in error['loc'])
+                    error_details.append(f"{field}: {error['msg']}")
+                error_message = f"Validation failed: {'; '.join(error_details)}"
+            else:
+                error_message = f"Validation failed: {str(e)}"
+            
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "Validation Error",
+                    "message": error_message,
+                    "details": str(e) if hasattr(e, 'errors') else None
+                }
+            )
         
         # Store analytics data
-        analytics_id = analytics_storage.store_analytics(analytics_data, client_ip)
+        try:
+            analytics_id = analytics_storage.store_analytics(analytics_data, client_ip)
+            logger.info(f"📊 ANALYTICS STORED: {analytics_id} | IP={client_ip}")
+        except Exception as e:
+            logger.error(f"❌ ANALYTICS STORAGE ERROR: {e} | IP={client_ip}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to store analytics data"
+            )
         
         return AnalyticsResponse(
             status="success",
@@ -4024,9 +4230,15 @@ async def submit_analytics(analytics_data: AnalyticsData, request: Request):
             timestamp=datetime.now().isoformat()
         )
         
+    except HTTPException:
+        # Re-raise HTTP exceptions (they already have proper status codes)
+        raise
     except Exception as e:
-        logger.error(f"Error submitting analytics: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit analytics data")
+        logger.error(f"❌ ANALYTICS UNEXPECTED ERROR: {e} | IP={client_ip}")
+        raise HTTPException(
+            status_code=500, 
+            detail="Internal server error while processing analytics data"
+        )
 
 @app.get("/analytics/summary")
 async def get_analytics_summary():
