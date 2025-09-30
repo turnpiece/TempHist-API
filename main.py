@@ -1848,7 +1848,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Local development
         "http://localhost:5173",  # Vite default port
-        "https://temphist.onrender.com",  # Render frontend
         "https://temphist.com",  # Main domain
         "https://www.temphist.com",  # www subdomain
         "https://dev.temphist.com",  # development site
