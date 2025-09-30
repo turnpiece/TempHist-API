@@ -1,8 +1,22 @@
 services:
   - type: web
     name: temphist-api
-    env: python
+    runtime: python
+    plan: starter
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    domains:
+      - api.temphist.com
+    autoDeployTrigger: commit
+
+  - type: web
+    name: temphist-api-dev
+    runtime: python
     plan: free
-    buildCommand: ""
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
-    autoDeploy: true
+    branch: develop
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    domains:
+      - devapi.temphist.com
+    autoDeployTrigger: commit
