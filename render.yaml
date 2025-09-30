@@ -11,7 +11,7 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.6
+        value: 3.12.3
 
   - type: web
     name: temphist-api-dev
@@ -26,4 +26,4 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.6
+        value: 3.12.3
