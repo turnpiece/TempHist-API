@@ -29,6 +29,7 @@ load_dotenv()
 
 # Import the new router
 from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
+from routers.locations_preapproved import router as locations_preapproved_router, initialize_locations_data
 
 # Environment variables
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
@@ -1045,7 +1046,7 @@ class AnalyticsStorage:
             "retry_attempts": analytics_data.retry_attempts,
             "location_failures": analytics_data.location_failures,
             "error_count": analytics_data.error_count,
-            "recent_errors": [error.dict() for error in analytics_data.recent_errors[:self.max_errors_per_session]],
+            "recent_errors": [error.model_dump() for error in analytics_data.recent_errors[:self.max_errors_per_session]],
             "app_version": analytics_data.app_version,
             "platform": analytics_data.platform,
             "user_agent": analytics_data.user_agent,
@@ -1566,6 +1567,14 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
     # Startup
+    # Initialize preapproved locations data
+    try:
+        await initialize_locations_data(redis_client)
+        if DEBUG:
+            logger.info("✅ PREAPPROVED LOCATIONS: Data loaded and cache warmed")
+    except Exception as e:
+        logger.error(f"❌ PREAPPROVED LOCATIONS: Failed to initialize - {e}")
+    
     if CACHE_WARMING_ENABLED and cache_warmer:
         # Wait a moment for the server to fully start
         await asyncio.sleep(2)
@@ -1655,8 +1664,9 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
         }
     )
 
-# Include the records aggregation router
+# Include the routers
 app.include_router(records_agg_router)
+app.include_router(locations_preapproved_router)
 redis_client = redis.from_url(REDIS_URL)
 
 # Wire up Redis cache for rolling bundle
@@ -1826,7 +1836,7 @@ async def verify_token_middleware(request: Request, call_next):
         )
 
     # Public paths that don't require a token or rate limiting
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)

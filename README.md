@@ -401,6 +401,78 @@ The `include` and `exclude` parameters allow you to control which sections are r
 }
 ```
 
+#### Preapproved Locations Endpoint
+
+The API provides access to a curated list of preapproved locations that are guaranteed to work with the weather endpoints.
+
+**Endpoint:** `GET /v1/locations/preapproved`
+
+**Query Parameters:**
+
+- `country_code` (optional): Filter by ISO 3166-1 alpha-2 country code (e.g., "US", "GB")
+- `tier` (optional): Filter by location tier (e.g., "global")
+- `limit` (optional): Limit results (1-500, default: no limit)
+
+**Response Headers:**
+
+- `Cache-Control`: `public, max-age=3600, s-maxage=86400`
+- `ETag`: Stable ETag for conditional requests
+- `Last-Modified`: File modification timestamp
+
+**Example Requests:**
+
+```bash
+# Get all preapproved locations
+GET /v1/locations/preapproved
+
+# Get locations in the United States
+GET /v1/locations/preapproved?country_code=US
+
+# Get global tier locations
+GET /v1/locations/preapproved?tier=global
+
+# Get first 10 locations
+GET /v1/locations/preapproved?limit=10
+
+# Combined filters
+GET /v1/locations/preapproved?country_code=GB&tier=global&limit=5
+```
+
+**Response Format:**
+
+```json
+{
+  "version": 1,
+  "count": 20,
+  "generated_at": "2024-01-15T10:30:00Z",
+  "locations": [
+    {
+      "id": "london",
+      "slug": "london",
+      "name": "London",
+      "admin1": "England",
+      "country_name": "United Kingdom",
+      "country_code": "GB",
+      "latitude": 51.5074,
+      "longitude": -0.1278,
+      "timezone": "Europe/London",
+      "tier": "global"
+    }
+  ]
+}
+```
+
+**Caching and Performance:**
+
+- Full response cached in Redis for 24 hours
+- Filtered responses cached separately for optimal performance
+- Supports conditional requests with ETag and Last-Modified headers
+- Rate limited to 60 requests per minute per IP
+
+**Status Endpoint:** `GET /v1/locations/preapproved/status`
+
+Returns service health and configuration information.
+
 ## 🛡️ Rate Limiting
 
 The API includes comprehensive rate limiting to prevent abuse:
@@ -656,6 +728,56 @@ render.yaml         # Render deployment configuration
 3. **Check performance** with `python performance_test.py`
 4. **Test rate limiting** with manual requests
 5. **Deploy** to Render
+
+### Managing Preapproved Locations Data
+
+The preapproved locations are stored in `data/preapproved_locations.json` and loaded at startup.
+
+#### Adding New Locations
+
+1. **Edit the data file:**
+
+   ```bash
+   # Add new location to data/preapproved_locations.json
+   {
+     "id": "new_city",
+     "slug": "new-city",
+     "name": "New City",
+     "admin1": "State/Province",
+     "country_name": "Country Name",
+     "country_code": "CC",  # ISO 3166-1 alpha-2
+     "latitude": 0.0,
+     "longitude": 0.0,
+     "timezone": "Continent/City",
+     "tier": "global"
+   }
+   ```
+
+2. **Restart the application** to load new data:
+
+   ```bash
+   # The cache will be automatically warmed on startup
+   python main.py
+   ```
+
+3. **Verify the data loaded:**
+   ```bash
+   curl http://localhost:8000/v1/locations/preapproved/status
+   ```
+
+#### Cache Management
+
+- **Warm cache manually:** The cache is automatically warmed on startup
+- **Clear cache:** Use Redis commands or restart the application
+- **Monitor cache:** Check Redis keys with pattern `preapproved:v1:*`
+
+#### Data Validation
+
+The application validates all location data against the `LocationItem` schema:
+
+- Country codes must be valid ISO 3166-1 alpha-2 format
+- Coordinates must be valid numbers
+- All required fields must be present
 
 ### Contributing
 
