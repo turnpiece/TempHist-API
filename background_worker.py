@@ -50,12 +50,9 @@ class BackgroundWorker:
         
     def _run_worker(self):
         """Run the worker in a separate thread with its own event loop."""
-        logger.info("🔄 Background worker thread function started")
-        
         # Create a new event loop for this thread
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        logger.info("✅ Event loop created and set")
         
         try:
             # Run the worker
@@ -86,31 +83,16 @@ class BackgroundWorker:
         logger.info("🚀 Background worker main loop started")
         
         try:
-            # Test Redis connection first
-            logger.info("🔗 Testing Redis connection...")
-            self.redis_client.ping()
-            logger.info("✅ Redis connection successful")
-            
             # Ensure Redis client is configured for string responses
             if not hasattr(self.redis_client, 'decode_responses') or not self.redis_client.decode_responses:
-                logger.warning("⚠️ Redis client not configured with decode_responses=True")
                 # Recreate Redis client with proper configuration
                 import redis
                 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
                 self.redis_client = redis.from_url(redis_url, decode_responses=True)
-                logger.info("✅ Redis client reconfigured with decode_responses=True")
             
-            # Import job worker components
-            logger.info("📦 Importing job worker components...")
+            # Import and start the job worker
             from job_worker import JobWorker
-            logger.info("✅ JobWorker imported successfully")
-            
-            # Create and start the job worker
-            logger.info("🏗️ Creating JobWorker instance...")
             worker = JobWorker(self.redis_client)
-            logger.info("✅ JobWorker created successfully")
-            
-            logger.info("🚀 Starting JobWorker...")
             await worker.start()
             
         except Exception as e:

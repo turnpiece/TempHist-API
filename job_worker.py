@@ -29,17 +29,11 @@ class JobWorker:
         
     async def start(self):
         """Start the job worker."""
-        logger.info("🔄 JobWorker.start() called")
         self.running = True
         logger.info("🚀 Job worker started")
         
         try:
-            loop_count = 0
             while self.running:
-                loop_count += 1
-                if loop_count % 10 == 1:  # Log every 10 seconds
-                    logger.info(f"🔄 Job worker loop #{loop_count}")
-                
                 await self.process_jobs()
                 await asyncio.sleep(1)  # Poll every second
         except Exception as e:
@@ -66,12 +60,7 @@ class JobWorker:
             pending_jobs = await self.get_pending_jobs()
             
             if pending_jobs:
-                logger.info(f"📋 Found {len(pending_jobs)} pending jobs: {pending_jobs}")
-            else:
-                # Log occasionally when no jobs are found
-                import time
-                if int(time.time()) % 30 == 0:  # Log every 30 seconds
-                    logger.info("📋 No pending jobs found")
+                logger.info(f"📋 Found {len(pending_jobs)} pending jobs")
             
             for job_id in pending_jobs:
                 logger.info(f"🔄 Processing job: {job_id}")
@@ -92,13 +81,7 @@ class JobWorker:
             # Check if we have a job queue
             queue_length = self.redis.llen(self.job_queue_key)
             
-            # Log queue status occasionally
-            import time
-            if int(time.time()) % 30 == 0:  # Log every 30 seconds
-                logger.info(f"📊 Job queue length: {queue_length}")
-            
             if queue_length > 0:
-                logger.info(f"📋 Found {queue_length} jobs in queue")
                 # Get jobs from the queue (without removing them)
                 for i in range(min(queue_length, 10)):  # Process up to 10 jobs at a time
                     job_id = self.redis.lindex(self.job_queue_key, i)
@@ -113,16 +96,10 @@ class JobWorker:
                         if job_data:
                             job = json.loads(job_data)
                             job_status = job.get("status")
-                            logger.info(f"📋 Job {job_id}: status={job_status}")
                             if job_status == JobStatus.PENDING:
                                 pending_jobs.append(job_id)
-                                logger.info(f"✅ Added pending job: {job_id}")
                         else:
                             logger.warning(f"⚠️ No job data found for: {job_id}")
-            else:
-                # Log occasionally when queue is empty
-                if int(time.time()) % 30 == 0:  # Log every 30 seconds
-                    logger.info("📋 Job queue is empty")
             
             return pending_jobs
             
