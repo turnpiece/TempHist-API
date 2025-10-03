@@ -103,6 +103,10 @@ class JobWorker:
                 for i in range(min(queue_length, 10)):  # Process up to 10 jobs at a time
                     job_id = self.redis.lindex(self.job_queue_key, i)
                     if job_id:
+                        # Convert byte string to string if needed
+                        if isinstance(job_id, bytes):
+                            job_id = job_id.decode('utf-8')
+                        
                         # Check if job is still pending
                         job_key = f"job:{job_id}"
                         job_data = self.redis.get(job_key)
