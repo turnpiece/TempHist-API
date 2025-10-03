@@ -10,7 +10,7 @@ import json
 import logging
 import signal
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 from cache_utils import get_job_manager, get_cache, JobStatus
@@ -135,15 +135,33 @@ class JobWorker:
         # Compute the data
         data = await get_temperature_data_v1(location, period, identifier)
         
-        # Store in cache with long TTL
+        # Store in cache using simple Redis string operations (avoid type conflicts)
         from cache_utils import CACHE_TTL_LONG
-        etag = await cache.set(cache_key, data, CACHE_TTL_LONG)
+        try:
+            # Use simple Redis string operations to avoid hash/string conflicts
+            cache_data = json.dumps(data)
+            self.redis.setex(cache_key, CACHE_TTL_LONG, cache_data)
+            
+            # Generate ETag
+            import hashlib
+            etag = hashlib.md5(cache_data.encode()).hexdigest()
+            
+            # Store ETag separately
+            etag_key = f"{cache_key}:etag"
+            self.redis.setex(etag_key, CACHE_TTL_LONG, etag)
+            
+            logger.info(f"✅ Cached data for {cache_key}")
+        except Exception as cache_error:
+            logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
+            # Generate a simple ETag even if cache fails
+            import hashlib
+            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
         
         return {
             "cache_key": cache_key,
             "etag": etag,
             "data": data,
-            "computed_at": datetime.utcnow().isoformat()
+            "computed_at": datetime.now(timezone.utc).isoformat()
         }
     
     async def process_rolling_bundle_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
@@ -177,15 +195,33 @@ class JobWorker:
             }
         )
         
-        # Store in cache with long TTL
+        # Store in cache using simple Redis string operations (avoid type conflicts)
         from cache_utils import CACHE_TTL_LONG
-        etag = await cache.set(cache_key, data, CACHE_TTL_LONG)
+        try:
+            # Use simple Redis string operations to avoid hash/string conflicts
+            cache_data = json.dumps(data)
+            self.redis.setex(cache_key, CACHE_TTL_LONG, cache_data)
+            
+            # Generate ETag
+            import hashlib
+            etag = hashlib.md5(cache_data.encode()).hexdigest()
+            
+            # Store ETag separately
+            etag_key = f"{cache_key}:etag"
+            self.redis.setex(etag_key, CACHE_TTL_LONG, etag)
+            
+            logger.info(f"✅ Cached rolling bundle data for {cache_key}")
+        except Exception as cache_error:
+            logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
+            # Generate a simple ETag even if cache fails
+            import hashlib
+            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
         
         return {
             "cache_key": cache_key,
             "etag": etag,
             "data": data,
-            "computed_at": datetime.utcnow().isoformat()
+            "computed_at": datetime.now(timezone.utc).isoformat()
         }
 
 # Global worker instance
@@ -221,3 +257,44 @@ def setup_signal_handlers():
     
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+
+async def main():
+    """Main function to run the job worker."""
+    import redis
+    import os
+    
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Connect to Redis
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_client = redis.from_url(redis_url, decode_responses=True)
+    
+    # Test Redis connection
+    try:
+        redis_client.ping()
+        logger.info("✅ Connected to Redis")
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to Redis: {e}")
+        return
+    
+    # Initialize cache system first (required for job manager)
+    from cache_utils import initialize_cache
+    initialize_cache(redis_client)
+    logger.info("✅ Cache system initialized")
+    
+    # Initialize worker
+    initialize_worker(redis_client)
+    
+    # Setup signal handlers
+    setup_signal_handlers()
+    
+    # Start worker
+    logger.info("🚀 Starting job worker...")
+    await start_background_worker()
+
+if __name__ == "__main__":
+    asyncio.run(main())
