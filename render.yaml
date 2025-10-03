@@ -13,6 +13,18 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.3
 
+  - type: worker
+    name: temphist-worker
+    runtime: python
+    plan: starter
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python job_worker.py
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+
   - type: web
     name: temphist-api-dev
     runtime: python
@@ -23,6 +35,18 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     domains:
       - devapi.temphist.com
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+
+  - type: worker
+    name: temphist-worker-dev
+    runtime: python
+    plan: free
+    branch: develop
+    buildCommand: pip install -r requirements.txt
+    startCommand: python job_worker.py
     autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
