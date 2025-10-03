@@ -102,28 +102,85 @@ The API now includes a comprehensive caching system optimized for Cloudflare and
 - **Single-Flight Protection**: Prevents cache stampedes with Redis locks
 - **Canonical Cache Keys**: Normalized keys for maximum hit rates
 - **Async Job Processing**: Heavy computations handled asynchronously
+- **Cache Metrics**: Hit/miss counters and performance monitoring
+- **Cache Prewarming**: Automated warming for popular locations
 
 ### Cache Endpoints
 
-#### Regular Endpoints (with caching)
+#### Regular Endpoints (with enhanced caching)
 
 ```bash
+# All existing endpoints now include enhanced caching
 GET /v1/records/{period}/{location}/{identifier}
 GET /v1/records/rolling-bundle/{location}/{anchor}
 ```
 
-#### Async Job Endpoints
+#### Async Job Endpoints (New)
 
 ```bash
+# Create async job for heavy computations
 POST /v1/records/{period}/{location}/{identifier}/async
 POST /v1/records/rolling-bundle/{location}/{anchor}/async
+
+# Check job status and retrieve results
 GET /v1/jobs/{job_id}
+
+# Job status values: pending, processing, ready, error
+```
+
+### Async Job Processing
+
+The API now supports asynchronous processing for heavy computations:
+
+#### Job Lifecycle
+
+1. **Submit Job**: POST to async endpoint returns `202 Accepted` with `job_id`
+2. **Monitor Progress**: GET `/v1/jobs/{job_id}` to check status
+3. **Retrieve Results**: When status is `ready`, results are available
+4. **Error Handling**: Failed jobs return status `error` with details
+
+#### Example Async Usage
+
+```bash
+# Start async job for heavy computation
+curl -X POST "https://api.temphist.com/v1/records/rolling-bundle/london/2024-01-15/async" \
+     -H "Authorization: Bearer YOUR_TOKEN"
+
+# Response: {"job_id": "job_abc123", "status": "pending", "message": "Job queued"}
+
+# Check job status
+curl "https://api.temphist.com/v1/jobs/job_abc123" \
+     -H "Authorization: Bearer YOUR_TOKEN"
+
+# Response when ready:
+# {
+#   "job_id": "job_abc123",
+#   "status": "ready",
+#   "result": { /* temperature data */ },
+#   "created_at": "2024-01-15T10:00:00Z",
+#   "completed_at": "2024-01-15T10:02:30Z"
+# }
+```
+
+#### Job Worker Process
+
+The system includes a background worker that processes async jobs:
+
+```bash
+# Start the job worker (typically run as a separate service)
+python job_worker.py
+
+# The worker will:
+# - Poll Redis for pending jobs
+# - Process heavy computations
+# - Cache results automatically
+# - Update job status to 'ready' or 'error'
 ```
 
 ### Cache Management
 
 ```bash
-# View cache statistics
+# View cache statistics and performance
 GET /cache-stats
 
 # Reset cache statistics
@@ -133,19 +190,288 @@ POST /cache-stats/reset
 DELETE /cache/invalidate/key/{cache_key}
 DELETE /cache/invalidate/location/{location}
 DELETE /cache/invalidate/pattern
+
+# Cache health check
+GET /cache-stats/health
 ```
 
 ### Cache Prewarming
 
 ```bash
-# Prewarm popular locations
+# Prewarm popular locations for various endpoints
 python prewarm.py --locations 20 --days 7
 
-# Run load tests
+# Run comprehensive load tests
 python load_test_script.py --requests 1000 --concurrent 10
+
+# Test cache performance specifically
+python load_test_script.py --endpoint cache --requests 500
+```
+
+### Cache Headers and ETag Support
+
+All endpoints now support conditional requests:
+
+```bash
+# First request returns data with ETag
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+     "https://api.temphist.com/v1/records/daily/london/01-15"
+
+# Response includes: ETag: "abc123", Cache-Control: "public, max-age=3600"
+
+# Subsequent requests with ETag return 304 if unchanged
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "If-None-Match: abc123" \
+     "https://api.temphist.com/v1/records/daily/london/01-15"
+
+# Response: 304 Not Modified (use cached data)
 ```
 
 For detailed Cloudflare optimization guidance, see [CLOUDFLARE_OPTIMIZATION.md](CLOUDFLARE_OPTIMIZATION.md).
+
+## 🔌 Client Integration Guide
+
+### Authentication
+
+All API requests require authentication via Bearer token:
+
+```bash
+# Include API token in Authorization header
+curl -H "Authorization: Bearer YOUR_API_TOKEN" \
+     https://api.temphist.com/v1/records/daily/New%20York/01-15
+```
+
+### Base URLs
+
+```bash
+# Production
+BASE_URL=https://api.temphist.com
+
+# Development
+BASE_URL=http://localhost:8000
+```
+
+### Client Implementation Examples
+
+#### JavaScript/TypeScript Client
+
+```typescript
+class TempHistClient {
+  private baseUrl: string;
+  private apiToken: string;
+
+  constructor(baseUrl: string, apiToken: string) {
+    this.baseUrl = baseUrl;
+    this.apiToken = apiToken;
+  }
+
+  // Basic request with caching support
+  async getTemperatureData(
+    period: string,
+    location: string,
+    identifier: string
+  ) {
+    const response = await fetch(
+      `${this.baseUrl}/v1/records/${period}/${encodeURIComponent(
+        location
+      )}/${identifier}`,
+      {
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    // Handle 304 Not Modified (cached response)
+    if (response.status === 304) {
+      return null; // Use your local cache
+    }
+
+    return await response.json();
+  }
+
+  // Async job processing
+  async getTemperatureDataAsync(
+    period: string,
+    location: string,
+    identifier: string
+  ) {
+    // Create job
+    const jobResponse = await fetch(
+      `${this.baseUrl}/v1/records/${period}/${encodeURIComponent(
+        location
+      )}/${identifier}/async`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const job = await jobResponse.json();
+
+    // Poll for completion
+    return await this.pollJobStatus(job.job_id);
+  }
+
+  private async pollJobStatus(jobId: string): Promise<any> {
+    while (true) {
+      const response = await fetch(`${this.baseUrl}/v1/jobs/${jobId}`, {
+        headers: {
+          Authorization: `Bearer ${this.apiToken}`,
+        },
+      });
+
+      const status = await response.json();
+
+      if (status.status === "ready") {
+        return status.result;
+      } else if (status.status === "error") {
+        throw new Error(`Job failed: ${status.error}`);
+      }
+
+      // Wait before polling again
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+}
+```
+
+#### Python Client
+
+```python
+import requests
+import time
+from typing import Optional, Dict, Any
+
+class TempHistClient:
+    def __init__(self, base_url: str, api_token: str):
+        self.base_url = base_url.rstrip('/')
+        self.api_token = api_token
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Authorization': f'Bearer {api_token}',
+            'Accept': 'application/json'
+        })
+
+    def get_temperature_data(self, period: str, location: str, identifier: str,
+                           etag: Optional[str] = None) -> Dict[str, Any]:
+        """Get temperature data with optional ETag support."""
+        headers = {}
+        if etag:
+            headers['If-None-Match'] = etag
+
+        response = self.session.get(
+            f"{self.base_url}/v1/records/{period}/{location}/{identifier}",
+            headers=headers
+        )
+
+        # Handle 304 Not Modified
+        if response.status_code == 304:
+            return None  # Use cached data
+
+        response.raise_for_status()
+        return response.json()
+
+    def get_temperature_data_async(self, period: str, location: str, identifier: str) -> Dict[str, Any]:
+        """Get temperature data using async job processing."""
+        # Create job
+        job_response = self.session.post(
+            f"{self.base_url}/v1/records/{period}/{location}/{identifier}/async"
+        )
+        job_response.raise_for_status()
+        job = job_response.json()
+
+        # Poll for completion
+        return self._poll_job_status(job['job_id'])
+
+    def _poll_job_status(self, job_id: str) -> Dict[str, Any]:
+        """Poll job status until completion."""
+        while True:
+            response = self.session.get(f"{self.base_url}/v1/jobs/{job_id}")
+            response.raise_for_status()
+            status = response.json()
+
+            if status['status'] == 'ready':
+                return status['result']
+            elif status['status'] == 'error':
+                raise Exception(f"Job failed: {status.get('error', 'Unknown error')}")
+
+            time.sleep(3)  # Wait 3 seconds before polling again
+
+    def get_rolling_bundle(self, location: str, anchor: str, **params) -> Dict[str, Any]:
+        """Get rolling bundle data."""
+        response = self.session.get(
+            f"{self.base_url}/v1/records/rolling-bundle/{location}/{anchor}",
+            params=params
+        )
+        response.raise_for_status()
+        return response.json()
+```
+
+### Error Handling
+
+#### HTTP Status Codes
+
+| Code  | Description      | Action                        |
+| ----- | ---------------- | ----------------------------- |
+| `200` | Success          | Process response data         |
+| `202` | Accepted         | Job created (async endpoints) |
+| `304` | Not Modified     | Use cached data               |
+| `400` | Bad Request      | Check request parameters      |
+| `401` | Unauthorized     | Verify API token              |
+| `404` | Not Found        | Check endpoint URL            |
+| `422` | Validation Error | Fix request format            |
+| `429` | Rate Limited     | Wait and retry                |
+| `500` | Server Error     | Retry with backoff            |
+
+#### Error Response Format
+
+```json
+{
+  "detail": "Error message",
+  "status_code": 400,
+  "error_type": "validation_error"
+}
+```
+
+### Performance Best Practices
+
+#### Use Appropriate Endpoints
+
+```bash
+# For real-time data - use regular endpoints
+GET /v1/records/daily/New%20York/01-15
+
+# For heavy computations - use async jobs
+POST /v1/records/rolling-bundle/New%20York/2024-01-15/async
+
+# For repeated requests - implement ETag caching
+If-None-Match: "abc123def456"
+```
+
+#### Retry Logic with Exponential Backoff
+
+```python
+import time
+import random
+
+def retry_with_backoff(func, max_retries=3, base_delay=1):
+    """Retry function with exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except requests.exceptions.RequestException as e:
+            if attempt == max_retries - 1:
+                raise
+
+            # Exponential backoff with jitter
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            time.sleep(delay)
+```
 
 ## 📡 API Endpoints
 
@@ -161,6 +487,14 @@ The new v1 API provides a unified structure for accessing temperature records ac
 | `GET /v1/records/{period}/{location}/{identifier}/average` | Average temperature data    | Subresource                  |
 | `GET /v1/records/{period}/{location}/{identifier}/trend`   | Temperature trend data      | Subresource                  |
 | `GET /v1/records/{period}/{location}/{identifier}/summary` | Text summary                | Subresource                  |
+
+#### Async Job Endpoints (New)
+
+| Endpoint                                                    | Description                  | Response       |
+| ----------------------------------------------------------- | ---------------------------- | -------------- |
+| `POST /v1/records/{period}/{location}/{identifier}/async`   | Create async job for records | `202 Accepted` |
+| `POST /v1/records/rolling-bundle/{location}/{anchor}/async` | Create async job for bundle  | `202 Accepted` |
+| `GET /v1/jobs/{job_id}`                                     | Check job status and results | Job status     |
 
 #### Rolling Bundle Endpoint
 
@@ -619,21 +953,58 @@ cProfile.run('calculate_historical_average([{\"x\": 2020, \"y\": 15.5}])')
 ### Quick Start
 
 ```bash
-# Run all tests
-pytest test_main.py -v
+# Run all tests (140+ tests)
+pytest -v
 
 # Run specific test categories
 pytest test_main.py -k "rate" -v  # Rate limiting tests
 pytest test_main.py -k "cache" -v  # Caching tests
 pytest test_main.py -k "performance" -v  # Performance tests
+pytest test_cache.py -v  # Enhanced caching system tests
+pytest tests/routers/ -v  # Router-specific tests
 ```
 
 ### Test Categories
 
-- **Unit Tests**: Individual component testing
+- **Unit Tests**: Individual component testing (test_main.py)
+- **Enhanced Caching Tests**: Cache utilities, ETags, jobs (test_cache.py)
 - **Integration Tests**: Full API endpoint testing
 - **Performance Tests**: Load and stress testing
 - **Rate Limiting Tests**: Rate limit validation
+- **Router Tests**: Endpoint-specific functionality
+
+### Enhanced Caching Tests
+
+```bash
+# Test cache key normalization
+pytest test_cache.py::TestCacheKeyBuilder -v
+
+# Test ETag generation and conditional requests
+pytest test_cache.py::TestETagGenerator -v
+
+# Test async job processing
+pytest test_cache.py::TestJobWorker -v
+
+# Test single-flight protection
+pytest test_cache.py::TestSingleFlightLock -v
+
+# Test cache performance
+pytest test_cache.py::TestPerformance -v
+```
+
+### Load Testing
+
+```bash
+# Run comprehensive load tests
+python load_test_script.py --requests 1000 --concurrent 10
+
+# Test specific endpoints
+python load_test_script.py --endpoint records --requests 500
+python load_test_script.py --endpoint cache --requests 200
+
+# Test async job performance
+python load_test_script.py --endpoint async --requests 50
+```
 
 ### Manual Testing
 
@@ -642,10 +1013,34 @@ pytest test_main.py -k "performance" -v  # Performance tests
 curl http://localhost:8000/rate-limit-status
 
 # Test weather data
-curl http://localhost:8000/data/London/01-15
+curl http://localhost:8000/v1/records/daily/London/01-15
 
 # Test with authentication
-curl -H "Authorization: Bearer test_token" http://localhost:8000/data/London/01-15
+curl -H "Authorization: Bearer test_token" \
+     http://localhost:8000/v1/records/daily/London/01-15
+
+# Test async job processing
+curl -X POST -H "Authorization: Bearer test_token" \
+     http://localhost:8000/v1/records/daily/London/01-15/async
+
+# Test cache headers
+curl -v -H "Authorization: Bearer test_token" \
+     http://localhost:8000/v1/records/daily/London/01-15
+
+# Test conditional requests (304 Not Modified)
+curl -H "Authorization: Bearer test_token" \
+     -H "If-None-Match: your_etag_here" \
+     http://localhost:8000/v1/records/daily/London/01-15
+```
+
+### Cache Prewarming
+
+```bash
+# Prewarm popular locations
+python prewarm.py --locations 20 --days 7
+
+# Prewarm with verbose output
+python prewarm.py --locations 10 --days 3 --verbose
 ```
 
 ## 📝 Logging
@@ -697,6 +1092,32 @@ CACHE_ENABLED=true
 RATE_LIMIT_ENABLED=true
 REDIS_URL=your_redis_url
 VISUAL_CROSSING_API_KEY=your_key
+OPENWEATHER_API_KEY=your_key
+API_ACCESS_TOKEN=your_token
+```
+
+### Multi-Service Deployment
+
+For production, you'll want to deploy both the API and the job worker:
+
+#### API Service (Web Service)
+
+```bash
+# Build Command
+pip install -r requirements.txt
+
+# Start Command
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+#### Job Worker Service (Background Worker)
+
+```bash
+# Build Command
+pip install -r requirements.txt
+
+# Start Command
+python job_worker.py
 ```
 
 ### Health Checks
@@ -704,6 +1125,8 @@ VISUAL_CROSSING_API_KEY=your_key
 - **Health endpoint**: `/health`
 - **Redis check**: `/test-redis`
 - **Rate limit status**: `/rate-limit-status`
+- **Cache statistics**: `/cache-stats`
+- **Job worker status**: Check Redis for active job processing
 
 ## 🔧 Troubleshooting
 
