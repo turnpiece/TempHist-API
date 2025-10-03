@@ -46,7 +46,7 @@ services:
     plan: free
     branch: develop
     buildCommand: pip install -r requirements.txt
-    startCommand: python job_worker.py
+    startCommand: python job_worker_debug.py
     autoDeployTrigger: commit
     envVars:
       - key: PYTHON_VERSION
