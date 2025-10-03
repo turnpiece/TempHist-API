@@ -1680,6 +1680,15 @@ redis_client = redis.from_url(REDIS_URL)
 # Initialize enhanced cache system
 initialize_cache(redis_client)
 
+# Start background worker for async job processing
+try:
+    from background_worker import start_background_worker
+    start_background_worker(redis_client)
+    logger.info("✅ Background worker started successfully")
+except Exception as e:
+    logger.error(f"❌ Failed to start background worker: {e}")
+    logger.warning("Async job processing will not be available")
+
 # Wire up Redis cache for rolling bundle
 daily_cache.redis = redis_client
 
