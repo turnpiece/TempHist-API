@@ -423,7 +423,9 @@ class TestJobWorker:
             "status": JobStatus.PENDING
         }
         
-        mock_redis.keys.return_value = ["job:test_job_123"]
+        # Mock Redis LIST operations instead of KEYS
+        mock_redis.llen.return_value = 1
+        mock_redis.lindex.return_value = "test_job_123"
         mock_redis.get.return_value = json.dumps(job_data)
         
         pending_jobs = await worker.get_pending_jobs()

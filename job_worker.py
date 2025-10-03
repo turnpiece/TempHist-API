@@ -64,20 +64,26 @@ class JobWorker:
             logger.error(f"Error processing jobs: {e}")
     
     async def get_pending_jobs(self) -> list:
-        """Get list of pending job IDs."""
+        """Get list of pending job IDs from the job queue."""
         try:
-            # Get all job keys
-            job_keys = self.redis.keys("job:*")
+            # Use Redis LIST operations instead of KEYS command
+            # This is more efficient and doesn't require KEYS permission
             pending_jobs = []
             
-            for job_key in job_keys:
-                job_data = self.redis.get(job_key)
-                if job_data:
-                    job = json.loads(job_data)
-                    if job.get("status") == JobStatus.PENDING:
-                        job_id = job.get("id")
-                        if job_id:
-                            pending_jobs.append(job_id)
+            # Check if we have a job queue
+            queue_length = self.redis.llen(self.job_queue_key)
+            if queue_length > 0:
+                # Get jobs from the queue (without removing them)
+                for i in range(min(queue_length, 10)):  # Process up to 10 jobs at a time
+                    job_id = self.redis.lindex(self.job_queue_key, i)
+                    if job_id:
+                        # Check if job is still pending
+                        job_key = f"job:{job_id}"
+                        job_data = self.redis.get(job_key)
+                        if job_data:
+                            job = json.loads(job_data)
+                            if job.get("status") == JobStatus.PENDING:
+                                pending_jobs.append(job_id)
             
             return pending_jobs
             
@@ -96,6 +102,8 @@ class JobWorker:
             job_data = job_manager.get_job_status(job_id)
             if not job_data:
                 logger.error(f"Job not found: {job_id}")
+                # Remove from queue if job doesn't exist
+                self.redis.lrem(self.job_queue_key, 1, job_id)
                 return
             
             job_type = job_data.get("type")
@@ -113,9 +121,14 @@ class JobWorker:
             job_manager.update_job_status(job_id, JobStatus.READY, result)
             logger.info(f"✅ Job completed: {job_id}")
             
+            # Remove job from queue after successful completion
+            self.redis.lrem(self.job_queue_key, 1, job_id)
+            
         except Exception as e:
             logger.error(f"Error processing job {job_id}: {e}")
             job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(e))
+            # Remove failed job from queue
+            self.redis.lrem(self.job_queue_key, 1, job_id)
     
     async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a record computation job."""

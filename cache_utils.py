@@ -396,7 +396,13 @@ class JobManager:
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
+        # Store job data
         self.redis.setex(job_key, self.job_ttl, json.dumps(job_data))
+        
+        # Add job to queue for worker processing
+        job_queue_key = "job_queue"
+        self.redis.lpush(job_queue_key, job_id)
+        
         return job_id
     
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
