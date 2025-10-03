@@ -30,6 +30,7 @@ class BackgroundWorker:
         self.thread = threading.Thread(target=self._run_worker, daemon=True)
         self.thread.start()
         logger.info("🚀 Background worker thread started")
+        logger.info(f"📊 Thread info: {self.thread.name}, daemon={self.thread.daemon}, alive={self.thread.is_alive()}")
         
     def stop(self):
         """Stop the background worker thread."""
@@ -48,16 +49,23 @@ class BackgroundWorker:
         
     def _run_worker(self):
         """Run the worker in a separate thread with its own event loop."""
+        logger.info("🔄 Background worker thread function started")
+        
         # Create a new event loop for this thread
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        logger.info("✅ Event loop created and set")
         
         try:
             # Run the worker
+            logger.info("🚀 Starting worker main loop...")
             self.loop.run_until_complete(self._worker_main())
         except Exception as e:
-            logger.error(f"Background worker error: {e}")
+            logger.error(f"❌ Background worker error: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
         finally:
+            logger.info("🛑 Background worker thread ending")
             self.loop.close()
             
     async def _stop_loop(self):
@@ -77,15 +85,28 @@ class BackgroundWorker:
         logger.info("🚀 Background worker main loop started")
         
         try:
+            # Test Redis connection first
+            logger.info("🔗 Testing Redis connection...")
+            self.redis_client.ping()
+            logger.info("✅ Redis connection successful")
+            
             # Import job worker components
+            logger.info("📦 Importing job worker components...")
             from job_worker import JobWorker
+            logger.info("✅ JobWorker imported successfully")
             
             # Create and start the job worker
+            logger.info("🏗️ Creating JobWorker instance...")
             worker = JobWorker(self.redis_client)
+            logger.info("✅ JobWorker created successfully")
+            
+            logger.info("🚀 Starting JobWorker...")
             await worker.start()
             
         except Exception as e:
-            logger.error(f"Background worker main loop error: {e}")
+            logger.error(f"❌ Background worker main loop error: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
             
         logger.info("🛑 Background worker main loop stopped")
 

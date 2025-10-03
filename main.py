@@ -1682,11 +1682,23 @@ initialize_cache(redis_client)
 
 # Start background worker for async job processing
 try:
+    logger.info("🔄 Attempting to start background worker...")
     from background_worker import start_background_worker
+    logger.info("✅ Background worker module imported successfully")
+    
+    logger.info("🚀 Starting background worker...")
     start_background_worker(redis_client)
     logger.info("✅ Background worker started successfully")
+    
+    # Give it a moment to initialize
+    import time
+    time.sleep(1)
+    logger.info("✅ Background worker initialization complete")
+    
 except Exception as e:
     logger.error(f"❌ Failed to start background worker: {e}")
+    import traceback
+    logger.error(f"❌ Traceback: {traceback.format_exc()}")
     logger.warning("Async job processing will not be available")
 
 # Wire up Redis cache for rolling bundle
