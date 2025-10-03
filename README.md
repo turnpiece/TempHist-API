@@ -5,10 +5,12 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 ## 🚀 Features
 
 - **Historical Temperature Data**: 50 years of temperature data for any location
-- **Smart Caching**: Redis-based caching with intelligent cache durations
+- **Enhanced Caching**: Cloudflare-optimized caching with ETags and conditional requests
+- **Async Job Processing**: Heavy computations handled asynchronously with job tracking
 - **Rate Limiting**: Built-in protection against API abuse and misuse
 - **Weather Forecasts**: Current weather data and forecasts
 - **Performance Monitoring**: Built-in profiling and monitoring tools
+- **Cache Prewarming**: Automated cache warming for popular locations
 - **CORS Enabled**: Ready for web applications
 - **Production Ready**: Deploy on Render with one click
 
@@ -88,6 +90,62 @@ FILTER_WEATHER_DATA=true  # Filter to essential temperature data only
    ```bash
    uvicorn main:app --reload
    ```
+
+## 🚀 Enhanced Caching System
+
+The API now includes a comprehensive caching system optimized for Cloudflare and high performance:
+
+### Cache Features
+
+- **Strong Cache Headers**: ETags, Last-Modified, and Cache-Control headers
+- **Conditional Requests**: 304 Not Modified responses for unchanged data
+- **Single-Flight Protection**: Prevents cache stampedes with Redis locks
+- **Canonical Cache Keys**: Normalized keys for maximum hit rates
+- **Async Job Processing**: Heavy computations handled asynchronously
+
+### Cache Endpoints
+
+#### Regular Endpoints (with caching)
+
+```bash
+GET /v1/records/{period}/{location}/{identifier}
+GET /v1/records/rolling-bundle/{location}/{anchor}
+```
+
+#### Async Job Endpoints
+
+```bash
+POST /v1/records/{period}/{location}/{identifier}/async
+POST /v1/records/rolling-bundle/{location}/{anchor}/async
+GET /v1/jobs/{job_id}
+```
+
+### Cache Management
+
+```bash
+# View cache statistics
+GET /cache-stats
+
+# Reset cache statistics
+POST /cache-stats/reset
+
+# Invalidate specific cache entries
+DELETE /cache/invalidate/key/{cache_key}
+DELETE /cache/invalidate/location/{location}
+DELETE /cache/invalidate/pattern
+```
+
+### Cache Prewarming
+
+```bash
+# Prewarm popular locations
+python prewarm.py --locations 20 --days 7
+
+# Run load tests
+python load_test_script.py --requests 1000 --concurrent 10
+```
+
+For detailed Cloudflare optimization guidance, see [CLOUDFLARE_OPTIMIZATION.md](CLOUDFLARE_OPTIMIZATION.md).
 
 ## 📡 API Endpoints
 

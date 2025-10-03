@@ -31,6 +31,14 @@ load_dotenv()
 from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
 from routers.locations_preapproved import router as locations_preapproved_router, initialize_locations_data
 
+# Import enhanced caching utilities
+from cache_utils import (
+    initialize_cache, get_cache as get_enhanced_cache, get_job_manager,
+    CacheKeyBuilder, ETagGenerator, CacheHeaders,
+    CACHE_TTL_DEFAULT, CACHE_TTL_SHORT, CACHE_TTL_LONG,
+    CACHE_CONTROL_PUBLIC, JobStatus
+)
+
 # Environment variables
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
@@ -1669,6 +1677,9 @@ app.include_router(records_agg_router)
 app.include_router(locations_preapproved_router)
 redis_client = redis.from_url(REDIS_URL)
 
+# Initialize enhanced cache system
+initialize_cache(redis_client)
+
 # Wire up Redis cache for rolling bundle
 daily_cache.redis = redis_client
 
@@ -3200,6 +3211,41 @@ def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
     else:
         return f"{prefix}_{location}"
 
+async def cached_endpoint_response(
+    request: Request,
+    response: Response,
+    cache_key: str,
+    compute_func,
+    ttl: int = CACHE_TTL_DEFAULT,
+    cache_control: str = CACHE_CONTROL_PUBLIC,
+    *args,
+    **kwargs
+):
+    """Helper function to add caching to any endpoint."""
+    cache = get_enhanced_cache()
+    
+    try:
+        # Try to get from cache or compute
+        data, etag, last_modified = await cache.get_or_compute(
+            cache_key, compute_func, ttl, *args, **kwargs
+        )
+        
+        # Check if client has cached version
+        if CacheHeaders.check_conditional_headers(request, etag, last_modified):
+            response.status_code = 304
+            return None
+        
+        # Set cache headers
+        CacheHeaders.set_cache_headers(response, etag, last_modified, cache_control)
+        
+        return data
+        
+    except Exception as e:
+        logger.error(f"Cache error for {cache_key}: {e}")
+        # Fallback to direct computation
+        data = await compute_func(*args, **kwargs) if asyncio.iscoroutinefunction(compute_func) else compute_func(*args, **kwargs)
+        return data
+
     
 async def get_trend(location: str, month_day: str, weather_data: Optional[List[Dict]] = None) -> dict:
     """Calculate temperature trend for a location and date."""
@@ -4294,6 +4340,101 @@ async def get_analytics_by_session(session_id: str):
     except Exception as e:
         logger.error(f"Error getting session analytics: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve session analytics")
+
+# Async Job Endpoints for Heavy Operations
+@app.post("/v1/records/{period}/{location}/{identifier}/async")
+async def create_record_job(
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
+    location: str = Path(..., description="Location name"),
+    identifier: str = Path(..., description="Date identifier"),
+    response: Response = None
+):
+    """Create an async job to compute heavy record data."""
+    try:
+        job_manager = get_job_manager()
+        
+        # Create job
+        job_id = job_manager.create_job("record_computation", {
+            "period": period,
+            "location": location,
+            "identifier": identifier
+        })
+        
+        # Return 202 Accepted with job info
+        response.status_code = 202
+        response.headers["Retry-After"] = "3"
+        
+        return {
+            "job_id": job_id,
+            "status": JobStatus.PENDING,
+            "message": "Job created successfully",
+            "retry_after": 3,
+            "status_url": f"/v1/jobs/{job_id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating record job: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create job")
+
+@app.get("/v1/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """Get the status of an async job."""
+    try:
+        job_manager = get_job_manager()
+        job_status = job_manager.get_job_status(job_id)
+        
+        if job_status is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        return job_status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving job status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve job status")
+
+@app.post("/v1/records/rolling-bundle/{location}/{anchor}/async")
+async def create_rolling_bundle_job(
+    location: str = Path(..., description="Location name"),
+    anchor: str = Path(..., description="Anchor date"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius"),
+    month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
+    days_back: int = Query(7, ge=0, le=10),
+    include: str = Query(None),
+    exclude: str = Query(None),
+    response: Response = None
+):
+    """Create an async job to compute rolling bundle data."""
+    try:
+        job_manager = get_job_manager()
+        
+        # Create job
+        job_id = job_manager.create_job("rolling_bundle", {
+            "location": location,
+            "anchor": anchor,
+            "unit_group": unit_group,
+            "month_mode": month_mode,
+            "days_back": days_back,
+            "include": include,
+            "exclude": exclude
+        })
+        
+        # Return 202 Accepted with job info
+        response.status_code = 202
+        response.headers["Retry-After"] = "5"
+        
+        return {
+            "job_id": job_id,
+            "status": JobStatus.PENDING,
+            "message": "Rolling bundle job created successfully",
+            "retry_after": 5,
+            "status_url": f"/v1/jobs/{job_id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating rolling bundle job: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create job")
 
 # For local testing
 if __name__ == "__main__":
