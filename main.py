@@ -575,8 +575,6 @@ class AnalyticsStorage:
 
 
 
-# Remove the old debug_print function - we'll use logger.debug() instead
-
 # Lifespan event handler for startup and shutdown
 from contextlib import asynccontextmanager
 
@@ -2368,7 +2366,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                 "missing_years": missing_years,
                 "completeness": round(len(data) / len(years) * 100, 1) if years else 0
             }
-        }))
+        }), redis_client)
 
     return {
         "data": data_list,
