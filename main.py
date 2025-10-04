@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from firebase_admin import auth, credentials
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
 # Load environment variables before importing routers
@@ -34,13 +34,11 @@ from routers.locations_preapproved import router as locations_preapproved_router
 # Import enhanced caching utilities
 from cache_utils import (
     initialize_cache, get_cache as get_enhanced_cache, get_job_manager,
-    CacheKeyBuilder, ETagGenerator, CacheHeaders,
-    CACHE_TTL_DEFAULT, CACHE_TTL_SHORT, CACHE_TTL_LONG,
     CACHE_CONTROL_PUBLIC, JobStatus,
     # Cache management classes
     LocationUsageTracker, CacheWarmer, CacheStats, CacheInvalidator,
     # Cache utility functions
-    get_cache_value, set_cache_value, get_weather_cache_key, generate_cache_key, cached_endpoint_response,
+    get_cache_value, set_cache_value, get_weather_cache_key, generate_cache_key,
     # Cache configuration
     CACHE_WARMING_ENABLED, CACHE_WARMING_INTERVAL_HOURS, CACHE_WARMING_DAYS_BACK,
     CACHE_WARMING_CONCURRENT_REQUESTS, CACHE_WARMING_MAX_LOCATIONS,
@@ -55,11 +53,9 @@ from cache_utils import (
 # Environment variables
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 TEST_TOKEN = os.getenv("TEST_TOKEN", "test_token")
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
@@ -1086,79 +1082,6 @@ async def root():
         ]
     }
 
-async def fetch_weather_from_api(location: str, date: str):
-    """Fetch weather data from Visual Crossing API with fallback logic using httpx.
-    
-    Implements fallback logic for remote data:
-    1. First tries without remote data parameters
-    2. If no temperature data and year >= 2005, retries with remote data parameters
-    3. Never uses remote data for today's data
-    """
-    # Parse the date to determine the year
-    try:
-        year, month, day = map(int, date.split("-")[:3])
-        is_today_date = is_today(year, month, day)
-    except Exception:
-        year = 2000  # Default fallback
-        is_today_date = False
-    
-    # First attempt: without remote data parameters
-    url = build_visual_crossing_url(location, date, remote=False)
-    if DEBUG:
-        logger.debug(f"🌤️  API CALL: {location} | {date} | Remote: False")
-        logger.debug(f"🔗 URL: {url}")
-    
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        response = await client.get(url, headers={"Accept-Encoding": "gzip"})
-    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-        data = response.json()
-        days = data.get('days')
-        if days is not None and len(days) > 0:
-            # Check if we got valid temperature data
-            day_data = days[0]
-            temp = day_data.get('temp')
-            
-            if temp is not None:
-                # Success! Return the data
-                logger.debug(f"fetch_weather_from_api successful without remote data for {date}")
-                return data
-            else:
-                logger.debug(f"No temperature data in first attempt for {date}")
-        else:
-            logger.debug(f"No 'days' data in first attempt for {date}")
-    else:
-        logger.debug(f"First attempt failed with status {response.status_code}")
-    
-    # If we reach here, the first attempt didn't provide valid temperature data
-    # Check if we should try with remote data parameters
-    if not is_today_date and year >= 2005:
-        if DEBUG:
-            logger.debug(f"🔄 API FALLBACK: {location} | {date} | Year: {year}")
-        url_with_remote = build_visual_crossing_url(location, date, remote=True)
-        
-        remote_response = await client.get(url_with_remote)
-        if remote_response.status_code == 200 and 'application/json' in remote_response.headers.get('Content-Type', ''):
-            remote_data = remote_response.json()
-            remote_days = remote_data.get('days')
-            if remote_days is not None and len(remote_days) > 0:
-                remote_day_data = remote_days[0]
-                remote_temp = remote_day_data.get('temp')
-                
-                if remote_temp is not None:
-                    # Success with remote data!
-                    logger.debug(f"Remote data fallback successful for {date}")
-                    return remote_data
-                else:
-                    logger.debug(f"No temperature data in remote fallback for {date}")
-            else:
-                logger.debug(f"No 'days' data in remote fallback for {date}")
-        else:
-            logger.debug(f"Remote fallback failed with status {remote_response.status_code}")
-    
-    # If we reach here, neither attempt provided valid temperature data
-    return {"error": "No temperature data available", "status": response.status_code}
-
-# get a value from the cache
 # Shared async function for fetching and caching weather data for a single date
 
 async def get_weather_for_date(location: str, date_str: str) -> dict:
@@ -1779,8 +1702,9 @@ async def detailed_health_check():
     
     # Check cache statistics if available
     try:
-        if hasattr(cache_stats, 'get_cache_health'):
-            cache_health = cache_stats.get_cache_health()
+        cache_stats_instance = get_cache_stats()
+        if cache_stats_instance and hasattr(cache_stats_instance, 'get_cache_health'):
+            cache_health = cache_stats_instance.get_cache_health()
             health_status["services"]["cache"] = cache_health
             # Only consider cache "unhealthy" status as a failure, not "degraded"
             if cache_health.get("status") == "unhealthy":
@@ -1981,67 +1905,73 @@ async def get_warming_schedule():
 @app.get("/cache-stats")
 async def get_cache_statistics():
     """Get comprehensive cache statistics and performance metrics."""
-    if not CACHE_STATS_ENABLED or not cache_stats:
+    cache_stats_instance = get_cache_stats()
+    if not CACHE_STATS_ENABLED or not cache_stats_instance:
         return {"status": "disabled", "message": "Cache statistics are not enabled"}
     
-    return cache_stats.get_comprehensive_stats()
+    return cache_stats_instance.get_comprehensive_stats()
 
 @app.get("/cache-stats/health")
 async def get_cache_health():
     """Get cache health assessment and alerts."""
-    if not CACHE_STATS_ENABLED or not cache_stats:
+    cache_stats_instance = get_cache_stats()
+    if not CACHE_STATS_ENABLED or not cache_stats_instance:
         return {"status": "disabled", "message": "Cache statistics are not enabled"}
     
-    return cache_stats.get_cache_health()
+    return cache_stats_instance.get_cache_health()
 
 @app.get("/cache-stats/endpoints")
 async def get_cache_endpoint_stats():
     """Get cache statistics broken down by endpoint."""
-    if not CACHE_STATS_ENABLED or not cache_stats:
+    cache_stats_instance = get_cache_stats()
+    if not CACHE_STATS_ENABLED or not cache_stats_instance:
         return {"status": "disabled", "message": "Cache statistics are not enabled"}
     
     return {
-        "by_endpoint": cache_stats.get_endpoint_stats(),
+        "by_endpoint": cache_stats_instance.get_endpoint_stats(),
         "overall": {
-            "total_requests": cache_stats.stats["total_requests"],
-            "hit_rate": cache_stats.get_hit_rate(),
-            "error_rate": cache_stats.get_error_rate()
+            "total_requests": cache_stats_instance.stats["total_requests"],
+            "hit_rate": cache_stats_instance.get_hit_rate(),
+            "error_rate": cache_stats_instance.get_error_rate()
         }
     }
 
 @app.get("/cache-stats/locations")
 async def get_cache_location_stats():
     """Get cache statistics broken down by location."""
-    if not CACHE_STATS_ENABLED or not cache_stats:
+    cache_stats_instance = get_cache_stats()
+    if not CACHE_STATS_ENABLED or not cache_stats_instance:
         return {"status": "disabled", "message": "Cache statistics are not enabled"}
     
     return {
-        "by_location": cache_stats.get_location_stats(),
+        "by_location": cache_stats_instance.get_location_stats(),
         "overall": {
-            "total_requests": cache_stats.stats["total_requests"],
-            "hit_rate": cache_stats.get_hit_rate(),
-            "error_rate": cache_stats.get_error_rate()
+            "total_requests": cache_stats_instance.stats["total_requests"],
+            "hit_rate": cache_stats_instance.get_hit_rate(),
+            "error_rate": cache_stats_instance.get_error_rate()
         }
     }
 
 @app.get("/cache-stats/hourly")
 async def get_cache_hourly_stats(hours: int = 24):
     """Get hourly cache statistics for the last N hours."""
-    if not CACHE_STATS_ENABLED or not cache_stats:
+    cache_stats_instance = get_cache_stats()
+    if not CACHE_STATS_ENABLED or not cache_stats_instance:
         return {"status": "disabled", "message": "Cache statistics are not enabled"}
     
     return {
-        "hourly_data": cache_stats.get_hourly_stats(hours),
+        "hourly_data": cache_stats_instance.get_hourly_stats(hours),
         "requested_hours": hours
     }
 
 @app.post("/cache-stats/reset")
 async def reset_cache_statistics():
     """Reset all cache statistics (admin endpoint)."""
-    if not CACHE_STATS_ENABLED or not cache_stats:
+    cache_stats_instance = get_cache_stats()
+    if not CACHE_STATS_ENABLED or not cache_stats_instance:
         return {"status": "disabled", "message": "Cache statistics are not enabled"}
     
-    cache_stats.reset_stats()
+    cache_stats_instance.reset_stats()
     return {
         "status": "success",
         "message": "Cache statistics have been reset",
@@ -2197,30 +2127,6 @@ def validate_month_day(month_day: str):
         raise HTTPException(status_code=400, detail="February has only 29 days")
     return month, day
 
-def get_average_dict(weather_data):
-    """Create average temperature dictionary from weather data."""
-    data_list = sorted([d for d in weather_data['data'] if d.get('y') is not None], key=lambda d: d['x'])
-    if not data_list:
-        return {
-            "average": None,
-            "unit": "celsius",
-            "data_points": 0,
-            "year_range": None,
-            "missing_years": weather_data['metadata']['missing_years'],
-            "completeness": weather_data['metadata']['completeness']
-        }
-    avg_temp = calculate_historical_average(data_list)
-    return {
-        "average": avg_temp,
-        "unit": "celsius",
-        "data_points": len(data_list),
-        "year_range": {
-            "start": data_list[0]['x'],
-            "end": data_list[-1]['x']
-        },
-        "missing_years": weather_data['metadata']['missing_years'],
-        "completeness": weather_data['metadata']['completeness']
-    }
 
 def is_valid_location(location: str) -> bool:
     """Check if a location is valid by testing the API."""
