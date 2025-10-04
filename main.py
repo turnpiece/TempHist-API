@@ -1570,7 +1570,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         else:
             # For daily periods, use the period context
             if period == "daily" and period_context in ["today", "yesterday"]:
-                period_capitalized = period_context
+                period_capitalized = period_context.capitalize()
             else:
                 period_capitalized = period_context.capitalize()
             avg_summary = "However, " if cold_summary else ""
@@ -1583,7 +1583,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         else:
             # For daily periods, use the period context
             if period == "daily" and period_context in ["today", "yesterday"]:
-                period_capitalized = period_context
+                period_capitalized = period_context.capitalize()
             else:
                 period_capitalized = period_context.capitalize()
             avg_summary = "However, " if warm_summary else ""
