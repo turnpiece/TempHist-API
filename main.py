@@ -1489,7 +1489,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
             avg_summary = "However, " if cold_summary else ""
-            avg_summary += f"It was {rounded_diff}°C warmer than average."
+            avg_summary += f"it was {rounded_diff}°C warmer than average."
         else:
             # For daily periods, use the period context
             if period == "daily" and period_context in ["today", "yesterday"]:
@@ -1502,7 +1502,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
             avg_summary = "However, " if warm_summary else ""
-            avg_summary += f"It was {abs(rounded_diff)}°C cooler than average."
+            avg_summary += f"it was {abs(rounded_diff)}°C cooler than average."
         else:
             # For daily periods, use the period context
             if period == "daily" and period_context in ["today", "yesterday"]:
