@@ -411,6 +411,20 @@ class EnhancedCache:
             logger.error(f"Cache get error for {key}: {e}")
             return None
     
+    async def get_updated_timestamp(self, key: str) -> Optional[datetime]:
+        """Get the last updated timestamp for a cache key without fetching the full data."""
+        cache_key = self._get_cache_key(key)
+        
+        try:
+            cached_timestamp = self.redis.hget(cache_key, "timestamp")
+            if cached_timestamp:
+                return datetime.fromisoformat(cached_timestamp.decode())
+            return None
+                
+        except Exception as e:
+            logger.error(f"Error getting timestamp for {key}: {e}")
+            return None
+    
     async def set(
         self, 
         key: str, 
@@ -1500,6 +1514,52 @@ async def cached_endpoint_response(
         # Fallback to direct computation
         data = await compute_func(*args, **kwargs) if asyncio.iscoroutinefunction(compute_func) else compute_func(*args, **kwargs)
         return data
+
+async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis) -> Optional[datetime]:
+    """Get the last updated timestamp for a cache key."""
+    try:
+        if not redis_client:
+            return None
+        
+        # Check if the cache key exists
+        if not redis_client.exists(cache_key):
+            return None
+        
+        # First, try to get the timestamp from the hash (new enhanced cache format)
+        # Only try hget if the key is a hash type
+        try:
+            key_type = redis_client.type(cache_key)
+            if key_type == 'hash':
+                timestamp_data = redis_client.hget(cache_key, "timestamp")
+                if timestamp_data:
+                    return datetime.fromisoformat(timestamp_data.decode())
+        except Exception:
+            # If hget fails, continue to string-based approach
+            pass
+        
+        # Fallback: check if it's a simple string key (current cache format)
+        # Try to parse the JSON data to extract the updated timestamp
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            try:
+                data = json.loads(cached_data)
+                if "updated" in data and data["updated"]:
+                    return datetime.fromisoformat(data["updated"])
+            except (json.JSONDecodeError, ValueError):
+                pass
+        
+        # Final fallback: estimate from TTL
+        ttl = redis_client.ttl(cache_key)
+        if ttl > 0:
+            # Estimate creation time as now - (original_ttl - current_ttl)
+            # This is approximate but gives a reasonable estimate
+            return datetime.now(timezone.utc) - timedelta(seconds=ttl)
+        
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Error getting cache timestamp for {cache_key}: {e}")
+        return None
 
 async def scheduled_cache_warming(cache_warmer: CacheWarmer):
     """Background task that runs cache warming on a schedule."""

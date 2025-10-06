@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta, date as dt_date
+from datetime import datetime, timedelta, date as dt_date, timezone
 from typing import List, Dict, Optional, Set, Union, Literal
 from collections import defaultdict
 import time
@@ -100,6 +100,15 @@ class TrendData(BaseModel):
     data_points: int = Field(..., description="Number of data points used")
     r_squared: Optional[float] = Field(None, description="R-squared value for trend fit")
 
+class UpdatedResponse(BaseModel):
+    """Response model for updated timestamp endpoint."""
+    period: str = Field(..., description="Data period")
+    location: str = Field(..., description="Location name")
+    identifier: str = Field(..., description="Date identifier")
+    updated: Optional[str] = Field(None, description="ISO timestamp when data was last updated, null if not cached")
+    cached: bool = Field(..., description="Whether the data is currently cached")
+    cache_key: str = Field(..., description="Cache key used for this endpoint")
+
 class RecordResponse(BaseModel):
     """Main record response for v1 API."""
     period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
@@ -112,6 +121,7 @@ class RecordResponse(BaseModel):
     trend: TrendData = Field(..., description="Temperature trend analysis")
     summary: str = Field(..., description="Human-readable summary")
     metadata: Dict = Field(default_factory=dict, description="Additional metadata")
+    updated: Optional[str] = Field(None, description="ISO timestamp when data was last updated (if cached)")
 
 class SubResourceResponse(BaseModel):
     """Response for subresource endpoints."""
@@ -1020,7 +1030,8 @@ async def root():
                 "/v1/records/{period}/{location}/{identifier}",
                 "/v1/records/{period}/{location}/{identifier}/average",
                 "/v1/records/{period}/{location}/{identifier}/trend",
-                "/v1/records/{period}/{location}/{identifier}/summary"
+                "/v1/records/{period}/{location}/{identifier}/summary",
+                "/v1/records/{period}/{location}/{identifier}/updated"
             ],
             "rolling_bundle": [
                 "/v1/records/rolling-bundle/{location}/{anchor}"
@@ -1031,6 +1042,7 @@ async def root():
                 "/v1/records/weekly/london/01-15",
                 "/v1/records/monthly/london/01-15",
                 "/v1/records/yearly/london/01-15",
+                "/v1/records/daily/london/01-15/updated",
                 "/v1/records/rolling-bundle/london/2024-01-15"
             ]
         },
@@ -2715,6 +2727,13 @@ async def get_record(
                 if DEBUG:
                     logger.debug(f"✅ SERVING CACHED V1 RECORD: {cache_key}")
                 data = json.loads(cached_data)
+                
+                # Add updated timestamp for cached data
+                from cache_utils import get_cache_updated_timestamp
+                updated_timestamp = await get_cache_updated_timestamp(cache_key, redis_client)
+                if updated_timestamp:
+                    data["updated"] = updated_timestamp.isoformat()
+                
                 # Set smart cache headers for cached data too
                 json_response = JSONResponse(content=data)
                 set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
@@ -2722,6 +2741,10 @@ async def get_record(
         
         # Get data
         data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Add updated timestamp for newly computed data
+        current_time = datetime.now(timezone.utc)
+        data["updated"] = current_time.isoformat()
         
         # Cache the result
         if CACHE_ENABLED:
@@ -2908,6 +2931,47 @@ async def get_record_summary(
         raise
     except Exception as e:
         logger.error(f"Error in v1 records summary endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/v1/records/{period}/{location}/{identifier}/updated", response_model=UpdatedResponse)
+async def get_record_updated(
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
+    location: str = Path(..., description="Location name"),
+    identifier: str = Path(..., description="Date identifier")
+):
+    """
+    Get the last updated timestamp for a specific record endpoint.
+    
+    Returns when the data was last updated (cached) or null if it's never been queried.
+    This endpoint is designed for web apps that want to check if they need to refetch data.
+    """
+    try:
+        # Create the same cache key that would be used by the main endpoint
+        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:values,average,trend,summary"
+        
+        # Import the cache timestamp function
+        from cache_utils import get_cache_updated_timestamp
+        
+        # Get the updated timestamp from cache
+        updated_timestamp = await get_cache_updated_timestamp(cache_key, redis_client)
+        
+        # Determine if data is cached
+        is_cached = updated_timestamp is not None
+        
+        # Format timestamp as ISO string if available
+        updated_iso = updated_timestamp.isoformat() if updated_timestamp else None
+        
+        return UpdatedResponse(
+            period=period,
+            location=location,
+            identifier=identifier,
+            updated=updated_iso,
+            cached=is_cached,
+            cache_key=cache_key
+        )
+    
+    except Exception as e:
+        logger.error(f"Error in v1 records updated endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ============================================================================
