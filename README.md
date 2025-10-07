@@ -52,7 +52,7 @@ FILTER_WEATHER_DATA=true  # Filter to essential temperature data only
 
 # Authentication Tokens
 TEST_TOKEN=your_test_token_here  # Development/testing token
-PRODUCTION_TOKEN=your_production_token_here  # Production token for automated systems
+API_ACCESS_TOKEN=your_api_access_token_here  # API access token for automated systems
 ```
 
 ## 🛠️ Installation
@@ -249,17 +249,17 @@ curl -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
      https://api.temphist.com/v1/records/daily/New%20York/01-15
 ```
 
-#### 2. Production Token (Automated Systems)
+#### 2. API Access Token (Automated Systems)
 
-For automated systems like cron jobs, server-side prefetching, or internal services, use the production token:
+For automated systems like cron jobs, server-side prefetching, or internal services, use the API access token:
 
 ```bash
-# Include production token in Authorization header
-curl -H "Authorization: Bearer PRODUCTION_TOKEN" \
+# Include API access token in Authorization header
+curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
      https://api.temphist.com/v1/records/daily/New%20York/01-15
 ```
 
-**Benefits of Production Token:**
+**Benefits of API Access Token:**
 
 - ✅ No Firebase authentication overhead
 - ✅ Identified as system/admin usage in logs

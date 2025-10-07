@@ -29,7 +29,7 @@ def mock_env_vars():
         'VISUAL_CROSSING_API_KEY': 'test_key',
         'OPENWEATHER_API_KEY': 'test_key',
         'CACHE_ENABLED': 'true',
-        'API_ACCESS_TOKEN': 'testing'
+        'API_ACCESS_TOKEN': 'test_api_token'
     }):
         yield
 
