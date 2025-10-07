@@ -71,7 +71,7 @@ DEFAULT_POPULAR_LOCATIONS = [
 # Environment variables for cache warming
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-TEST_TOKEN = os.getenv("TEST_TOKEN", "test_token")
+TEST_TOKEN = os.getenv("TEST_TOKEN")
 
 class LocationUsageTracker:
     """Track location usage patterns for analytics and cache warming."""

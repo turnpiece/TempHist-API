@@ -56,7 +56,8 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-TEST_TOKEN = os.getenv("TEST_TOKEN", "test_token")
+TEST_TOKEN = os.getenv("TEST_TOKEN")
+PRODUCTION_TOKEN = os.getenv("PRODUCTION_TOKEN")  # Production token for automated systems
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
@@ -950,6 +951,10 @@ async def verify_token_middleware(request: Request, call_next):
     if id_token == TEST_TOKEN:
         logger.info(f"[DEBUG] Middleware: Using test token bypass")
         request.state.user = {"uid": "testuser"}
+    # Production token bypass for automated systems (cron jobs, etc.)
+    elif PRODUCTION_TOKEN and id_token == PRODUCTION_TOKEN:
+        logger.info(f"[DEBUG] Middleware: Using production token bypass")
+        request.state.user = {"uid": "admin", "system": True, "source": "production_token"}
     else:
         logger.info(f"[DEBUG] Middleware: Verifying Firebase token...")
         try:

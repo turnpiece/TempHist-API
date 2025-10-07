@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
-from main import app as main_app
+from main import app as main_app, TEST_TOKEN
 
 @pytest.fixture
 def client():
@@ -78,7 +78,7 @@ class TestV1RecordsEndpoints:
             
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}",
-                headers={"Authorization": "Bearer test_token"}
+                headers={"Authorization": f"Bearer {TEST_TOKEN}"}
             )
             assert response.status_code == expected_status
             
@@ -118,7 +118,7 @@ class TestV1RecordsEndpoints:
             
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}/{subresource}",
-                headers={"Authorization": "Bearer test_token"}
+                headers={"Authorization": f"Bearer {TEST_TOKEN}"}
             )
             assert response.status_code == 200
             
@@ -139,7 +139,7 @@ class TestV1RecordsEndpoints:
         ]
         
         for endpoint in removed_endpoints:
-            response = client.get(endpoint, headers={"Authorization": "Bearer test_token"})
+            response = client.get(endpoint, headers={"Authorization": f"Bearer {TEST_TOKEN}"})
             assert response.status_code == 410
             data = response.json()
             assert "error" in data
@@ -152,14 +152,14 @@ class TestV1RecordsEndpoints:
         # Test invalid period (this should be caught by FastAPI path validation)
         response = client.get(
             "/v1/records/invalid_period/london/01-15",
-            headers={"Authorization": "Bearer test_token"}
+            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
         )
         assert response.status_code == 422
         
         # Test that endpoints exist and handle errors gracefully
         response = client.get(
             "/v1/records/daily/london/invalid_date",
-            headers={"Authorization": "Bearer test_token"}
+            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
         )
         # Should either return 400 for invalid format or 500 for other errors
         assert response.status_code in [400, 500]
@@ -188,7 +188,7 @@ class TestRollingBundleEndpoints:
         """Test the rolling bundle preload example endpoint"""
         response = client.get(
             "/v1/records/rolling-bundle/preload-example",
-            headers={"Authorization": "Bearer test_token"}
+            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
         )
         assert response.status_code == 200
         
@@ -201,7 +201,7 @@ class TestRollingBundleEndpoints:
         """Test the rolling bundle status endpoint"""
         response = client.get(
             "/v1/records/rolling-bundle/london/2024-01-15/status",
-            headers={"Authorization": "Bearer test_token"}
+            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
         )
         assert response.status_code == 200
         
@@ -221,7 +221,7 @@ class TestRecordsAggIntegration:
         import httpx
         BASE_URL = "http://localhost:8000"
         headers = {
-            "Authorization": "Bearer test_token",
+            "Authorization": f"Bearer {TEST_TOKEN}",
             "Content-Type": "application/json"
         }
         

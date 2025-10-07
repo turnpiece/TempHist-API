@@ -49,6 +49,10 @@ IP_BLACKLIST=192.168.1.200,10.0.0.99  # IPs blocked entirely
 
 # Data Filtering
 FILTER_WEATHER_DATA=true  # Filter to essential temperature data only
+
+# Authentication Tokens
+TEST_TOKEN=your_test_token_here  # Development/testing token
+PRODUCTION_TOKEN=your_production_token_here  # Production token for automated systems
 ```
 
 ## 🛠️ Installation
@@ -233,12 +237,43 @@ For detailed Cloudflare optimization guidance, see [CLOUDFLARE_OPTIMIZATION.md](
 
 ### Authentication
 
-All API requests require authentication via Bearer token:
+The API supports multiple authentication methods depending on your use case:
+
+#### 1. Firebase Authentication (Users)
+
+For end-user applications, use Firebase authentication tokens:
 
 ```bash
-# Include API token in Authorization header
-curl -H "Authorization: Bearer YOUR_API_TOKEN" \
+# Include Firebase token in Authorization header
+curl -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
      https://api.temphist.com/v1/records/daily/New%20York/01-15
+```
+
+#### 2. Production Token (Automated Systems)
+
+For automated systems like cron jobs, server-side prefetching, or internal services, use the production token:
+
+```bash
+# Include production token in Authorization header
+curl -H "Authorization: Bearer PRODUCTION_TOKEN" \
+     https://api.temphist.com/v1/records/daily/New%20York/01-15
+```
+
+**Benefits of Production Token:**
+
+- ✅ No Firebase authentication overhead
+- ✅ Identified as system/admin usage in logs
+- ✅ Efficient for automated prefetching
+- ✅ Perfect for cron jobs and background tasks
+
+#### 3. Test Token (Development)
+
+For development and testing:
+
+```bash
+# Include test token in Authorization header
+curl -H "Authorization: Bearer $TEST_TOKEN" \
+     http://localhost:8000/v1/records/daily/New%20York/01-15
 ```
 
 ### Base URLs
@@ -1016,19 +1051,19 @@ curl http://localhost:8000/rate-limit-status
 curl http://localhost:8000/v1/records/daily/London/01-15
 
 # Test with authentication
-curl -H "Authorization: Bearer test_token" \
+curl -H "Authorization: Bearer $TEST_TOKEN" \
      http://localhost:8000/v1/records/daily/London/01-15
 
 # Test async job processing
-curl -X POST -H "Authorization: Bearer test_token" \
+curl -X POST -H "Authorization: Bearer $TEST_TOKEN" \
      http://localhost:8000/v1/records/daily/London/01-15/async
 
 # Test cache headers
-curl -v -H "Authorization: Bearer test_token" \
+curl -v -H "Authorization: Bearer $TEST_TOKEN" \
      http://localhost:8000/v1/records/daily/London/01-15
 
 # Test conditional requests (304 Not Modified)
-curl -H "Authorization: Bearer test_token" \
+curl -H "Authorization: Bearer $TEST_TOKEN" \
      -H "If-None-Match: your_etag_here" \
      http://localhost:8000/v1/records/daily/London/01-15
 ```
