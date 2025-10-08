@@ -872,11 +872,22 @@ async def verify_token_middleware(request: Request, call_next):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
 
+    # Check if this is a service job using API_ACCESS_TOKEN (bypass rate limiting)
+    auth_header = request.headers.get("Authorization")
+    is_service_job = False
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
+            is_service_job = True
+            if DEBUG:
+                logger.info(f"🔧 SERVICE JOB DETECTED: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
+
     # Define endpoints that actually query Visual Crossing API (cost money)
     vc_api_paths = ["/weather/", "/forecast/", "/v1/records/"]
     
     # Apply rate limiting only to Visual Crossing API endpoints
-    if RATE_LIMIT_ENABLED and location_monitor and request_monitor and not is_ip_whitelisted(client_ip):
+    # Skip rate limiting for: whitelisted IPs, service jobs (API_ACCESS_TOKEN)
+    if RATE_LIMIT_ENABLED and location_monitor and request_monitor and not is_ip_whitelisted(client_ip) and not is_service_job:
         # Check if this endpoint queries Visual Crossing API
         is_vc_api_endpoint = any(request.url.path.startswith(path) for path in vc_api_paths)
         
@@ -923,6 +934,9 @@ async def verify_token_middleware(request: Request, call_next):
             logger.debug(f"ℹ️  NON-VC ENDPOINT: {client_ip} | {request.method} {request.url.path} | Rate limiting skipped")
     elif is_ip_whitelisted(client_ip) and DEBUG:
         logger.info(f"⭐ WHITELISTED IP: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
+    elif is_service_job and not DEBUG:
+        # Log service job bypass in non-DEBUG mode (already logged in DEBUG mode above)
+        pass
     
     # Track usage for Visual Crossing API endpoints
     if USAGE_TRACKING_ENABLED and get_usage_tracker():
@@ -937,7 +951,7 @@ async def verify_token_middleware(request: Request, call_next):
 
     logger.info(f"[DEBUG] Middleware: Protected path, checking Firebase token...")
     # All other paths require a Firebase token
-    auth_header = request.headers.get("Authorization")
+    # Note: auth_header was already extracted earlier for service job detection
     if not auth_header or not auth_header.startswith("Bearer "):
         logger.info(f"[DEBUG] Middleware: No valid Authorization header")
         return JSONResponse(
@@ -952,7 +966,8 @@ async def verify_token_middleware(request: Request, call_next):
         logger.info(f"[DEBUG] Middleware: Using test token bypass")
         request.state.user = {"uid": "testuser"}
     # Production token bypass for automated systems (cron jobs, etc.)
-    elif API_ACCESS_TOKEN and id_token == API_ACCESS_TOKEN:
+    elif is_service_job:
+        # Already verified this is API_ACCESS_TOKEN during rate limiting check
         logger.info(f"[DEBUG] Middleware: Using production token bypass")
         request.state.user = {"uid": "admin", "system": True, "source": "production_token"}
     else:
@@ -1773,19 +1788,29 @@ async def get_rate_limit_status(request: Request):
     
     client_ip = get_client_ip(request)
     
+    # Check if this is a service job using API_ACCESS_TOKEN
+    auth_header = request.headers.get("Authorization")
+    is_service_job = False
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
+            is_service_job = True
+    
     # Check IP status
     is_whitelisted = is_ip_whitelisted(client_ip)
     is_blacklisted = is_ip_blacklisted(client_ip)
     
-    location_stats = location_monitor.get_stats(client_ip) if location_monitor and not is_whitelisted else {}
-    request_stats = request_monitor.get_stats(client_ip) if request_monitor and not is_whitelisted else {}
+    # Skip stats if whitelisted or service job
+    location_stats = location_monitor.get_stats(client_ip) if location_monitor and not is_whitelisted and not is_service_job else {}
+    request_stats = request_monitor.get_stats(client_ip) if request_monitor and not is_whitelisted and not is_service_job else {}
     
     return {
         "client_ip": client_ip,
         "ip_status": {
             "whitelisted": is_whitelisted,
             "blacklisted": is_blacklisted,
-            "rate_limited": not is_whitelisted and not is_blacklisted
+            "service_job": is_service_job,
+            "rate_limited": not is_whitelisted and not is_blacklisted and not is_service_job
         },
         "location_monitor": location_stats,
         "request_monitor": request_stats,

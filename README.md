@@ -262,8 +262,9 @@ curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
 **Benefits of API Access Token:**
 
 - ✅ No Firebase authentication overhead
+- ✅ **Bypasses rate limiting** for efficient automated operations
 - ✅ Identified as system/admin usage in logs
-- ✅ Efficient for automated prefetching
+- ✅ Efficient for automated prefetching and cache warming
 - ✅ Perfect for cron jobs and background tasks
 
 #### 3. Test Token (Development)
@@ -904,15 +905,26 @@ Returns service health and configuration information.
 
 The API includes comprehensive rate limiting to prevent abuse:
 
+### Exemptions
+
+The following are **exempt from rate limiting**:
+
+- **Service Jobs**: Requests using `API_ACCESS_TOKEN` (automated systems, cron jobs, cache warming)
+- **Whitelisted IPs**: IPs configured in `IP_WHITELIST`
+
+> **Note**: Rate limiting only applies to end users with Firebase authentication. Automated systems using `API_ACCESS_TOKEN` can operate without rate limits for efficient prefetching and cache warming.
+
 ### Location Diversity Limits
 
 - **Max unique locations per hour**: 10 (configurable)
 - **Purpose**: Prevents requesting data for too many different locations
+- **Applied to**: Firebase-authenticated user requests only
 
 ### Request Rate Limits
 
 - **Max requests per hour**: 100 (configurable)
 - **Purpose**: Prevents excessive API calls overall
+- **Applied to**: Firebase-authenticated user requests only
 
 ### IP Management
 
@@ -926,6 +938,19 @@ When limits are exceeded:
 - **HTTP 429** (Too Many Requests)
 - **Retry-After header** with retry time
 - **Detailed error message** explaining the limit
+
+### Checking Rate Limit Status
+
+```bash
+# Check your current rate limit status
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+     https://api.temphist.com/rate-limit-status
+
+# Response includes:
+# - service_job: true if using API_ACCESS_TOKEN
+# - whitelisted: true if IP is whitelisted
+# - rate_limited: false if exempt from rate limiting
+```
 
 ## 🚀 Caching System
 

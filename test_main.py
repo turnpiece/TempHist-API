@@ -758,6 +758,37 @@ class TestIPWhitelistBlacklistIntegration:
                 assert ip_status.get("whitelisted") == True
                 assert ip_status.get("rate_limited") == False
     
+    def test_service_job_bypasses_rate_limits(self, client):
+        """Test that service jobs using API_ACCESS_TOKEN bypass rate limiting."""
+        # Mock the environment variable for API_ACCESS_TOKEN
+        with patch.dict('os.environ', {'API_ACCESS_TOKEN': 'test_service_token'}):
+            import importlib
+            import main
+            importlib.reload(main)
+            
+            # Create a new test client with the reloaded app
+            with TestClient(main.app) as test_client:
+                # Test rate limit status endpoint with service token
+                response = test_client.get(
+                    "/rate-limit-status",
+                    headers={"Authorization": "Bearer test_service_token"}
+                )
+                assert response.status_code == 200
+                
+                data = response.json()
+                ip_status = data.get("ip_status", {})
+                assert ip_status.get("service_job") == True
+                assert ip_status.get("rate_limited") == False
+                
+                # Verify service job can access protected endpoints without rate limiting
+                with patch('main.fetch_weather_batch', return_value={"2024-01-15": {"temp": 20.0}}):
+                    response = test_client.get(
+                        "/weather/London/2024-01-15",
+                        headers={"Authorization": "Bearer test_service_token"}
+                    )
+                    # Should succeed (not rate limited)
+                    assert response.status_code == 200
+    
     def test_rate_limit_status_shows_ip_status(self, client):
         """Test that rate limit status endpoint shows IP whitelist/blacklist status."""
         response = client.get("/rate-limit-status")
@@ -770,11 +801,13 @@ class TestIPWhitelistBlacklistIntegration:
         # Should have these keys
         assert "whitelisted" in ip_status
         assert "blacklisted" in ip_status
+        assert "service_job" in ip_status
         assert "rate_limited" in ip_status
         
         # Should be boolean values
         assert isinstance(ip_status["whitelisted"], bool)
         assert isinstance(ip_status["blacklisted"], bool)
+        assert isinstance(ip_status["service_job"], bool)
         assert isinstance(ip_status["rate_limited"], bool)
     
     def test_rate_limit_stats_shows_ip_lists(self, client):
