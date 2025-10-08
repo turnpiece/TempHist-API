@@ -32,16 +32,27 @@ class JobWorker:
         self.running = True
         logger.info("🚀 Job worker started")
         
+        poll_count = 0
         try:
             while self.running:
                 await self.process_jobs()
+                poll_count += 1
+                
+                # Update heartbeat every 10 seconds
+                if poll_count % 10 == 0:
+                    try:
+                        self.redis.setex("worker:heartbeat", 60, datetime.now(timezone.utc).isoformat())
+                        logger.debug(f"💓 Heartbeat updated (poll #{poll_count})")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Could not update heartbeat: {e}")
+                
                 await asyncio.sleep(1)  # Poll every second
         except Exception as e:
             logger.error(f"❌ Job worker error: {e}")
             import traceback
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
         finally:
-            logger.info("🛑 Job worker stopped")
+            logger.info(f"🛑 Job worker stopped (processed {poll_count} poll cycles)")
     
     def stop(self):
         """Stop the job worker."""
@@ -111,6 +122,7 @@ class JobWorker:
     
     async def process_job(self, job_id: str, job_manager, cache):
         """Process a single job."""
+        start_time = datetime.now(timezone.utc)
         try:
             # Update job status to processing
             job_manager.update_job_status(job_id, JobStatus.PROCESSING)
@@ -119,31 +131,46 @@ class JobWorker:
             # Get job details
             job_data = job_manager.get_job_status(job_id)
             if not job_data:
-                logger.error(f"Job not found: {job_id}")
+                logger.error(f"❌ Job not found: {job_id}")
                 # Remove from queue if job doesn't exist
                 self.redis.lrem(self.job_queue_key, 1, job_id)
                 return
             
             job_type = job_data.get("type")
             params = job_data.get("params", {})
+            logger.info(f"📋 Job type: {job_type}, Params: {params}")
             
             # Process based on job type
-            if job_type == "record_computation":
-                result = await self.process_record_job(params, cache)
-            elif job_type == "rolling_bundle":
-                result = await self.process_rolling_bundle_job(params, cache)
-            else:
-                raise ValueError(f"Unknown job type: {job_type}")
+            try:
+                if job_type == "record_computation":
+                    logger.info(f"🔢 Starting record computation...")
+                    result = await self.process_record_job(params, cache)
+                elif job_type == "rolling_bundle":
+                    logger.info(f"📦 Starting rolling bundle computation...")
+                    result = await self.process_rolling_bundle_job(params, cache)
+                else:
+                    raise ValueError(f"Unknown job type: {job_type}")
+            except Exception as compute_error:
+                logger.error(f"❌ Computation error for job {job_id}: {compute_error}")
+                import traceback
+                logger.error(f"❌ Traceback: {traceback.format_exc()}")
+                raise
+            
+            # Calculate processing time
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
             
             # Store result and mark job as ready
             job_manager.update_job_status(job_id, JobStatus.READY, result)
-            logger.info(f"✅ Job completed: {job_id}")
+            logger.info(f"✅ Job completed: {job_id} (took {duration:.2f}s)")
             
             # Remove job from queue after successful completion
             self.redis.lrem(self.job_queue_key, 1, job_id)
             
         except Exception as e:
-            logger.error(f"Error processing job {job_id}: {e}")
+            logger.error(f"❌ Error processing job {job_id}: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
             job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(e))
             # Remove failed job from queue
             self.redis.lrem(self.job_queue_key, 1, job_id)
