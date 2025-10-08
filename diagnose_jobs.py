@@ -54,19 +54,32 @@ def diagnose_job_system():
         print(f"❌ Error checking queue: {e}")
     
     print("\n" + "=" * 60)
-    print("🔍 ALL JOBS (by scanning keys)")
+    print("🔍 JOBS IN QUEUE")
     print("=" * 60)
     
     try:
-        # Find all job keys
-        job_keys = r.keys("job:*")
-        result_keys = r.keys("result:*")
+        # Get jobs from queue instead of scanning all keys (KEYS command may not be available)
+        job_ids = []
+        if queue_length > 0:
+            for i in range(min(queue_length, 100)):
+                job_id = r.lindex(queue_key, i)
+                if job_id:
+                    job_ids.append(job_id)
         
-        # Filter out etag keys
-        job_keys = [k for k in job_keys if not k.endswith(':etag')]
+        print(f"Total jobs in queue: {len(job_ids)}")
         
-        print(f"Total jobs found: {len(job_keys)}")
-        print(f"Total results found: {len(result_keys)}")
+        # Try to count all jobs using KEYS (may fail on restricted Redis)
+        try:
+            job_keys = r.keys("job:*")
+            result_keys = r.keys("result:*")
+            # Filter out etag keys
+            job_keys = [k for k in job_keys if not k.endswith(':etag')]
+            print(f"Total job keys found (via KEYS): {len(job_keys)}")
+            print(f"Total result keys found (via KEYS): {len(result_keys)}")
+        except Exception as keys_error:
+            print(f"⚠️  Cannot scan all keys (KEYS command restricted): {keys_error}")
+            print(f"   Will only examine jobs in the queue")
+            job_keys = [f"job:{job_id}" for job_id in job_ids]
         
         if job_keys:
             print(f"\n📝 Job details:")
@@ -197,14 +210,19 @@ def clear_stuck_jobs():
         r = redis.from_url(REDIS_URL, decode_responses=True)
         r.ping()
         
-        # Find all job keys
-        job_keys = r.keys("job:*")
+        # Get jobs from queue instead of scanning all keys
+        queue_length = r.llen("job_queue")
+        job_ids = []
+        if queue_length > 0:
+            for i in range(queue_length):
+                job_id = r.lindex("job_queue", i)
+                if job_id:
+                    job_ids.append(job_id)
+        
         stuck_count = 0
         
-        for job_key in job_keys:
-            if job_key.endswith(':etag'):
-                continue
-                
+        for job_id in job_ids:
+            job_key = f"job:{job_id}"
             job_data = r.get(job_key)
             if job_data:
                 job = json.loads(job_data)
@@ -248,14 +266,37 @@ def clear_all_jobs():
         r = redis.from_url(REDIS_URL, decode_responses=True)
         r.ping()
         
-        # Delete all job keys
-        job_keys = r.keys("job:*")
-        result_keys = r.keys("result:*")
+        # Get all job IDs from queue
+        queue_length = r.llen("job_queue")
+        job_ids = []
+        if queue_length > 0:
+            for i in range(queue_length):
+                job_id = r.lindex("job_queue", i)
+                if job_id:
+                    job_ids.append(job_id)
         
         count = 0
-        for key in job_keys + result_keys:
-            r.delete(key)
-            count += 1
+        
+        # Delete job and result keys
+        for job_id in job_ids:
+            job_key = f"job:{job_id}"
+            result_key = f"result:{job_id}"
+            etag_key = f"{job_key}:etag"
+            
+            r.delete(job_key)
+            r.delete(result_key)
+            r.delete(etag_key)
+            count += 3
+        
+        # Try to delete using KEYS if available
+        try:
+            job_keys = r.keys("job:*")
+            result_keys = r.keys("result:*")
+            for key in job_keys + result_keys:
+                r.delete(key)
+                count += 1
+        except:
+            print("⚠️  Could not use KEYS command, only cleared jobs in queue")
         
         # Clear queue
         r.delete("job_queue")

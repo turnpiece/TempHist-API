@@ -3366,11 +3366,8 @@ async def get_worker_diagnostics():
         # Get queue status
         queue_length = redis_client.llen("job_queue")
         
-        # Count jobs by status
-        job_keys = redis_client.keys("job:*")
-        # Filter out etag keys
-        job_keys = [k for k in job_keys if not (k.decode('utf-8').endswith(':etag') if isinstance(k, bytes) else k.endswith(':etag'))]
-        
+        # Get jobs from the queue (without KEYS command)
+        # We'll examine jobs in the queue since we can't scan all keys
         jobs_by_status = {
             "pending": 0,
             "processing": 0,
@@ -3379,9 +3376,22 @@ async def get_worker_diagnostics():
         }
         
         stuck_jobs = []
+        jobs_examined = []
         
-        for job_key in job_keys[:100]:  # Limit to 100 jobs for performance
+        # Get all job IDs from the queue
+        if queue_length > 0:
+            # Get up to 100 jobs from the queue
+            for i in range(min(queue_length, 100)):
+                job_id = redis_client.lindex("job_queue", i)
+                if job_id:
+                    if isinstance(job_id, bytes):
+                        job_id = job_id.decode('utf-8')
+                    jobs_examined.append(job_id)
+        
+        # Examine each job in the queue
+        for job_id in jobs_examined:
             try:
+                job_key = f"job:{job_id}"
                 job_data = redis_client.get(job_key)
                 if job_data:
                     if isinstance(job_data, bytes):
@@ -3409,8 +3419,8 @@ async def get_worker_diagnostics():
                                 })
                         except:
                             pass
-            except:
-                pass
+            except Exception as job_error:
+                logger.warning(f"Error examining job {job_id}: {job_error}")
         
         # Parse heartbeat time if available
         heartbeat_age = None
@@ -3433,7 +3443,7 @@ async def get_worker_diagnostics():
             },
             "queue": {
                 "length": queue_length,
-                "jobs_found": len(job_keys)
+                "jobs_examined": len(jobs_examined)
             },
             "jobs": {
                 "by_status": jobs_by_status,
@@ -3446,7 +3456,8 @@ async def get_worker_diagnostics():
                 queue_length, 
                 jobs_by_status,
                 len(stuck_jobs)
-            )
+            ),
+            "note": "Only examining jobs in the queue (Redis KEYS command not available)"
         }
     except Exception as e:
         logger.error(f"Error getting worker diagnostics: {e}")
