@@ -732,11 +732,30 @@ async def get_http_client():
 
 # check Firebase credentials
 try:
-    cred = credentials.Certificate("firebase-service-account.json")  # Download from Firebase Console
-    firebase_admin.initialize_app(cred)
+    # Try to load from environment variable first (for Railway/production)
+    firebase_creds_json = os.getenv("FIREBASE_SERVICE_ACCOUNT") or os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if firebase_creds_json:
+        import json
+        firebase_creds = json.loads(firebase_creds_json)
+        cred = credentials.Certificate(firebase_creds)
+    else:
+        # Fall back to file (for local development)
+        if os.path.exists("firebase-service-account.json"):
+            cred = credentials.Certificate("firebase-service-account.json")
+        else:
+            logger.warning("⚠️ No Firebase credentials found - Firebase features will be disabled")
+            cred = None
+    
+    if cred:
+        firebase_admin.initialize_app(cred)
+        logger.info("✅ Firebase initialized successfully")
 except ValueError:
     # Firebase app already initialized, skip
+    logger.info("Firebase app already initialized")
     pass
+except Exception as e:
+    logger.error(f"❌ Error initializing Firebase: {e}")
+    # Continue without Firebase - the app can still work without it
 
 def get_client_ip(request: Request) -> str:
     """Get the client IP address from the request."""

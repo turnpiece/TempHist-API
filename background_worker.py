@@ -89,6 +89,23 @@ class BackgroundWorker:
                 import redis
                 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
                 self.redis_client = redis.from_url(redis_url, decode_responses=True)
+                logger.info("🔄 Recreated Redis client with decode_responses=True")
+            
+            # Test Redis connection
+            try:
+                self.redis_client.ping()
+                logger.info("✅ Worker Redis connection verified")
+            except Exception as e:
+                logger.error(f"❌ Worker cannot connect to Redis: {e}")
+                logger.warning("⚠️ Background worker will exit - Redis not available")
+                return  # Exit gracefully instead of crashing
+            
+            # Set initial heartbeat
+            try:
+                self.redis_client.setex("worker:heartbeat", 60, datetime.now(timezone.utc).isoformat())
+                logger.info("💓 Worker heartbeat initialized")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not set heartbeat: {e}")
             
             # Import and start the job worker
             from job_worker import JobWorker
