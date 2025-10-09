@@ -2418,7 +2418,8 @@ async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, u
     }
     
     async with visual_crossing_semaphore:
-        async with get_http_client() as http:
+        http = await get_http_client()
+        async with http:
             r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
     r.raise_for_status()
     data = r.json()
