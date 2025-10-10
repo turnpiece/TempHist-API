@@ -97,8 +97,7 @@ class BackgroundWorker:
                 logger.info("✅ Worker Redis connection verified")
             except Exception as e:
                 logger.error(f"❌ Worker cannot connect to Redis: {e}")
-                logger.warning("⚠️ Background worker will exit - Redis not available")
-                return  # Exit gracefully instead of crashing
+                raise
             
             # Set initial heartbeat
             try:
@@ -110,6 +109,7 @@ class BackgroundWorker:
             # Import and start the job worker
             from job_worker import JobWorker
             worker = JobWorker(self.redis_client)
+            logger.info("✅ JobWorker instance created")
             await worker.start()
             
         except Exception as e:

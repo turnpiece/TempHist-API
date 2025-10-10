@@ -886,7 +886,7 @@ async def verify_token_middleware(request: Request, call_next):
         )
 
     # Public paths that don't require a token or rate limiting
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors", "/v1/jobs/diagnostics/worker-status"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
         logger.info(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
@@ -2437,7 +2437,8 @@ async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, u
     }
     
     async with visual_crossing_semaphore:
-        async with get_http_client() as http:
+        http = await get_http_client()
+        async with http:
             r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
     r.raise_for_status()
     data = r.json()
@@ -3373,6 +3374,182 @@ async def create_rolling_bundle_job(
     except Exception as e:
         logger.error(f"Error creating rolling bundle job: {e}")
         raise HTTPException(status_code=500, detail="Failed to create job")
+
+@app.get("/v1/jobs/diagnostics/worker-status")
+async def get_worker_diagnostics():
+    """Get diagnostic information about the background worker and job queue."""
+    try:
+        # Check worker heartbeat
+        heartbeat = redis_client.get("worker:heartbeat")
+        worker_alive = heartbeat is not None
+        
+        # Get queue status
+        queue_length = redis_client.llen("job_queue")
+        
+        # Get jobs from the queue (without KEYS command)
+        # We'll examine jobs in the queue since we can't scan all keys
+        jobs_by_status = {
+            "pending": 0,
+            "processing": 0,
+            "ready": 0,
+            "error": 0
+        }
+        
+        stuck_jobs = []
+        jobs_examined = []
+        
+        # Get all job IDs from the queue
+        if queue_length > 0:
+            # Get up to 100 jobs from the queue
+            for i in range(min(queue_length, 100)):
+                job_id = redis_client.lindex("job_queue", i)
+                if job_id:
+                    if isinstance(job_id, bytes):
+                        job_id = job_id.decode('utf-8')
+                    jobs_examined.append(job_id)
+        
+        # Examine each job in the queue
+        for job_id in jobs_examined:
+            try:
+                job_key = f"job:{job_id}"
+                job_data = redis_client.get(job_key)
+                if job_data:
+                    if isinstance(job_data, bytes):
+                        job_data = job_data.decode('utf-8')
+                    job = json.loads(job_data)
+                    status = job.get("status", "unknown")
+                    
+                    if status in jobs_by_status:
+                        jobs_by_status[status] += 1
+                    
+                    # Check for stuck jobs (older than 5 minutes in pending/processing)
+                    created = job.get("created_at")
+                    if created and status in ["pending", "processing"]:
+                        try:
+                            from datetime import datetime, timezone
+                            created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                            age = (datetime.now(timezone.utc) - created_dt).total_seconds()
+                            if age > 300:  # 5 minutes
+                                stuck_jobs.append({
+                                    "job_id": job.get("id"),
+                                    "status": status,
+                                    "age_seconds": int(age),
+                                    "type": job.get("type"),
+                                    "params": job.get("params", {})
+                                })
+                        except:
+                            pass
+            except Exception as job_error:
+                logger.warning(f"Error examining job {job_id}: {job_error}")
+        
+        # Parse heartbeat time if available
+        heartbeat_age = None
+        if heartbeat:
+            try:
+                if isinstance(heartbeat, bytes):
+                    heartbeat = heartbeat.decode('utf-8')
+                from datetime import datetime, timezone
+                heartbeat_dt = datetime.fromisoformat(heartbeat.replace('Z', '+00:00'))
+                heartbeat_age = (datetime.now(timezone.utc) - heartbeat_dt).total_seconds()
+            except:
+                pass
+        
+        return {
+            "worker": {
+                "alive": worker_alive,
+                "heartbeat": heartbeat,
+                "heartbeat_age_seconds": heartbeat_age,
+                "status": "healthy" if worker_alive and (heartbeat_age is None or heartbeat_age < 60) else "unhealthy"
+            },
+            "queue": {
+                "length": queue_length,
+                "jobs_examined": len(jobs_examined)
+            },
+            "jobs": {
+                "by_status": jobs_by_status,
+                "stuck_count": len(stuck_jobs),
+                "stuck_jobs": stuck_jobs[:10]  # Show first 10 stuck jobs
+            },
+            "recommendations": get_diagnostics_recommendations(
+                worker_alive, 
+                heartbeat_age, 
+                queue_length, 
+                jobs_by_status,
+                len(stuck_jobs)
+            ),
+            "note": "Only examining jobs in the queue (Redis KEYS command not available)"
+        }
+    except Exception as e:
+        logger.error(f"Error getting worker diagnostics: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to get diagnostics: {str(e)}")
+
+def get_diagnostics_recommendations(worker_alive, heartbeat_age, queue_length, jobs_by_status, stuck_count):
+    """Generate diagnostic recommendations based on worker and job status."""
+    recommendations = []
+    
+    if not worker_alive:
+        recommendations.append({
+            "severity": "critical",
+            "issue": "Background worker is not running",
+            "actions": [
+                "Check server logs for worker startup errors",
+                "Restart the API server",
+                "Verify Redis connection is available"
+            ]
+        })
+    elif heartbeat_age and heartbeat_age > 60:
+        recommendations.append({
+            "severity": "warning",
+            "issue": f"Worker heartbeat is stale ({int(heartbeat_age)}s old)",
+            "actions": [
+                "Worker may be stuck or crashed",
+                "Check server logs for errors",
+                "Consider restarting the API server"
+            ]
+        })
+    
+    if jobs_by_status.get("pending", 0) > 0 and worker_alive:
+        recommendations.append({
+            "severity": "info",
+            "issue": f"{jobs_by_status['pending']} jobs in pending state",
+            "actions": [
+                "Jobs are waiting to be processed",
+                "Worker should process these shortly",
+                "If they remain pending for >1 minute, check worker logs"
+            ]
+        })
+    
+    if stuck_count > 0:
+        recommendations.append({
+            "severity": "warning",
+            "issue": f"{stuck_count} jobs stuck for >5 minutes",
+            "actions": [
+                "Check server logs for processing errors",
+                "These jobs may need to be manually cleared",
+                "Use diagnose_jobs.py --clear-stuck to clear them"
+            ]
+        })
+    
+    if jobs_by_status.get("error", 0) > 0:
+        recommendations.append({
+            "severity": "warning",
+            "issue": f"{jobs_by_status['error']} jobs failed with errors",
+            "actions": [
+                "Check individual job status for error details",
+                "Common causes: API errors, timeouts, invalid parameters"
+            ]
+        })
+    
+    if not recommendations:
+        recommendations.append({
+            "severity": "success",
+            "issue": "System is healthy",
+            "actions": ["No action needed"]
+        })
+    
+    return recommendations
 
 # For local testing
 if __name__ == "__main__":
