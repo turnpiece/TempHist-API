@@ -380,6 +380,16 @@ VISUAL_CROSSING_UNIT_GROUP = "metric"  # Visual Crossing API still uses "metric"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
 VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 
+def clean_location_string(location: str) -> str:
+    """Clean location string by removing non-printable ASCII characters."""
+    import re
+    # Remove any non-printable ASCII characters (keep only printable ASCII + common Unicode)
+    # This removes control characters, zero-width spaces, etc.
+    cleaned = ''.join(char for char in location if char.isprintable() or char in [' ', ','])
+    # Remove any multiple spaces
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned.strip()
+
 def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
     """Build Visual Crossing API URL with consistent parameters.
     
@@ -389,8 +399,9 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
         remote: Whether to include remote data parameters (default: True)
     """
     from urllib.parse import quote
-    # URL-encode the location to handle special characters (commas, spaces, etc.)
-    encoded_location = quote(location, safe='')
+    # Clean and URL-encode the location to handle special characters
+    cleaned_location = clean_location_string(location)
+    encoded_location = quote(cleaned_location, safe='')
     base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
     if remote:
         return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
@@ -2373,7 +2384,15 @@ async def get_forecast_data(location: str, date) -> Dict:
     else:
         date_str = str(date)
     
-    url = build_visual_crossing_url(location, date_str, remote=False)
+    # Debug logging to see what location we're processing
+    logger.debug(f"🌐 Fetching forecast for location: '{location}' (repr: {repr(location)}), date: {date_str}")
+    
+    try:
+        url = build_visual_crossing_url(location, date_str, remote=False)
+        logger.debug(f"🔗 Built URL (first 200 chars): {url[:200]}...")
+    except Exception as url_error:
+        logger.error(f"❌ Error building URL for location '{location}': {url_error}")
+        raise
     
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         response = await client.get(url, headers={"Accept-Encoding": "gzip"})
