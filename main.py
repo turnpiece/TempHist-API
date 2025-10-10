@@ -54,6 +54,12 @@ from cache_utils import (
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# Debug: Log the REDIS_URL value to diagnose connection issues
+import logging as _logging
+_temp_logger = _logging.getLogger(__name__)
+_temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {REDIS_URL}")
+
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 TEST_TOKEN = os.getenv("TEST_TOKEN")
