@@ -12,7 +12,15 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 - **Performance Monitoring**: Built-in profiling and monitoring tools
 - **Cache Prewarming**: Automated cache warming for popular locations
 - **CORS Enabled**: Ready for web applications
-- **Production Ready**: Deploy on Render with one click
+- **Production Ready**: Deploy on Railway or Render
+
+## 📚 Documentation
+
+- **[CHANGELOG.md](CHANGELOG.md)** - Release notes and version history
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide for Railway and other platforms
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
+- **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Migrating from legacy to v1 API
+- **[CLOUDFLARE_OPTIMIZATION.md](CLOUDFLARE_OPTIMIZATION.md)** - CDN optimization guide
 
 ## 📋 Requirements
 
@@ -1136,48 +1144,23 @@ grep "RATE" temphist.log
 
 ## 🚀 Deployment
 
-### Render Deployment
+**For complete deployment instructions, see [DEPLOYMENT.md](DEPLOYMENT.md)**
 
-1. Fork this repository
-2. Create a new Web Service on Render
-3. Connect your repository
-4. Add environment variables in Render dashboard
-5. Deploy!
+### Quick Start - Railway (Recommended)
 
-### Environment Variables for Production
+1. Create Railway project with Redis database
+2. Deploy from GitHub repository
+3. Set environment variables
+4. Deploy!
+
+**Key environment variables:**
 
 ```bash
-DEBUG=false
-CACHE_ENABLED=true
-RATE_LIMIT_ENABLED=true
-REDIS_URL=your_redis_url
 VISUAL_CROSSING_API_KEY=your_key
 OPENWEATHER_API_KEY=your_key
 API_ACCESS_TOKEN=your_token
-```
-
-### Multi-Service Deployment
-
-For production, you'll want to deploy both the API and the job worker:
-
-#### API Service (Web Service)
-
-```bash
-# Build Command
-pip install -r requirements.txt
-
-# Start Command
-uvicorn main:app --host 0.0.0.0 --port $PORT
-```
-
-#### Job Worker Service (Background Worker)
-
-```bash
-# Build Command
-pip install -r requirements.txt
-
-# Start Command
-python job_worker.py
+REDIS_URL=${{Redis.REDIS_URL}}  # Auto-provided by Railway
+FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}  # Optional
 ```
 
 ### Health Checks
@@ -1185,50 +1168,40 @@ python job_worker.py
 - **Health endpoint**: `/health`
 - **Redis check**: `/test-redis`
 - **Rate limit status**: `/rate-limit-status`
-- **Cache statistics**: `/cache-stats`
-- **Job worker status**: Check Redis for active job processing
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for:
+
+- Complete Railway setup guide
+- Environment variable configuration
+- Firebase credentials setup
+- Multi-service deployment
+- Migration from Render
+- Troubleshooting deployment issues
 
 ## 🔧 Troubleshooting
 
-### Common Issues
+**For detailed troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**
 
-#### Rate Limiting Not Working
-
-```bash
-# Check configuration
-curl http://localhost:8000/rate-limit-status
-
-# Verify environment variables
-echo $RATE_LIMIT_ENABLED
-```
-
-#### Cache Issues
+### Quick Diagnostics
 
 ```bash
-# Test Redis connection
-curl http://localhost:8000/test-redis
+# Health checks
+curl https://your-app.com/health
+curl https://your-app.com/test-redis
+curl https://your-app.com/rate-limit-status
 
-# Check Redis logs
-redis-cli monitor
-```
-
-#### Performance Issues
-
-```bash
-# Run performance tests
-python performance_test.py
-
-# Monitor memory usage
-python -c "import psutil; print(psutil.Process().memory_info())"
-```
-
-### Debug Mode
-
-Enable debug mode for detailed logging:
-
-```bash
+# Enable debug logging
 DEBUG=true uvicorn main:app --reload
 ```
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for help with:
+
+- Deployment issues (502 errors, environment variables)
+- Async jobs and background worker problems
+- Redis and caching issues
+- Rate limiting problems
+- API errors (401, 422, 429, 500)
+- Performance issues
 
 ## 📈 Performance Optimization
 
