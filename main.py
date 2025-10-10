@@ -3560,4 +3560,5 @@ def get_diagnostics_recommendations(worker_alive, heartbeat_age, queue_length, j
 # For local testing
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
