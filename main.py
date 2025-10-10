@@ -605,7 +605,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ PREAPPROVED LOCATIONS: Failed to initialize - {e}")
     
-    if CACHE_WARMING_ENABLED and get_cache_warmer()():
+    if CACHE_WARMING_ENABLED and get_cache_warmer():
         # Wait a moment for the server to fully start
         await asyncio.sleep(2)
         
@@ -613,10 +613,10 @@ async def lifespan(app: FastAPI):
             logger.info("🚀 STARTUP CACHE WARMING: Triggering initial warming cycle")
         
         # Run initial warming in background
-        asyncio.create_task(get_cache_warmer()().warm_all_locations())
+        asyncio.create_task(get_cache_warmer().warm_all_locations())
         
         # Start scheduled warming background task
-        asyncio.create_task(scheduled_cache_warming(get_cache_warmer()()))
+        asyncio.create_task(scheduled_cache_warming(get_cache_warmer()))
         if DEBUG:
             logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
     

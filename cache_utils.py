@@ -679,6 +679,13 @@ class CacheWarmer:
         if not CACHE_WARMING_ENABLED:
             return {"status": "disabled", "message": "Cache warming is disabled"}
         
+        # Check if Redis is available before attempting to warm cache
+        try:
+            self.cache.redis.ping()
+        except Exception as e:
+            logger.warning(f"⚠️ Cache warming skipped - Redis not available: {e}")
+            return {"status": "skipped", "message": "Redis not available", "error": str(e)}
+        
         self.warming_in_progress = True
         start_time = time.time()
         
