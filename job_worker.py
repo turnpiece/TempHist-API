@@ -181,6 +181,7 @@ class JobWorker:
     async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a record computation job."""
         from main import get_temperature_data_v1
+        from fastapi import HTTPException
         
         logger.info(f"🔍 Processing record job with params: {params}")
         period = params.get("period")
@@ -197,8 +198,12 @@ class JobWorker:
             {"period": period, "location": location, "identifier": identifier}
         )
         
-        # Compute the data
-        data = await get_temperature_data_v1(location, period, identifier)
+        # Compute the data - catch HTTPException and convert to regular exception
+        try:
+            data = await get_temperature_data_v1(location, period, identifier)
+        except HTTPException as http_err:
+            # Convert HTTPException to regular exception for job error handling
+            raise ValueError(f"{http_err.detail}") from http_err
         
         # Store in cache using simple Redis string operations (avoid type conflicts)
         from cache_utils import CACHE_TTL_LONG
@@ -232,6 +237,7 @@ class JobWorker:
     async def process_rolling_bundle_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a rolling bundle job."""
         from routers.records_agg import _rolling_bundle_impl
+        from fastapi import HTTPException
         
         location = params["location"]
         anchor = params["anchor"]
@@ -241,10 +247,14 @@ class JobWorker:
         include = params.get("include")
         exclude = params.get("exclude")
         
-        # Compute the data
-        data = await _rolling_bundle_impl(
-            location, anchor, unit_group, month_mode, days_back, include, exclude
-        )
+        # Compute the data - catch HTTPException and convert to regular exception
+        try:
+            data = await _rolling_bundle_impl(
+                location, anchor, unit_group, month_mode, days_back, include, exclude
+            )
+        except HTTPException as http_err:
+            # Convert HTTPException to regular exception for job error handling
+            raise ValueError(f"{http_err.detail}") from http_err
         
         # Build cache key
         from cache_utils import CacheKeyBuilder

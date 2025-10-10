@@ -2220,9 +2220,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                 return json.loads(cached_series)
             except Exception as e:
                 logger.error(f"Error decoding cached series for {series_cache_key}: {e}")
-    if not is_valid_location(location):
-        logger.warning(f"Invalid location: {location}")
-        raise HTTPException(status_code=400, detail=f"Invalid location: {location}")
+    # Note: Removed is_valid_location() check - it makes unnecessary API calls.
+    # The Visual Crossing API will naturally return an error if the location is invalid.
     logger.debug(f"get_temperature_series for {location} on {day}/{month}")
     today = datetime.now()
     current_year = today.year
