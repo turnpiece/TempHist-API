@@ -151,9 +151,12 @@ class JobWorker:
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
             except Exception as compute_error:
-                logger.error(f"❌ Computation error for job {job_id}: {compute_error}")
+                logger.error(f"❌ Computation error for job {job_id}")
+                logger.error(f"❌ Error type: {type(compute_error).__name__}")
+                logger.error(f"❌ Error message: {str(compute_error)}")
+                logger.error(f"❌ Error repr: {repr(compute_error)}")
                 import traceback
-                logger.error(f"❌ Traceback: {traceback.format_exc()}")
+                logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
                 raise
             
             # Calculate processing time
@@ -179,9 +182,13 @@ class JobWorker:
         """Process a record computation job."""
         from main import get_temperature_data_v1
         
-        period = params["period"]
-        location = params["location"]
-        identifier = params["identifier"]
+        logger.info(f"🔍 Processing record job with params: {params}")
+        period = params.get("period")
+        location = params.get("location")
+        identifier = params.get("identifier")
+        
+        if not all([period, location, identifier]):
+            raise ValueError(f"Missing required params - period: {period}, location: {location}, identifier: {identifier}")
         
         # Build cache key
         from cache_utils import CacheKeyBuilder
