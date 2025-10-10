@@ -703,7 +703,9 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
 # Include the routers
 app.include_router(records_agg_router)
 app.include_router(locations_preapproved_router)
-redis_client = redis.from_url(REDIS_URL)
+
+# Initialize Redis with decode_responses for consistent string handling
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 # Initialize enhanced cache system
 initialize_cache(redis_client)
