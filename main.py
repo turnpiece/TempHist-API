@@ -388,11 +388,14 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
         date: The date in YYYY-MM-DD format
         remote: Whether to include remote data parameters (default: True)
     """
+    from urllib.parse import quote
+    # URL-encode the location to handle special characters (commas, spaces, etc.)
+    encoded_location = quote(location, safe='')
     base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
     if remote:
-        return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
     else:
-        return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?{base_params}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}"
 
 # Cache durations
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
@@ -1362,7 +1365,15 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     if not data or len(data) < 2:
         return "Not enough data to generate summary."
 
+    # Check if we have data for the expected year (from the date parameter)
+    expected_year = date.year
     latest = data[-1]
+    
+    # Verify the latest data point is actually for the expected year
+    if latest.get('x') != expected_year:
+        # Current year data is missing - don't generate a misleading summary
+        return f"Temperature data for {date.year} is not yet available."
+    
     if latest.get('y') is None:
         return "No valid temperature data for the latest year."
 
