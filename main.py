@@ -180,6 +180,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Reduce verbosity of noisy third-party loggers
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+
 # Rate Limiting Classes
 class LocationDiversityMonitor:
     """Monitor and limit location diversity per IP address to prevent API abuse."""
@@ -1569,7 +1575,11 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context_alt = "that period"
 
     if abs(diff) < 0.05:
-        avg_summary = f"It {tense_context_alt} about average for {period_context_alt}."
+        # Special case for yearly summaries to sound more natural
+        if period == "yearly":
+            avg_summary = f"It {tense_context_alt} an average year."
+        else:
+            avg_summary = f"It {tense_context_alt} about average for {period_context_alt}."
     elif diff > 0:
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
@@ -2627,7 +2637,8 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                 raise Exception(f"No {period} data found")
                 
         except Exception as e:
-            if DEBUG:
+            # Only log on first occurrence to reduce log noise (historysummary often fails, fallback is expected)
+            if DEBUG and "historysummary" not in str(e).lower():
                 logger.debug(f"Error fetching {period} summary: {e}, falling back to sampling")
             # Fallback to sampling approach if historysummary fails
             sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
@@ -2682,8 +2693,8 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     logger.debug("No yearly data returned, falling back to sampling")
                 raise Exception("No yearly data returned")
         except Exception as e:
-            if DEBUG:
-                logger.debug(f"Error fetching yearly summary: {e}")
+            # Historysummary endpoint often fails (400 errors), fallback is normal - don't log every occurrence
+            pass
             # Fallback to simple sampling approach if historysummary fails
             # Just sample a few representative days for each year
             sample_dates = [

@@ -38,11 +38,13 @@ class JobWorker:
                 await self.process_jobs()
                 poll_count += 1
                 
-                # Update heartbeat every 10 seconds
-                if poll_count % 10 == 0:
+                # Update heartbeat every 60 seconds (log every 5 minutes for less noise)
+                if poll_count % 60 == 0:
                     try:
-                        self.redis.setex("worker:heartbeat", 60, datetime.now(timezone.utc).isoformat())
-                        logger.debug(f"💓 Heartbeat updated (poll #{poll_count})")
+                        self.redis.setex("worker:heartbeat", 180, datetime.now(timezone.utc).isoformat())
+                        # Only log heartbeat every 5 minutes to reduce log volume
+                        if poll_count % 300 == 0:
+                            logger.info(f"💓 Worker heartbeat active (poll #{poll_count})")
                     except Exception as e:
                         logger.warning(f"⚠️  Could not update heartbeat: {e}")
                 
@@ -343,6 +345,12 @@ async def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    
+    # Reduce verbosity of noisy third-party loggers
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
     
     # Connect to Redis
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
