@@ -721,8 +721,8 @@ app.include_router(locations_preapproved_router)
 # Initialize Redis with decode_responses for consistent string handling
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Initialize enhanced cache system
-initialize_cache(redis_client)
+# Note: initialize_cache() is called in the lifespan handler (line 614)
+# to ensure proper initialization order during app startup
 
 # Start background worker for async job processing
 try:
@@ -1020,9 +1020,11 @@ async def verify_token_middleware(request: Request, call_next):
             request.state.user = decoded_token
         except Exception as e:
             logger.error(f"[DEBUG] Middleware: Firebase token verification failed: {e}")
+            logger.error(f"[DEBUG] Middleware: Error type: {type(e).__name__}")
+            logger.error(f"[DEBUG] Middleware: Error message: {str(e)}")
             return JSONResponse(
                 status_code=403,
-                content={"detail": "Invalid Firebase token."}
+                content={"detail": f"Invalid Firebase token: {str(e)}"}
             )
 
     logger.info(f"[DEBUG] Middleware: Token verified, calling next handler...")
@@ -3329,7 +3331,9 @@ async def create_record_job(
 ):
     """Create an async job to compute heavy record data."""
     try:
+        logger.info(f"Creating async job: period={period}, location={location}, identifier={identifier}")
         job_manager = get_job_manager()
+        logger.info(f"Job manager retrieved successfully")
         
         # Create job
         job_id = job_manager.create_job("record_computation", {
@@ -3337,6 +3341,7 @@ async def create_record_job(
             "location": location,
             "identifier": identifier
         })
+        logger.info(f"Job created successfully: {job_id}")
         
         # Return 202 Accepted with job info
         response.status_code = 202
@@ -3352,7 +3357,7 @@ async def create_record_job(
         
     except Exception as e:
         logger.error(f"Error creating record job: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create job")
+        raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
 
 @app.get("/v1/jobs/{job_id}")
 async def get_job_status(job_id: str):

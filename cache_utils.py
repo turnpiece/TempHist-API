@@ -1358,26 +1358,37 @@ class JobManager:
     
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
         """Create a new job and return job ID."""
-        job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.md5(str(params).encode()).hexdigest()[:8]}"
-        job_key = f"{self.job_prefix}{job_id}"
-        
-        job_data = {
-            "id": job_id,
-            "type": job_type,
-            "status": JobStatus.PENDING,
-            "params": params,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Store job data
-        self.redis.setex(job_key, self.job_ttl, json.dumps(job_data))
-        
-        # Add job to queue for worker processing
-        job_queue_key = "job_queue"
-        self.redis.lpush(job_queue_key, job_id)
-        
-        return job_id
+        try:
+            job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.md5(str(params).encode()).hexdigest()[:8]}"
+            job_key = f"{self.job_prefix}{job_id}"
+            
+            job_data = {
+                "id": job_id,
+                "type": job_type,
+                "status": JobStatus.PENDING,
+                "params": params,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            logger.info(f"Creating job with ID: {job_id}")
+            logger.info(f"Job params: {params}")
+            
+            # Store job data
+            self.redis.setex(job_key, self.job_ttl, json.dumps(job_data))
+            logger.info(f"Job data stored in Redis with key: {job_key}")
+            
+            # Add job to queue for worker processing
+            job_queue_key = "job_queue"
+            self.redis.lpush(job_queue_key, job_id)
+            logger.info(f"Job {job_id} added to queue")
+            
+            return job_id
+        except Exception as e:
+            logger.error(f"Error in create_job: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Job type: {job_type}, Params: {params}")
+            raise
     
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job status and result if ready."""
