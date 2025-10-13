@@ -681,7 +681,7 @@ class CacheWarmer:
         
         # Check if Redis is available before attempting to warm cache
         try:
-            self.cache.redis.ping()
+            self.redis_client.ping()
         except Exception as e:
             logger.warning(f"⚠️ Cache warming skipped - Redis not available: {e}")
             return {"status": "skipped", "message": "Redis not available", "error": str(e)}
