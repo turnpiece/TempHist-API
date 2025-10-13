@@ -81,19 +81,39 @@ import_to_current_env() {
     local success_count=0
     local error_count=0
     
-    # Import each variable
-    jq -r '.[] | "\(.name)=\(.value)"' "$filename" | while IFS='=' read -r name value; do
-        if [ -n "$name" ] && [ -n "$value" ]; then
-            echo "Setting $name..."
-            if railway variables --set "$name=$value" >/dev/null 2>&1; then
-                echo "  ✅ $name"
-                ((success_count++))
-            else
-                echo "  ❌ Failed to set $name"
-                ((error_count++))
+    # Import each variable - handle both array format and object format
+    if jq -e 'type == "array"' "$filename" >/dev/null 2>&1; then
+        # Array format: [{"name": "VAR", "value": "val"}]
+        jq -r '.[] | "\(.name)=\(.value)"' "$filename" | while IFS='=' read -r name value; do
+            if [ -n "$name" ] && [ -n "$value" ]; then
+                echo "Setting $name..."
+                if railway variables --set "$name=$value" >/dev/null 2>&1; then
+                    echo "  ✅ $name"
+                    ((success_count++))
+                else
+                    echo "  ❌ Failed to set $name"
+                    ((error_count++))
+                fi
             fi
-        fi
-    done
+        done
+    elif jq -e 'type == "object"' "$filename" >/dev/null 2>&1; then
+        # Object format: {"VAR": "val", "VAR2": "val2"}
+        jq -r 'to_entries[] | "\(.key)=\(.value)"' "$filename" | while IFS='=' read -r name value; do
+            if [ -n "$name" ] && [ -n "$value" ]; then
+                echo "Setting $name..."
+                if railway variables --set "$name=$value" >/dev/null 2>&1; then
+                    echo "  ✅ $name"
+                    ((success_count++))
+                else
+                    echo "  ❌ Failed to set $name"
+                    ((error_count++))
+                fi
+            fi
+        done
+    else
+        echo -e "${RED}❌ Unsupported JSON format${NC}"
+        return 1
+    fi
     
     echo -e "${GREEN}📊 Import Summary:${NC}"
     echo "  ✅ Successfully imported: $success_count"
