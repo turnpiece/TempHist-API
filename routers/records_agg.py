@@ -115,23 +115,7 @@ async def _rolling_bundle_preload_impl(
     return response_data
 
 _client: Optional[aiohttp.ClientSession] = None
-_sem = None
-
-def get_semaphore():
-    """Get or create the semaphore for the current event loop."""
-    global _sem
-    try:
-        loop = asyncio.get_running_loop()
-        # Create a unique key for this event loop
-        loop_id = id(loop)
-        if _sem is None or getattr(_sem, '_loop_id', None) != loop_id:
-            _sem = asyncio.Semaphore(2)
-            _sem._loop_id = loop_id
-        return _sem
-    except RuntimeError:
-        # No event loop running, create a new semaphore
-        _sem = asyncio.Semaphore(2)
-        return _sem
+_sem = asyncio.Semaphore(2)
 
 async def _client_session() -> aiohttp.ClientSession:
     global _client
@@ -180,7 +164,7 @@ async def fetch_historysummary(
         params.update(params_extra)
     url = f"{VC_BASE_URL}/weatherdata/historysummary"
     sess = await _client_session()
-    async with get_semaphore():
+    async with _sem:
         async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
             if resp.status >= 400:
                 text = await resp.text()
@@ -349,23 +333,7 @@ daily_cache = KVCache()
 
 # HTTP client and semaphore for rolling bundle
 _http: Optional[aiohttp.ClientSession] = None
-_rolling_sem = None
-
-def get_rolling_semaphore():
-    """Get or create the rolling semaphore for the current event loop."""
-    global _rolling_sem
-    try:
-        loop = asyncio.get_running_loop()
-        # Create a unique key for this event loop
-        loop_id = id(loop)
-        if _rolling_sem is None or getattr(_rolling_sem, '_loop_id', None) != loop_id:
-            _rolling_sem = asyncio.Semaphore(VC_MAX_CONCURRENCY)
-            _rolling_sem._loop_id = loop_id
-        return _rolling_sem
-    except RuntimeError:
-        # No event loop running, create a new semaphore
-        _rolling_sem = asyncio.Semaphore(VC_MAX_CONCURRENCY)
-        return _rolling_sem
+_rolling_sem = asyncio.Semaphore(VC_MAX_CONCURRENCY)
 
 async def _get_rolling_http_client() -> aiohttp.ClientSession:
     """Get or create the rolling bundle HTTP client."""
@@ -456,7 +424,7 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
             "key": API_KEY,
     }
     
-    async with get_rolling_semaphore():
+    async with _rolling_sem:
         http_client = await _get_rolling_http_client()
         async with http_client.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as r:
             if r.status >= 400:
