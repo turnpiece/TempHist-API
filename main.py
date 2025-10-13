@@ -751,7 +751,35 @@ if DEBUG:
 # HTTP client configuration
 HTTP_TIMEOUT = 60.0  # Increased from 30s to 60s for better reliability
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
-visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+# Global semaphore - will be created per event loop to avoid cross-loop binding issues
+_visual_crossing_semaphore = None
+
+def get_visual_crossing_semaphore():
+    """Get or create the visual crossing semaphore for the current event loop."""
+    global _visual_crossing_semaphore
+    try:
+        loop = asyncio.get_running_loop()
+        # Create a unique key for this event loop
+        loop_id = id(loop)
+        if _visual_crossing_semaphore is None or getattr(_visual_crossing_semaphore, '_loop_id', None) != loop_id:
+            _visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+            _visual_crossing_semaphore._loop_id = loop_id
+        return _visual_crossing_semaphore
+    except RuntimeError:
+        # No event loop running, create a new semaphore
+        _visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        return _visual_crossing_semaphore
+
+# For backward compatibility - create a property-like access
+class VisualCrossingSemaphore:
+    def __aenter__(self):
+        return get_visual_crossing_semaphore().__aenter__()
+    
+    def __aexit__(self, exc_type, exc_val, exc_tb):
+        return get_visual_crossing_semaphore().__aexit__(exc_type, exc_val, exc_tb)
+
+visual_crossing_semaphore = VisualCrossingSemaphore()
 
 # HTTP client for external API calls
 async def get_http_client():
@@ -2437,7 +2465,7 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
     
     # Use global semaphore if max_concurrent not specified
     if max_concurrent is None:
-        semaphore = visual_crossing_semaphore
+        semaphore = get_visual_crossing_semaphore()
     else:
         semaphore = asyncio.Semaphore(max_concurrent)
     
@@ -2487,7 +2515,7 @@ async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, u
         "key": API_KEY,
     }
     
-    async with visual_crossing_semaphore:
+    async with get_visual_crossing_semaphore():
         http = await get_http_client()
         async with http:
             r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
