@@ -21,6 +21,7 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
 - **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Migrating from legacy to v1 API
 - **[CLOUDFLARE_OPTIMIZATION.md](CLOUDFLARE_OPTIMIZATION.md)** - CDN optimization guide
+- **[railway/](railway/)** - Railway-specific deployment tools and documentation
 
 ## 📋 Requirements
 
