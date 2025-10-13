@@ -128,7 +128,7 @@ class LocationUsageTracker:
         tracked_locations = self.redis_client.smembers(tracked_locations_key)
         
         for location_bytes in tracked_locations:
-            location = location_bytes.decode()
+            location = location_bytes.decode() if isinstance(location_bytes, bytes) else location_bytes
             
             # Check if location has recent activity
             timestamp_key = f"{self.timestamp_prefix}{location}"
@@ -181,7 +181,7 @@ class LocationUsageTracker:
         tracked_locations = self.redis_client.smembers(tracked_locations_key)
         
         for location_bytes in tracked_locations:
-            location = location_bytes.decode()
+            location = location_bytes.decode() if isinstance(location_bytes, bytes) else location_bytes
             all_stats[location] = self.get_location_stats(location)
         
         return all_stats
@@ -397,8 +397,8 @@ class EnhancedCache:
             if cached_data and cached_etag and cached_timestamp:
                 # Parse the data
                 data = json.loads(cached_data)
-                etag = cached_etag.decode()
-                last_modified = datetime.fromisoformat(cached_timestamp.decode())
+                etag = cached_etag.decode() if isinstance(cached_etag, bytes) else cached_etag
+                last_modified = datetime.fromisoformat(cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp)
                 
                 self.hits += 1
                 return data, etag, last_modified
@@ -418,7 +418,7 @@ class EnhancedCache:
         try:
             cached_timestamp = self.redis.hget(cache_key, "timestamp")
             if cached_timestamp:
-                return datetime.fromisoformat(cached_timestamp.decode())
+                return datetime.fromisoformat(cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp)
             return None
                 
         except Exception as e:
@@ -1089,7 +1089,7 @@ class CacheInvalidator:
                 return {
                     "status": "dry_run",
                     "pattern": pattern,
-                    "matching_keys": [key.decode() for key in matching_keys],
+                    "matching_keys": [key.decode() if isinstance(key, bytes) else key for key in matching_keys],
                     "count": len(matching_keys),
                     "action": "would_delete"
                 }
@@ -1104,7 +1104,7 @@ class CacheInvalidator:
                 return {
                     "status": "success",
                     "pattern": pattern,
-                    "matching_keys": [key.decode() for key in matching_keys],
+                    "matching_keys": [key.decode() if isinstance(key, bytes) else key for key in matching_keys],
                     "deleted_count": deleted_count,
                     "total_found": len(matching_keys)
                 }
@@ -1231,7 +1231,7 @@ class CacheInvalidator:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
                 return {
                     "status": "dry_run",
-                    "expired_keys": [key.decode() for key in expired_keys],
+                    "expired_keys": [key.decode() if isinstance(key, bytes) else key for key in expired_keys],
                     "count": len(expired_keys),
                     "action": "would_delete"
                 }
@@ -1243,7 +1243,7 @@ class CacheInvalidator:
                 
                 return {
                     "status": "success",
-                    "expired_keys": [key.decode() for key in expired_keys],
+                    "expired_keys": [key.decode() if isinstance(key, bytes) else key for key in expired_keys],
                     "deleted_count": deleted_count,
                     "total_found": len(expired_keys)
                 }
@@ -1550,7 +1550,7 @@ async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis)
             if key_type == 'hash':
                 timestamp_data = redis_client.hget(cache_key, "timestamp")
                 if timestamp_data:
-                    return datetime.fromisoformat(timestamp_data.decode())
+                    return datetime.fromisoformat(timestamp_data.decode() if isinstance(timestamp_data, bytes) else timestamp_data)
         except Exception:
             # If hget fails, continue to string-based approach
             pass
