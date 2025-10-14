@@ -49,6 +49,7 @@ from cache_utils import (
     get_usage_tracker, get_cache_warmer, get_cache_stats, get_cache_invalidator,
     scheduled_cache_warming
 )
+from version import __version__
 
 # Environment variables
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
@@ -1062,7 +1063,7 @@ async def root():
     """Root endpoint that returns API information"""
     return {
         "name": "Temperature History API",
-        "version": "1.0.0",
+        "version": __version__,
         "description": "Temperature history API with v1 unified endpoints and legacy support",
         "v1_endpoints": {
             "records": [
