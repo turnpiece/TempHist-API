@@ -38,11 +38,13 @@ class JobWorker:
                 await self.process_jobs()
                 poll_count += 1
                 
-                # Update heartbeat every 10 seconds
-                if poll_count % 10 == 0:
+                # Update heartbeat every 60 seconds (log every 5 minutes for less noise)
+                if poll_count % 60 == 0:
                     try:
-                        self.redis.setex("worker:heartbeat", 60, datetime.now(timezone.utc).isoformat())
-                        logger.debug(f"💓 Heartbeat updated (poll #{poll_count})")
+                        self.redis.setex("worker:heartbeat", 180, datetime.now(timezone.utc).isoformat())
+                        # Only log heartbeat every 5 minutes to reduce log volume
+                        if poll_count % 300 == 0:
+                            logger.info(f"💓 Worker heartbeat active (poll #{poll_count})")
                     except Exception as e:
                         logger.warning(f"⚠️  Could not update heartbeat: {e}")
                 
@@ -151,9 +153,12 @@ class JobWorker:
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
             except Exception as compute_error:
-                logger.error(f"❌ Computation error for job {job_id}: {compute_error}")
+                logger.error(f"❌ Computation error for job {job_id}")
+                logger.error(f"❌ Error type: {type(compute_error).__name__}")
+                logger.error(f"❌ Error message: {str(compute_error)}")
+                logger.error(f"❌ Error repr: {repr(compute_error)}")
                 import traceback
-                logger.error(f"❌ Traceback: {traceback.format_exc()}")
+                logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
                 raise
             
             # Calculate processing time
@@ -178,10 +183,15 @@ class JobWorker:
     async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a record computation job."""
         from main import get_temperature_data_v1
+        from fastapi import HTTPException
         
-        period = params["period"]
-        location = params["location"]
-        identifier = params["identifier"]
+        logger.info(f"🔍 Processing record job with params: {params}")
+        period = params.get("period")
+        location = params.get("location")
+        identifier = params.get("identifier")
+        
+        if not all([period, location, identifier]):
+            raise ValueError(f"Missing required params - period: {period}, location: {location}, identifier: {identifier}")
         
         # Build cache key
         from cache_utils import CacheKeyBuilder
@@ -190,8 +200,12 @@ class JobWorker:
             {"period": period, "location": location, "identifier": identifier}
         )
         
-        # Compute the data
-        data = await get_temperature_data_v1(location, period, identifier)
+        # Compute the data - catch HTTPException and convert to regular exception
+        try:
+            data = await get_temperature_data_v1(location, period, identifier)
+        except HTTPException as http_err:
+            # Convert HTTPException to regular exception for job error handling
+            raise ValueError(f"{http_err.detail}") from http_err
         
         # Store in cache using simple Redis string operations (avoid type conflicts)
         from cache_utils import CACHE_TTL_LONG
@@ -225,6 +239,7 @@ class JobWorker:
     async def process_rolling_bundle_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a rolling bundle job."""
         from routers.records_agg import _rolling_bundle_impl
+        from fastapi import HTTPException
         
         location = params["location"]
         anchor = params["anchor"]
@@ -234,10 +249,14 @@ class JobWorker:
         include = params.get("include")
         exclude = params.get("exclude")
         
-        # Compute the data
-        data = await _rolling_bundle_impl(
-            location, anchor, unit_group, month_mode, days_back, include, exclude
-        )
+        # Compute the data - catch HTTPException and convert to regular exception
+        try:
+            data = await _rolling_bundle_impl(
+                location, anchor, unit_group, month_mode, days_back, include, exclude
+            )
+        except HTTPException as http_err:
+            # Convert HTTPException to regular exception for job error handling
+            raise ValueError(f"{http_err.detail}") from http_err
         
         # Build cache key
         from cache_utils import CacheKeyBuilder
@@ -326,6 +345,12 @@ async def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    
+    # Reduce verbosity of noisy third-party loggers
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
     
     # Connect to Redis
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")

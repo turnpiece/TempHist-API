@@ -37,6 +37,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Reduce verbosity of noisy third-party loggers
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+
 def validate_environment():
     """Validate required environment variables are set."""
     required_vars = {

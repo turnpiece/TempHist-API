@@ -51,10 +51,16 @@ from cache_utils import (
 )
 from version import __version__
 
-# Environment variables
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# Environment variables - strip whitespace/newlines from API keys
+API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
+
+# Debug: Log the REDIS_URL value to diagnose connection issues
+import logging as _logging
+_temp_logger = _logging.getLogger(__name__)
+_temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {REDIS_URL}")
+
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 TEST_TOKEN = os.getenv("TEST_TOKEN")
@@ -174,6 +180,12 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Reduce verbosity of noisy third-party loggers
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 # Rate Limiting Classes
 class LocationDiversityMonitor:
@@ -375,6 +387,16 @@ VISUAL_CROSSING_UNIT_GROUP = "metric"  # Visual Crossing API still uses "metric"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
 VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 
+def clean_location_string(location: str) -> str:
+    """Clean location string by removing non-printable ASCII characters."""
+    import re
+    # Remove any non-printable ASCII characters (keep only printable ASCII + common Unicode)
+    # This removes control characters, zero-width spaces, etc.
+    cleaned = ''.join(char for char in location if char.isprintable() or char in [' ', ','])
+    # Remove any multiple spaces
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned.strip()
+
 def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
     """Build Visual Crossing API URL with consistent parameters.
     
@@ -383,11 +405,15 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
         date: The date in YYYY-MM-DD format
         remote: Whether to include remote data parameters (default: True)
     """
+    from urllib.parse import quote
+    # Clean and URL-encode the location to handle special characters
+    cleaned_location = clean_location_string(location)
+    encoded_location = quote(cleaned_location, safe='')
     base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
     if remote:
-        return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
     else:
-        return f"{VISUAL_CROSSING_BASE_URL}/{location}/{date}?{base_params}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}"
 
 # Cache durations
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
@@ -698,19 +724,16 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
 # Include the routers
 app.include_router(records_agg_router)
 app.include_router(locations_preapproved_router)
-redis_client = redis.from_url(REDIS_URL)
 
-# Initialize enhanced cache system
-initialize_cache(redis_client)
+# Initialize Redis with decode_responses for consistent string handling
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Start background worker for async job processing
-try:
-    from background_worker import start_background_worker
-    start_background_worker(redis_client)
-    logger.info("✅ Background worker started successfully")
-except Exception as e:
-    logger.error(f"❌ Failed to start background worker: {e}")
-    logger.warning("Async job processing will not be available")
+# Note: initialize_cache() is called in the lifespan handler (line 614)
+# to ensure proper initialization order during app startup
+
+# Background worker is now handled by a separate service (worker_service.py)
+# This provides better isolation, scaling, and eliminates event loop conflicts
+logger.info("ℹ️  Background worker runs as separate service - no in-process worker needed")
 
 # Wire up Redis cache for rolling bundle
 daily_cache.redis = redis_client
@@ -724,6 +747,8 @@ if DEBUG:
 # HTTP client configuration
 HTTP_TIMEOUT = 60.0  # Increased from 30s to 60s for better reliability
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
+
+# Simple global semaphore - no longer need complex event loop handling with separate services
 visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 # HTTP client for external API calls
@@ -999,9 +1024,11 @@ async def verify_token_middleware(request: Request, call_next):
             request.state.user = decoded_token
         except Exception as e:
             logger.error(f"[DEBUG] Middleware: Firebase token verification failed: {e}")
+            logger.error(f"[DEBUG] Middleware: Error type: {type(e).__name__}")
+            logger.error(f"[DEBUG] Middleware: Error message: {str(e)}")
             return JSONResponse(
                 status_code=403,
-                content={"detail": "Invalid Firebase token."}
+                content={"detail": f"Invalid Firebase token: {str(e)}"}
             )
 
     logger.info(f"[DEBUG] Middleware: Token verified, calling next handler...")
@@ -1034,6 +1061,8 @@ app.add_middleware(
         "https://temphist.com",  # Main domain
         "https://www.temphist.com",  # www subdomain
         "https://dev.temphist.com",  # development site
+        "https://temphist-develop.up.railway.app",  # development site on Railway
+        "https://temphist-staging.up.railway.app"  # staging site on Railway
     ],
     allow_origin_regex=r"^https://.*\.onrender\.com$",  # Allow any Render subdomain
     allow_credentials=True,
@@ -1353,7 +1382,15 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     if not data or len(data) < 2:
         return "Not enough data to generate summary."
 
+    # Check if we have data for the expected year (from the date parameter)
+    expected_year = date.year
     latest = data[-1]
+    
+    # Verify the latest data point is actually for the expected year
+    if latest.get('x') != expected_year:
+        # Current year data is missing - don't generate a misleading summary
+        return f"Temperature data for {date.year} is not yet available."
+    
     if latest.get('y') is None:
         return "No valid temperature data for the latest year."
 
@@ -1536,7 +1573,11 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context_alt = "that period"
 
     if abs(diff) < 0.05:
-        avg_summary = f"It {tense_context_alt} about average for {period_context_alt}."
+        # Special case for yearly summaries to sound more natural
+        if period == "yearly":
+            avg_summary = f"It {tense_context_alt} an average year."
+        else:
+            avg_summary = f"It {tense_context_alt} about average for {period_context_alt}."
     elif diff > 0:
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
@@ -2211,9 +2252,8 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                 return json.loads(cached_series)
             except Exception as e:
                 logger.error(f"Error decoding cached series for {series_cache_key}: {e}")
-    if not is_valid_location(location):
-        logger.warning(f"Invalid location: {location}")
-        raise HTTPException(status_code=400, detail=f"Invalid location: {location}")
+    # Note: Removed is_valid_location() check - it makes unnecessary API calls.
+    # The Visual Crossing API will naturally return an error if the location is invalid.
     logger.debug(f"get_temperature_series for {location} on {day}/{month}")
     today = datetime.now()
     current_year = today.year
@@ -2354,7 +2394,15 @@ async def get_forecast_data(location: str, date) -> Dict:
     else:
         date_str = str(date)
     
-    url = build_visual_crossing_url(location, date_str, remote=False)
+    # Debug logging to see what location we're processing
+    logger.debug(f"🌐 Fetching forecast for location: '{location}' (repr: {repr(location)}), date: {date_str}")
+    
+    try:
+        url = build_visual_crossing_url(location, date_str, remote=False)
+        logger.debug(f"🔗 Built URL (first 200 chars): {url[:200]}...")
+    except Exception as url_error:
+        logger.error(f"❌ Error building URL for location '{location}': {url_error}")
+        raise
     
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         response = await client.get(url, headers={"Accept-Encoding": "gzip"})
@@ -2587,7 +2635,8 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                 raise Exception(f"No {period} data found")
                 
         except Exception as e:
-            if DEBUG:
+            # Only log on first occurrence to reduce log noise (historysummary often fails, fallback is expected)
+            if DEBUG and "historysummary" not in str(e).lower():
                 logger.debug(f"Error fetching {period} summary: {e}, falling back to sampling")
             # Fallback to sampling approach if historysummary fails
             sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
@@ -2642,8 +2691,8 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     logger.debug("No yearly data returned, falling back to sampling")
                 raise Exception("No yearly data returned")
         except Exception as e:
-            if DEBUG:
-                logger.debug(f"Error fetching yearly summary: {e}")
+            # Historysummary endpoint often fails (400 errors), fallback is normal - don't log every occurrence
+            pass
             # Fallback to simple sampling approach if historysummary fails
             # Just sample a few representative days for each year
             sample_dates = [
@@ -3281,6 +3330,74 @@ async def get_analytics_by_session(session_id: str):
         logger.error(f"Error getting session analytics: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve session analytics")
 
+@app.get("/debug/jobs")
+async def debug_jobs_endpoint():
+    """Debug endpoint to check job queue and job data in Redis."""
+    try:
+        debug_info = {
+            "queue_length": 0,
+            "jobs_in_queue": [],
+            "job_data_status": {},
+            "redis_connection": "unknown",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Test Redis connection
+        try:
+            redis_client.ping()
+            debug_info["redis_connection"] = "OK"
+        except Exception as e:
+            debug_info["redis_connection"] = f"FAILED: {e}"
+            return debug_info
+        
+        # Check job queue
+        queue_key = "job_queue"
+        queue_length = redis_client.llen(queue_key)
+        debug_info["queue_length"] = queue_length
+        
+        if queue_length > 0:
+            jobs_in_queue = []
+            for i in range(min(queue_length, 10)):
+                job_id = redis_client.lindex(queue_key, i)
+                if job_id:
+                    # Convert bytes to string if needed
+                    if isinstance(job_id, bytes):
+                        job_id = job_id.decode('utf-8')
+                    
+                    jobs_in_queue.append(job_id)
+                    
+                    # Check if job data exists
+                    job_key = f"job:{job_id}"
+                    job_data = redis_client.get(job_key)
+                    
+                    if job_data:
+                        try:
+                            job = json.loads(job_data)
+                            status = job.get("status", "unknown")
+                            created = job.get("created_at", "unknown")
+                            debug_info["job_data_status"][job_id] = {
+                                "exists": True,
+                                "status": status,
+                                "created_at": created
+                            }
+                        except:
+                            debug_info["job_data_status"][job_id] = {
+                                "exists": True,
+                                "error": "invalid JSON"
+                            }
+                    else:
+                        debug_info["job_data_status"][job_id] = {
+                            "exists": False
+                        }
+            
+            debug_info["jobs_in_queue"] = jobs_in_queue
+        
+        return debug_info
+        
+    except Exception as e:
+        logger.error(f"Error in debug jobs endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Debug failed: {str(e)}")
+
 # Async Job Endpoints for Heavy Operations
 @app.post("/v1/records/{period}/{location}/{identifier}/async")
 async def create_record_job(
@@ -3291,7 +3408,9 @@ async def create_record_job(
 ):
     """Create an async job to compute heavy record data."""
     try:
+        logger.info(f"Creating async job: period={period}, location={location}, identifier={identifier}")
         job_manager = get_job_manager()
+        logger.info(f"Job manager retrieved successfully")
         
         # Create job
         job_id = job_manager.create_job("record_computation", {
@@ -3299,6 +3418,7 @@ async def create_record_job(
             "location": location,
             "identifier": identifier
         })
+        logger.info(f"Job created successfully: {job_id}")
         
         # Return 202 Accepted with job info
         response.status_code = 202
@@ -3314,7 +3434,7 @@ async def create_record_job(
         
     except Exception as e:
         logger.error(f"Error creating record job: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create job")
+        raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
 
 @app.get("/v1/jobs/{job_id}")
 async def get_job_status(job_id: str):
@@ -3555,4 +3675,5 @@ def get_diagnostics_recommendations(worker_alive, heartbeat_age, queue_length, j
 # For local testing
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

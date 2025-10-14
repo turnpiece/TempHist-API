@@ -168,7 +168,8 @@ async def fetch_historysummary(
         async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
             if resp.status >= 400:
                 text = await resp.text()
-                raise HTTPException(status_code=502, detail=f"VC historysummary {resp.status}: {text[:180]}")
+                # Historysummary endpoint often returns 400s - don't raise HTTPException, let caller handle fallback
+                raise ValueError(f"VC historysummary {resp.status}: {text[:180]}")
             return await resp.json()
 
 def _historysummary_values(payload: Dict[str, Any]) -> List[Dict[str, Any]]:

@@ -128,7 +128,7 @@ class LocationUsageTracker:
         tracked_locations = self.redis_client.smembers(tracked_locations_key)
         
         for location_bytes in tracked_locations:
-            location = location_bytes.decode()
+            location = location_bytes.decode() if isinstance(location_bytes, bytes) else location_bytes
             
             # Check if location has recent activity
             timestamp_key = f"{self.timestamp_prefix}{location}"
@@ -181,7 +181,7 @@ class LocationUsageTracker:
         tracked_locations = self.redis_client.smembers(tracked_locations_key)
         
         for location_bytes in tracked_locations:
-            location = location_bytes.decode()
+            location = location_bytes.decode() if isinstance(location_bytes, bytes) else location_bytes
             all_stats[location] = self.get_location_stats(location)
         
         return all_stats
@@ -397,8 +397,8 @@ class EnhancedCache:
             if cached_data and cached_etag and cached_timestamp:
                 # Parse the data
                 data = json.loads(cached_data)
-                etag = cached_etag.decode()
-                last_modified = datetime.fromisoformat(cached_timestamp.decode())
+                etag = cached_etag.decode() if isinstance(cached_etag, bytes) else cached_etag
+                last_modified = datetime.fromisoformat(cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp)
                 
                 self.hits += 1
                 return data, etag, last_modified
@@ -418,7 +418,7 @@ class EnhancedCache:
         try:
             cached_timestamp = self.redis.hget(cache_key, "timestamp")
             if cached_timestamp:
-                return datetime.fromisoformat(cached_timestamp.decode())
+                return datetime.fromisoformat(cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp)
             return None
                 
         except Exception as e:
@@ -681,7 +681,7 @@ class CacheWarmer:
         
         # Check if Redis is available before attempting to warm cache
         try:
-            self.cache.redis.ping()
+            self.redis_client.ping()
         except Exception as e:
             logger.warning(f"⚠️ Cache warming skipped - Redis not available: {e}")
             return {"status": "skipped", "message": "Redis not available", "error": str(e)}
@@ -1089,7 +1089,7 @@ class CacheInvalidator:
                 return {
                     "status": "dry_run",
                     "pattern": pattern,
-                    "matching_keys": [key.decode() for key in matching_keys],
+                    "matching_keys": [key.decode() if isinstance(key, bytes) else key for key in matching_keys],
                     "count": len(matching_keys),
                     "action": "would_delete"
                 }
@@ -1104,7 +1104,7 @@ class CacheInvalidator:
                 return {
                     "status": "success",
                     "pattern": pattern,
-                    "matching_keys": [key.decode() for key in matching_keys],
+                    "matching_keys": [key.decode() if isinstance(key, bytes) else key for key in matching_keys],
                     "deleted_count": deleted_count,
                     "total_found": len(matching_keys)
                 }
@@ -1231,7 +1231,7 @@ class CacheInvalidator:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
                 return {
                     "status": "dry_run",
-                    "expired_keys": [key.decode() for key in expired_keys],
+                    "expired_keys": [key.decode() if isinstance(key, bytes) else key for key in expired_keys],
                     "count": len(expired_keys),
                     "action": "would_delete"
                 }
@@ -1243,7 +1243,7 @@ class CacheInvalidator:
                 
                 return {
                     "status": "success",
-                    "expired_keys": [key.decode() for key in expired_keys],
+                    "expired_keys": [key.decode() if isinstance(key, bytes) else key for key in expired_keys],
                     "deleted_count": deleted_count,
                     "total_found": len(expired_keys)
                 }
@@ -1358,26 +1358,37 @@ class JobManager:
     
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
         """Create a new job and return job ID."""
-        job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.md5(str(params).encode()).hexdigest()[:8]}"
-        job_key = f"{self.job_prefix}{job_id}"
-        
-        job_data = {
-            "id": job_id,
-            "type": job_type,
-            "status": JobStatus.PENDING,
-            "params": params,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Store job data
-        self.redis.setex(job_key, self.job_ttl, json.dumps(job_data))
-        
-        # Add job to queue for worker processing
-        job_queue_key = "job_queue"
-        self.redis.lpush(job_queue_key, job_id)
-        
-        return job_id
+        try:
+            job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.md5(str(params).encode()).hexdigest()[:8]}"
+            job_key = f"{self.job_prefix}{job_id}"
+            
+            job_data = {
+                "id": job_id,
+                "type": job_type,
+                "status": JobStatus.PENDING,
+                "params": params,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            logger.info(f"Creating job with ID: {job_id}")
+            logger.info(f"Job params: {params}")
+            
+            # Store job data
+            self.redis.setex(job_key, self.job_ttl, json.dumps(job_data))
+            logger.info(f"Job data stored in Redis with key: {job_key}")
+            
+            # Add job to queue for worker processing
+            job_queue_key = "job_queue"
+            self.redis.lpush(job_queue_key, job_id)
+            logger.info(f"Job {job_id} added to queue")
+            
+            return job_id
+        except Exception as e:
+            logger.error(f"Error in create_job: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Job type: {job_type}, Params: {params}")
+            raise
     
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job status and result if ready."""
@@ -1539,7 +1550,7 @@ async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis)
             if key_type == 'hash':
                 timestamp_data = redis_client.hget(cache_key, "timestamp")
                 if timestamp_data:
-                    return datetime.fromisoformat(timestamp_data.decode())
+                    return datetime.fromisoformat(timestamp_data.decode() if isinstance(timestamp_data, bytes) else timestamp_data)
         except Exception:
             # If hget fails, continue to string-based approach
             pass
