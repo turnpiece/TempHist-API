@@ -3329,6 +3329,74 @@ async def get_analytics_by_session(session_id: str):
         logger.error(f"Error getting session analytics: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve session analytics")
 
+@app.get("/debug/jobs")
+async def debug_jobs_endpoint():
+    """Debug endpoint to check job queue and job data in Redis."""
+    try:
+        debug_info = {
+            "queue_length": 0,
+            "jobs_in_queue": [],
+            "job_data_status": {},
+            "redis_connection": "unknown",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Test Redis connection
+        try:
+            redis_client.ping()
+            debug_info["redis_connection"] = "OK"
+        except Exception as e:
+            debug_info["redis_connection"] = f"FAILED: {e}"
+            return debug_info
+        
+        # Check job queue
+        queue_key = "job_queue"
+        queue_length = redis_client.llen(queue_key)
+        debug_info["queue_length"] = queue_length
+        
+        if queue_length > 0:
+            jobs_in_queue = []
+            for i in range(min(queue_length, 10)):
+                job_id = redis_client.lindex(queue_key, i)
+                if job_id:
+                    # Convert bytes to string if needed
+                    if isinstance(job_id, bytes):
+                        job_id = job_id.decode('utf-8')
+                    
+                    jobs_in_queue.append(job_id)
+                    
+                    # Check if job data exists
+                    job_key = f"job:{job_id}"
+                    job_data = redis_client.get(job_key)
+                    
+                    if job_data:
+                        try:
+                            job = json.loads(job_data)
+                            status = job.get("status", "unknown")
+                            created = job.get("created_at", "unknown")
+                            debug_info["job_data_status"][job_id] = {
+                                "exists": True,
+                                "status": status,
+                                "created_at": created
+                            }
+                        except:
+                            debug_info["job_data_status"][job_id] = {
+                                "exists": True,
+                                "error": "invalid JSON"
+                            }
+                    else:
+                        debug_info["job_data_status"][job_id] = {
+                            "exists": False
+                        }
+            
+            debug_info["jobs_in_queue"] = jobs_in_queue
+        
+        return debug_info
+        
+    except Exception as e:
+        logger.error(f"Error in debug jobs endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Debug failed: {str(e)}")
+
 # Async Job Endpoints for Heavy Operations
 @app.post("/v1/records/{period}/{location}/{identifier}/async")
 async def create_record_job(
