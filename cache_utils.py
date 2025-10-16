@@ -60,13 +60,9 @@ CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
 
-# Default popular locations for cache warming
-DEFAULT_POPULAR_LOCATIONS = [
-    "new_york", "los_angeles", "chicago", "houston", "phoenix",
-    "philadelphia", "san_antonio", "san_diego", "dallas", "san_jose",
-    "austin", "jacksonville", "fort_worth", "columbus", "charlotte",
-    "san_francisco", "indianapolis", "seattle", "denver", "washington"
-]
+# Default popular locations for cache warming (from environment variable)
+DEFAULT_POPULAR_LOCATIONS = os.getenv("CACHE_WARMING_POPULAR_LOCATIONS", "london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin").split(",")
+DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCATIONS if loc.strip()]
 
 # Environment variables for cache warming
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -551,6 +547,11 @@ class CacheWarmer:
         # Always include default popular locations
         locations.update(DEFAULT_POPULAR_LOCATIONS)
         
+        # Add preapproved locations (if available)
+        preapproved_locations = self.get_preapproved_locations()
+        if preapproved_locations:
+            locations.update(preapproved_locations)
+        
         # Add recently popular locations from usage tracking
         if self.usage_tracker and USAGE_TRACKING_ENABLED:
             recent_popular = self.usage_tracker.get_popular_locations(limit=10, hours=24)
@@ -559,6 +560,36 @@ class CacheWarmer:
         
         # Limit to max locations
         return list(locations)[:CACHE_WARMING_MAX_LOCATIONS]
+    
+    def get_preapproved_locations(self) -> List[str]:
+        """Get preapproved locations from the data file."""
+        try:
+            import os
+            import json
+            
+            # Path to preapproved locations data file
+            data_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "preapproved_locations.json")
+            
+            with open(data_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Extract location slugs (used as identifiers)
+            locations = []
+            for item in data:
+                if 'slug' in item and item['slug']:
+                    locations.append(item['slug'].lower())
+                elif 'id' in item and item['id']:
+                    locations.append(item['id'].lower())
+            
+            if DEBUG:
+                logger.info(f"📋 PREAPPROVED LOCATIONS: Loaded {len(locations)} locations from data file")
+            
+            return locations
+            
+        except Exception as e:
+            if DEBUG:
+                logger.warning(f"⚠️  Could not load preapproved locations: {e}")
+            return []
     
     def get_dates_to_warm(self) -> List[str]:
         """Get list of dates to warm."""
@@ -711,6 +742,23 @@ class CacheWarmer:
             if DEBUG:
                 logger.info(f"🔥 STARTING CACHE WARMING: {len(locations)} locations")
                 logger.info(f"🏙️  LOCATIONS: {', '.join(locations)}")
+            
+            # Warm preapproved locations endpoint once
+            try:
+                preapproved_url = f"{BASE_URL}/v1/locations/preapproved"
+                auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                if auth_token:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(preapproved_url, headers={"Authorization": f"Bearer {auth_token}"}) as resp:
+                            if resp.status == 200:
+                                if DEBUG:
+                                    logger.info("✅ PREAPPROVED ENDPOINT: Warmed successfully")
+                            else:
+                                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {resp.status}")
+                else:
+                    logger.warning("⚠️  PREAPPROVED ENDPOINT: No authentication token available")
+            except Exception as e:
+                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {str(e)}")
             
             # Warm locations with concurrency limit
             semaphore = asyncio.Semaphore(CACHE_WARMING_CONCURRENT_REQUESTS)
