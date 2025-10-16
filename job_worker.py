@@ -150,6 +150,9 @@ class JobWorker:
                 elif job_type == "rolling_bundle":
                     logger.info(f"📦 Starting rolling bundle computation...")
                     result = await self.process_rolling_bundle_job(params, cache)
+                elif job_type == "cache_warming":
+                    logger.info(f"🔥 Starting cache warming...")
+                    result = await self.process_cache_warming_job(params, cache)
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
             except Exception as compute_error:
@@ -300,6 +303,90 @@ class JobWorker:
             "data": data,
             "computed_at": datetime.now(timezone.utc).isoformat()
         }
+    
+    async def process_cache_warming_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
+        """Process a cache warming job."""
+        from cache_utils import get_cache_warmer
+        
+        logger.info(f"🔥 Processing cache warming job with params: {params}")
+        
+        # Get cache warmer instance
+        cache_warmer = get_cache_warmer()
+        if not cache_warmer:
+            raise ValueError("Cache warmer not available")
+        
+        # Determine warming scope
+        locations = params.get("locations", [])
+        warming_type = params.get("type", "all")  # "all", "popular", "specific"
+        
+        results = {
+            "job_type": "cache_warming",
+            "warming_type": warming_type,
+            "locations_requested": locations,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "results": {}
+        }
+        
+        try:
+            if warming_type == "all":
+                # Warm all popular locations
+                logger.info("🔥 Warming all popular locations...")
+                warming_result = await cache_warmer.warm_all_locations()
+                results["results"]["all_locations"] = warming_result
+                
+            elif warming_type == "popular":
+                # Warm only popular locations (from usage tracking)
+                logger.info("🔥 Warming popular locations...")
+                popular_locations = cache_warmer.get_locations_to_warm()
+                for location in popular_locations:
+                    location_result = await cache_warmer.warm_location_data(location)
+                    results["results"][location] = location_result
+                    
+            elif warming_type == "specific":
+                # Warm specific locations
+                if not locations:
+                    raise ValueError("No locations specified for specific warming")
+                
+                logger.info(f"🔥 Warming specific locations: {locations}")
+                for location in locations:
+                    location_result = await cache_warmer.warm_location_data(location)
+                    results["results"][location] = location_result
+            else:
+                raise ValueError(f"Unknown warming type: {warming_type}")
+            
+            results["status"] = "completed"
+            results["completed_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Calculate summary statistics
+            total_endpoints = 0
+            total_errors = 0
+            successful_locations = 0
+            
+            for location, result in results["results"].items():
+                if isinstance(result, dict):
+                    if "warmed_endpoints" in result:
+                        total_endpoints += len(result.get("warmed_endpoints", []))
+                        total_errors += len(result.get("errors", []))
+                        if result.get("warmed_endpoints"):
+                            successful_locations += 1
+            
+            results["summary"] = {
+                "total_locations": len(results["results"]),
+                "successful_locations": successful_locations,
+                "total_endpoints_warmed": total_endpoints,
+                "total_errors": total_errors
+            }
+            
+            logger.info(f"✅ Cache warming completed: {successful_locations} locations, {total_endpoints} endpoints")
+            
+        except Exception as e:
+            logger.error(f"❌ Cache warming failed: {e}")
+            results["status"] = "failed"
+            results["error"] = str(e)
+            results["failed_at"] = datetime.now(timezone.utc).isoformat()
+            raise
+        
+        return results
 
 # Global worker instance
 worker: JobWorker = None

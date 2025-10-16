@@ -47,7 +47,7 @@ from cache_utils import (
     USAGE_TRACKING_ENABLED, USAGE_RETENTION_DAYS, DEFAULT_POPULAR_LOCATIONS,
     # Global instances
     get_usage_tracker, get_cache_warmer, get_cache_stats, get_cache_invalidator,
-    scheduled_cache_warming
+    scheduled_cache_warming, scheduled_cache_warming_job
 )
 from version import __version__
 
@@ -651,8 +651,8 @@ async def lifespan(app: FastAPI):
         # Run initial warming in background
         asyncio.create_task(get_cache_warmer().warm_all_locations())
         
-        # Start scheduled warming background task
-        asyncio.create_task(scheduled_cache_warming(get_cache_warmer()))
+        # Start scheduled warming background task (job-based)
+        asyncio.create_task(scheduled_cache_warming_job(get_cache_warmer()))
         if DEBUG:
             logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
     
@@ -2035,6 +2035,62 @@ async def get_warming_schedule():
         "last_warming": get_cache_warmer().last_warming_time.isoformat() if get_cache_warmer().last_warming_time else None,
         "warming_in_progress": get_cache_warmer().warming_in_progress
     }
+
+@app.post("/cache-warm/job")
+async def trigger_cache_warming_job(
+    warming_type: str = "all",
+    locations: List[str] = None
+):
+    """Trigger cache warming as a background job."""
+    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
+        return {"status": "disabled", "message": "Cache warming is not enabled"}
+    
+    # Import job manager
+    from cache_utils import get_job_manager
+    job_manager = get_job_manager()
+    
+    if not job_manager:
+        return {"status": "error", "message": "Job manager not available"}
+    
+    # Validate warming type
+    if warming_type not in ["all", "popular", "specific"]:
+        return {"status": "error", "message": "Invalid warming type. Must be 'all', 'popular', or 'specific'"}
+    
+    # Validate locations for specific warming
+    if warming_type == "specific" and not locations:
+        return {"status": "error", "message": "Locations must be provided for specific warming"}
+    
+    # Create cache warming job
+    job_id = job_manager.create_job("cache_warming", {
+        "type": warming_type,
+        "locations": locations or [],
+        "triggered_by": "api",
+        "triggered_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {
+        "status": "job_created",
+        "message": "Cache warming job created successfully",
+        "job_id": job_id,
+        "warming_type": warming_type,
+        "locations": locations or [],
+        "job_status_url": f"/jobs/{job_id}"
+    }
+
+@app.get("/cache-warm/job/{job_id}")
+async def get_cache_warming_job_status(job_id: str):
+    """Get status of a cache warming job."""
+    from cache_utils import get_job_manager
+    job_manager = get_job_manager()
+    
+    if not job_manager:
+        return {"status": "error", "message": "Job manager not available"}
+    
+    job_status = job_manager.get_job_status(job_id)
+    if not job_status:
+        return {"status": "not_found", "message": "Job not found"}
+    
+    return job_status
 
 @app.get("/cache-stats")
 async def get_cache_statistics():

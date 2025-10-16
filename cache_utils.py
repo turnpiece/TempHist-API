@@ -72,6 +72,7 @@ DEFAULT_POPULAR_LOCATIONS = [
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 TEST_TOKEN = os.getenv("TEST_TOKEN")
+API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
 
 class LocationUsageTracker:
     """Track location usage patterns for analytics and cache warming."""
@@ -612,12 +613,16 @@ class CacheWarmer:
             # Warm forecast data
             try:
                 forecast_url = f"{BASE_URL}/forecast/{location}"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(forecast_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
-                        if resp.status == 200:
-                            results["warmed_endpoints"].append("forecast")
-                        else:
-                            results["errors"].append(f"forecast: {resp.status}")
+                auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                if not auth_token:
+                    results["errors"].append("forecast: No authentication token available")
+                else:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(forecast_url, headers={"Authorization": f"Bearer {auth_token}"}) as resp:
+                            if resp.status == 200:
+                                results["warmed_endpoints"].append("forecast")
+                            else:
+                                results["errors"].append(f"forecast: {resp.status}")
             except Exception as e:
                 results["errors"].append(f"forecast: {str(e)}")
             
@@ -630,12 +635,16 @@ class CacheWarmer:
                     # Main record endpoint
                     try:
                         v1_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}"
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(v1_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
-                                if resp.status == 200:
-                                    results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
-                                else:
-                                    results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
+                        auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                        if not auth_token:
+                            results["errors"].append(f"v1/records/{period}/{month_day}: No authentication token available")
+                        else:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(v1_url, headers={"Authorization": f"Bearer {auth_token}"}) as resp:
+                                    if resp.status == 200:
+                                        results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
+                                    else:
+                                        results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
                     except Exception as e:
                         results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
                     
@@ -643,12 +652,16 @@ class CacheWarmer:
                     for subresource in ["average", "trend", "summary"]:
                         try:
                             sub_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}/{subresource}"
-                            async with aiohttp.ClientSession() as session:
-                                async with session.get(sub_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
-                                    if resp.status == 200:
-                                        results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}/{subresource}")
-                                    else:
-                                        results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {resp.status}")
+                            auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                            if not auth_token:
+                                results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: No authentication token available")
+                            else:
+                                async with aiohttp.ClientSession() as session:
+                                    async with session.get(sub_url, headers={"Authorization": f"Bearer {auth_token}"}) as resp:
+                                        if resp.status == 200:
+                                            results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}/{subresource}")
+                                        else:
+                                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {resp.status}")
                         except Exception as e:
                             results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {str(e)}")
             
@@ -657,12 +670,16 @@ class CacheWarmer:
             for date in dates[:5]:  # Limit to last 5 dates to avoid too many requests
                 try:
                     weather_url = f"{BASE_URL}/weather/{location}/{date}"
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(weather_url, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as resp:
-                            if resp.status == 200:
-                                results["warmed_endpoints"].append(f"weather/{date}")
-                            else:
-                                results["errors"].append(f"weather/{date}: {resp.status}")
+                    auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                    if not auth_token:
+                        results["errors"].append(f"weather/{date}: No authentication token available")
+                    else:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(weather_url, headers={"Authorization": f"Bearer {auth_token}"}) as resp:
+                                if resp.status == 200:
+                                    results["warmed_endpoints"].append(f"weather/{date}")
+                                else:
+                                    results["errors"].append(f"weather/{date}: {resp.status}")
                 except Exception as e:
                     results["errors"].append(f"weather/{date}: {str(e)}")
         
@@ -1579,8 +1596,50 @@ async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis)
         logger.warning(f"Error getting cache timestamp for {cache_key}: {e}")
         return None
 
+async def scheduled_cache_warming_job(cache_warmer: CacheWarmer):
+    """Background task that schedules cache warming jobs on a schedule."""
+    if not CACHE_WARMING_ENABLED or not cache_warmer:
+        return
+    
+    # Import here to avoid circular imports
+    from cache_utils import get_job_manager
+    
+    while True:
+        try:
+            # Wait for the specified interval
+            await asyncio.sleep(CACHE_WARMING_INTERVAL_HOURS * 3600)
+            
+            # Check if warming is already in progress
+            if not cache_warmer.warming_in_progress:
+                if DEBUG:
+                    logger.info("🕐 SCHEDULED CACHE WARMING: Creating cache warming job")
+                
+                # Create a cache warming job instead of running directly
+                job_manager = get_job_manager()
+                if job_manager:
+                    job_id = job_manager.create_job("cache_warming", {
+                        "type": "all",
+                        "locations": [],
+                        "scheduled": True,
+                        "scheduled_at": datetime.now(timezone.utc).isoformat()
+                    })
+                    logger.info(f"✅ Cache warming job created: {job_id}")
+                else:
+                    logger.warning("⚠️  Job manager not available, falling back to direct warming")
+                    # Fallback to direct warming if job manager not available
+                    asyncio.create_task(cache_warmer.warm_all_locations())
+            else:
+                if DEBUG:
+                    logger.info("⏭️  SCHEDULED CACHE WARMING: Skipping - warming already in progress")
+        
+        except Exception as e:
+            if DEBUG:
+                logger.error(f"❌ SCHEDULED CACHE WARMING ERROR: {str(e)}")
+            # Continue the loop even if there's an error
+            await asyncio.sleep(300)  # Wait 5 minutes before retrying
+
 async def scheduled_cache_warming(cache_warmer: CacheWarmer):
-    """Background task that runs cache warming on a schedule."""
+    """Legacy background task that runs cache warming on a schedule."""
     if not CACHE_WARMING_ENABLED or not cache_warmer:
         return
     
