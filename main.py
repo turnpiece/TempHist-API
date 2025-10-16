@@ -742,7 +742,7 @@ redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 # Background worker is now handled by a separate service (worker_service.py)
 # This provides better isolation, scaling, and eliminates event loop conflicts
-    logger.debug("ℹ️  Background worker runs as separate service - no in-process worker needed")
+logger.debug("ℹ️  Background worker runs as separate service - no in-process worker needed")
 
 # Wire up Redis cache for rolling bundle
 daily_cache.redis = redis_client
@@ -2259,6 +2259,101 @@ def is_valid_location(location: str) -> bool:
         return True
     return False
 
+class InvalidLocationCache:
+    """Cache for invalid locations to avoid repeated API calls."""
+    
+    def __init__(self, redis_client, ttl_hours: int = 24):
+        self.redis_client = redis_client
+        self.ttl_seconds = ttl_hours * 3600
+        self.invalid_key_prefix = "invalid_location:"
+    
+    def is_invalid_location(self, location: str) -> bool:
+        """Check if a location is known to be invalid."""
+        if not self.redis_client:
+            return False
+        try:
+            key = f"{self.invalid_key_prefix}{location.lower()}"
+            return self.redis_client.exists(key) > 0
+        except Exception as e:
+            logger.error(f"Error checking invalid location cache: {e}")
+            return False
+    
+    def mark_location_invalid(self, location: str, reason: str = "no_data"):
+        """Mark a location as invalid with a reason."""
+        if not self.redis_client:
+            return
+        try:
+            key = f"{self.invalid_key_prefix}{location.lower()}"
+            data = {
+                "location": location,
+                "reason": reason,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            self.redis_client.setex(key, self.ttl_seconds, json.dumps(data))
+            logger.info(f"Marked location as invalid: {location} (reason: {reason})")
+        except Exception as e:
+            logger.error(f"Error marking location as invalid: {e}")
+    
+    def get_invalid_location_info(self, location: str) -> Optional[dict]:
+        """Get information about why a location was marked as invalid."""
+        if not self.redis_client:
+            return None
+        try:
+            key = f"{self.invalid_key_prefix}{location.lower()}"
+            data = self.redis_client.get(key)
+            if data:
+                return json.loads(data)
+        except Exception as e:
+            logger.error(f"Error getting invalid location info: {e}")
+        return None
+
+# Initialize invalid location cache
+invalid_location_cache = InvalidLocationCache(redis_client)
+
+def validate_location_response(data: dict, location: str) -> tuple[bool, str]:
+    """
+    Validate that the response contains meaningful data.
+    Returns (is_valid, error_message).
+    """
+    # Check if values array is empty
+    if not data.get("values") or len(data["values"]) == 0:
+        return False, f"No temperature data found for location '{location}'. The location may be invalid or not supported by the weather service."
+    
+    # Check if all temperature values are None or 0
+    values = data.get("values", [])
+    valid_temps = [v for v in values if v.get("temperature") is not None and v.get("temperature") != 0]
+    if not valid_temps:
+        return False, f"No valid temperature data found for location '{location}'. The location may be invalid or not supported by the weather service."
+    
+    # Check if data points count is 0
+    if data.get("average", {}).get("data_points", 0) == 0:
+        return False, f"No data points available for location '{location}'. The location may be invalid or not supported by the weather service."
+    
+    return True, ""
+
+def is_location_likely_invalid(location: str) -> bool:
+    """
+    Check if a location string looks obviously invalid.
+    This is a quick check before making API calls.
+    """
+    if not location or not isinstance(location, str):
+        return True
+    
+    # Check for common invalid patterns
+    invalid_patterns = [
+        "[object Object]",
+        "undefined",
+        "null",
+        "NaN",
+        "object Object",
+        "Object",
+        "[object",
+        "object]"
+    ]
+    
+    location_lower = location.lower().strip()
+    return any(pattern.lower() in location_lower for pattern in invalid_patterns)
+
 async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     """Get temperature series data for a location and date over multiple years."""
     # Check for cached series first
@@ -2831,6 +2926,22 @@ async def get_record(
 ):
     """Get temperature record data for a specific period, location, and identifier."""
     try:
+        # Quick validation for obviously invalid locations
+        if is_location_likely_invalid(location):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
+            )
+        
+        # Check if location is known to be invalid
+        if invalid_location_cache.is_invalid_location(location):
+            invalid_info = invalid_location_cache.get_invalid_location_info(location)
+            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
+            )
+        
         # Parse identifier to get the end date for cache headers
         month, day, _ = parse_identifier(period, identifier)
         current_year = datetime.now().year
@@ -2847,6 +2958,13 @@ async def get_record(
                     logger.debug(f"✅ SERVING CACHED V1 RECORD: {cache_key}")
                 data = json.loads(cached_data)
                 
+                # Validate cached data
+                is_valid, error_msg = validate_location_response(data, location)
+                if not is_valid:
+                    # Mark location as invalid and return error
+                    invalid_location_cache.mark_location_invalid(location, "no_data_cached")
+                    raise HTTPException(status_code=400, detail=error_msg)
+                
                 # Add updated timestamp for cached data
                 from cache_utils import get_cache_updated_timestamp
                 updated_timestamp = await get_cache_updated_timestamp(cache_key, redis_client)
@@ -2860,6 +2978,13 @@ async def get_record(
         
         # Get data
         data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Validate the response data
+        is_valid, error_msg = validate_location_response(data, location)
+        if not is_valid:
+            # Mark location as invalid for future requests
+            invalid_location_cache.mark_location_invalid(location, "no_data")
+            raise HTTPException(status_code=400, detail=error_msg)
         
         # Add updated timestamp for newly computed data
         current_time = datetime.now(timezone.utc)
@@ -2890,6 +3015,22 @@ async def get_record_average(
 ):
     """Get average temperature data for a specific record."""
     try:
+        # Quick validation for obviously invalid locations
+        if is_location_likely_invalid(location):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
+            )
+        
+        # Check if location is known to be invalid
+        if invalid_location_cache.is_invalid_location(location):
+            invalid_info = invalid_location_cache.get_invalid_location_info(location)
+            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
+            )
+        
         # Parse identifier to get the end date for cache headers
         month, day, _ = parse_identifier(period, identifier)
         current_year = datetime.now().year
@@ -2912,6 +3053,13 @@ async def get_record_average(
         
         # Get full record data
         record_data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Validate the response data
+        is_valid, error_msg = validate_location_response(record_data, location)
+        if not is_valid:
+            # Mark location as invalid for future requests
+            invalid_location_cache.mark_location_invalid(location, "no_data")
+            raise HTTPException(status_code=400, detail=error_msg)
         
         # Extract average data
         response_data = SubResourceResponse(
@@ -2947,6 +3095,22 @@ async def get_record_trend(
 ):
     """Get temperature trend data for a specific record."""
     try:
+        # Quick validation for obviously invalid locations
+        if is_location_likely_invalid(location):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
+            )
+        
+        # Check if location is known to be invalid
+        if invalid_location_cache.is_invalid_location(location):
+            invalid_info = invalid_location_cache.get_invalid_location_info(location)
+            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
+            )
+        
         # Parse identifier to get the end date for cache headers
         month, day, _ = parse_identifier(period, identifier)
         current_year = datetime.now().year
@@ -2969,6 +3133,13 @@ async def get_record_trend(
         
         # Get full record data
         record_data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Validate the response data
+        is_valid, error_msg = validate_location_response(record_data, location)
+        if not is_valid:
+            # Mark location as invalid for future requests
+            invalid_location_cache.mark_location_invalid(location, "no_data")
+            raise HTTPException(status_code=400, detail=error_msg)
         
         # Extract trend data
         response_data = SubResourceResponse(
@@ -3004,6 +3175,22 @@ async def get_record_summary(
 ):
     """Get temperature summary text for a specific record."""
     try:
+        # Quick validation for obviously invalid locations
+        if is_location_likely_invalid(location):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
+            )
+        
+        # Check if location is known to be invalid
+        if invalid_location_cache.is_invalid_location(location):
+            invalid_info = invalid_location_cache.get_invalid_location_info(location)
+            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
+            )
+        
         # Parse identifier to get the end date for cache headers
         month, day, _ = parse_identifier(period, identifier)
         current_year = datetime.now().year
@@ -3026,6 +3213,13 @@ async def get_record_summary(
         
         # Get full record data
         record_data = await get_temperature_data_v1(location, period, identifier)
+        
+        # Validate the response data
+        is_valid, error_msg = validate_location_response(record_data, location)
+        if not is_valid:
+            # Mark location as invalid for future requests
+            invalid_location_cache.mark_location_invalid(location, "no_data")
+            raise HTTPException(status_code=400, detail=error_msg)
         
         # Extract summary data
         response_data = SubResourceResponse(
