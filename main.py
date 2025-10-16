@@ -63,6 +63,8 @@ _temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {REDIS_URL}")
 
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+# Logging verbosity control - set to "minimal" to reduce Railway logging limits
+LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "normal", "verbose"
 TEST_TOKEN = os.getenv("TEST_TOKEN")
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
@@ -170,9 +172,16 @@ class AnalyticsResponse(BaseModel):
     analytics_id: str = Field(..., description="Unique analytics record ID")
     timestamp: str = Field(..., description="Submission timestamp")
 
-# Configure logging
+# Configure logging based on verbosity setting
+if LOG_VERBOSITY == "minimal":
+    log_level = logging.WARNING  # Only warnings and errors
+elif LOG_VERBOSITY == "verbose" or DEBUG:
+    log_level = logging.DEBUG
+else:
+    log_level = logging.INFO
+
 logging.basicConfig(
-    level=logging.DEBUG if DEBUG else logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Console output
@@ -364,15 +373,15 @@ if RATE_LIMIT_ENABLED:
     if DEBUG:
         logger.info(f"🛡️  RATE LIMITING INITIALIZED: {MAX_LOCATIONS_PER_HOUR} locations/hour, {MAX_REQUESTS_PER_HOUR} requests/hour, {RATE_LIMIT_WINDOW_HOURS}h window")
         if IP_WHITELIST:
-            logger.info(f"⭐ WHITELISTED IPS: {', '.join(IP_WHITELIST)}")
+            logger.debug(f"⭐ WHITELISTED IPS: {', '.join(IP_WHITELIST)}")
         if IP_BLACKLIST:
-            logger.info(f"🚫 BLACKLISTED IPS: {', '.join(IP_BLACKLIST)}")
+            logger.debug(f"🚫 BLACKLISTED IPS: {', '.join(IP_BLACKLIST)}")
     else:
-        logger.info(f"Rate limiting enabled: max {MAX_LOCATIONS_PER_HOUR} locations, max {MAX_REQUESTS_PER_HOUR} requests per {RATE_LIMIT_WINDOW_HOURS} hour(s)")
+        logger.debug(f"Rate limiting enabled: max {MAX_LOCATIONS_PER_HOUR} locations, max {MAX_REQUESTS_PER_HOUR} requests per {RATE_LIMIT_WINDOW_HOURS} hour(s)")
         if IP_WHITELIST:
-            logger.info(f"Whitelisted IPs: {len(IP_WHITELIST)} configured")
+            logger.debug(f"Whitelisted IPs: {len(IP_WHITELIST)} configured")
         if IP_BLACKLIST:
-            logger.info(f"Blacklisted IPs: {len(IP_BLACKLIST)} configured")
+            logger.debug(f"Blacklisted IPs: {len(IP_BLACKLIST)} configured")
 else:
     location_monitor = None
     request_monitor = None
@@ -496,7 +505,7 @@ class AnalyticsStorage:
             self._update_analytics_summary(analytics_record)
             
             if DEBUG:
-                logger.info(f"📊 ANALYTICS STORED: {analytics_id} | Errors: {analytics_data.error_count} | Duration: {analytics_data.session_duration}s")
+                logger.debug(f"📊 ANALYTICS STORED: {analytics_id} | Errors: {analytics_data.error_count} | Duration: {analytics_data.session_duration}s")
             
             return analytics_id
             
@@ -733,7 +742,7 @@ redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 # Background worker is now handled by a separate service (worker_service.py)
 # This provides better isolation, scaling, and eliminates event loop conflicts
-logger.info("ℹ️  Background worker runs as separate service - no in-process worker needed")
+    logger.debug("ℹ️  Background worker runs as separate service - no in-process worker needed")
 
 # Wire up Redis cache for rolling bundle
 daily_cache.redis = redis_client
@@ -742,7 +751,7 @@ daily_cache.redis = redis_client
 # Initialize analytics storage
 analytics_storage = AnalyticsStorage()
 if DEBUG:
-    logger.info("📊 ANALYTICS STORAGE INITIALIZED: 7 days retention, 50 errors per session limit")
+    logger.debug("📊 ANALYTICS STORAGE INITIALIZED: 7 days retention, 50 errors per session limit")
 
 # HTTP client configuration
 HTTP_TIMEOUT = 60.0  # Increased from 30s to 60s for better reliability
@@ -822,20 +831,22 @@ def verify_firebase_token(request: Request):
 
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
-    """Log all requests when DEBUG is enabled."""
-    if DEBUG:
+    """Log all requests when DEBUG is enabled or verbosity is verbose."""
+    if DEBUG or LOG_VERBOSITY == "verbose":
         start_time = time.time()
         client_ip = get_client_ip(request)
         
-        # Log request details
-        logger.info(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {request.headers.get('user-agent', 'Unknown')}")
+        # Log request details (only for non-public paths to reduce noise)
+        if not request.url.path in ["/", "/docs", "/openapi.json", "/redoc", "/health", "/rate-limit-status"]:
+            logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {request.headers.get('user-agent', 'Unknown')}")
         
         # Process request
         response = await call_next(request)
         
-        # Log response details
+        # Log response details (only for non-public paths to reduce noise)
         process_time = time.time() - start_time
-        logger.info(f"✅ RESPONSE: {response.status_code} | {request.method} {request.url.path} | {process_time:.3f}s | IP: {client_ip}")
+        if not request.url.path in ["/", "/docs", "/openapi.json", "/redoc", "/health", "/rate-limit-status"]:
+            logger.debug(f"✅ RESPONSE: {response.status_code} | {request.method} {request.url.path} | {process_time:.3f}s | IP: {client_ip}")
         
         return response
     else:
@@ -888,16 +899,19 @@ async def request_size_middleware(request: Request, call_next):
 @app.middleware("http")
 async def verify_token_middleware(request: Request, call_next):
     """Middleware to verify Firebase tokens and apply rate limiting for protected routes."""
-    logger.info(f"[DEBUG] Middleware: Processing {request.method} request to {request.url.path}")
+    if DEBUG:
+        logger.debug(f"[DEBUG] Middleware: Processing {request.method} request to {request.url.path}")
     
     # Allow OPTIONS requests for CORS preflight
     if request.method == "OPTIONS":
-        logger.info(f"[DEBUG] Middleware: OPTIONS request, allowing through")
+        if DEBUG:
+            logger.debug(f"[DEBUG] Middleware: OPTIONS request, allowing through")
         return await call_next(request)
 
     # Get client IP for security checks
     client_ip = get_client_ip(request)
-    logger.info(f"[DEBUG] Middleware: Client IP: {client_ip}")
+    if DEBUG:
+        logger.debug(f"[DEBUG] Middleware: Client IP: {client_ip}")
 
     # Check if IP is blacklisted (block entirely, except for health checks and analytics)
     if is_ip_blacklisted(client_ip) and request.url.path not in ["/health"] and not request.url.path.startswith("/analytics"):
@@ -914,7 +928,8 @@ async def verify_token_middleware(request: Request, call_next):
     # Public paths that don't require a token or rate limiting
     public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors", "/v1/jobs/diagnostics/worker-status"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
-        logger.info(f"[DEBUG] Middleware: Public path, allowing through")
+        if DEBUG:
+            logger.debug(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
 
     # Check if this is a service job using API_ACCESS_TOKEN (bypass rate limiting)
@@ -994,11 +1009,13 @@ async def verify_token_middleware(request: Request, call_next):
                 get_usage_tracker().track_location_request(location, endpoint)
 
 
-    logger.info(f"[DEBUG] Middleware: Protected path, checking Firebase token...")
+    if DEBUG:
+        logger.debug(f"[DEBUG] Middleware: Protected path, checking Firebase token...")
     # All other paths require a Firebase token
     # Note: auth_header was already extracted earlier for service job detection
     if not auth_header or not auth_header.startswith("Bearer "):
-        logger.info(f"[DEBUG] Middleware: No valid Authorization header")
+        if DEBUG:
+            logger.debug(f"[DEBUG] Middleware: No valid Authorization header")
         return JSONResponse(
             status_code=401,
             content={"detail": "Missing or invalid Authorization header."}
@@ -1008,12 +1025,14 @@ async def verify_token_middleware(request: Request, call_next):
     
     # Special bypass for testing
     if id_token == TEST_TOKEN:
-        logger.info(f"[DEBUG] Middleware: Using test token bypass")
+        if DEBUG:
+            logger.debug(f"[DEBUG] Middleware: Using test token bypass")
         request.state.user = {"uid": "testuser"}
     # Production token bypass for automated systems (cron jobs, etc.)
     elif is_service_job:
         # Already verified this is API_ACCESS_TOKEN during rate limiting check
-        logger.info(f"[DEBUG] Middleware: Using production token bypass")
+        if DEBUG:
+            logger.debug(f"[DEBUG] Middleware: Using production token bypass")
         request.state.user = {"uid": "admin", "system": True, "source": "production_token"}
     else:
         logger.info(f"[DEBUG] Middleware: Verifying Firebase token...")
