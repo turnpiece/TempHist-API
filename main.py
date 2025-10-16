@@ -1788,15 +1788,29 @@ async def detailed_health_check():
     try:
         set_cache_value("health_check", timedelta(minutes=1), "test_value", redis_client)
         test_value = get_cache_value("health_check", redis_client, "health", "test", get_cache_stats())
-        if test_value and test_value.decode('utf-8') == "test_value":
-            health_status["services"]["redis"] = {
-                "status": "healthy",
-                "message": "Connection successful"
-            }
+        
+        # Handle both string and bytes responses (depending on Redis client configuration)
+        if test_value:
+            if isinstance(test_value, bytes):
+                test_value_str = test_value.decode('utf-8')
+            else:
+                test_value_str = str(test_value)
+            
+            if test_value_str == "test_value":
+                health_status["services"]["redis"] = {
+                    "status": "healthy",
+                    "message": "Connection successful"
+                }
+            else:
+                health_status["services"]["redis"] = {
+                    "status": "unhealthy",
+                    "message": f"Cache test failed - expected 'test_value', got '{test_value_str}'"
+                }
+                overall_healthy = False
         else:
             health_status["services"]["redis"] = {
                 "status": "unhealthy",
-                "message": "Cache test failed"
+                "message": "Cache test failed - no value returned"
             }
             overall_healthy = False
     except Exception as e:
