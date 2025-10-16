@@ -47,7 +47,7 @@ from cache_utils import (
     USAGE_TRACKING_ENABLED, USAGE_RETENTION_DAYS, DEFAULT_POPULAR_LOCATIONS,
     # Global instances
     get_usage_tracker, get_cache_warmer, get_cache_stats, get_cache_invalidator,
-    scheduled_cache_warming, scheduled_cache_warming_job
+    scheduled_cache_warming
 )
 from version import __version__
 
@@ -646,13 +646,24 @@ async def lifespan(app: FastAPI):
         await asyncio.sleep(2)
         
         if DEBUG:
-            logger.info("🚀 STARTUP CACHE WARMING: Triggering initial warming cycle")
+            logger.info("🚀 STARTUP CACHE WARMING: Creating initial warming job")
         
-        # Run initial warming in background
-        asyncio.create_task(get_cache_warmer().warm_all_locations())
+        # Create initial warming job instead of running directly
+        from cache_utils import get_job_manager
+        job_manager = get_job_manager()
+        if job_manager:
+            job_id = job_manager.create_job("cache_warming", {
+                "type": "all",
+                "locations": [],
+                "triggered_by": "startup",
+                "triggered_at": datetime.now(timezone.utc).isoformat()
+            })
+            logger.info(f"✅ Startup cache warming job created: {job_id}")
+        else:
+            logger.warning("⚠️  Job manager not available, skipping startup warming")
         
         # Start scheduled warming background task (job-based)
-        asyncio.create_task(scheduled_cache_warming_job(get_cache_warmer()))
+        asyncio.create_task(scheduled_cache_warming(get_cache_warmer()))
         if DEBUG:
             logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
     
@@ -1968,19 +1979,30 @@ async def get_location_usage_stats(location: str):
 
 @app.post("/cache-warm")
 async def trigger_cache_warming():
-    """Trigger manual cache warming for all popular locations."""
+    """Trigger manual cache warming for all popular locations (legacy endpoint - now uses job system)."""
     if not CACHE_WARMING_ENABLED or not get_cache_warmer():
         return {"status": "disabled", "message": "Cache warming is not enabled"}
     
-    if get_cache_warmer().warming_in_progress:
-        return {"status": "already_in_progress", "message": "Cache warming is already in progress"}
+    # Import job manager
+    from cache_utils import get_job_manager
+    job_manager = get_job_manager()
     
-    # Run warming in background
-    asyncio.create_task(get_cache_warmer().warm_all_locations())
+    if not job_manager:
+        return {"status": "error", "message": "Job manager not available"}
+    
+    # Create cache warming job
+    job_id = job_manager.create_job("cache_warming", {
+        "type": "all",
+        "locations": [],
+        "triggered_by": "legacy_api",
+        "triggered_at": datetime.now(timezone.utc).isoformat()
+    })
     
     return {
-        "status": "started",
-        "message": "Cache warming started in background",
+        "status": "job_created",
+        "message": "Cache warming job created successfully (legacy endpoint)",
+        "job_id": job_id,
+        "job_status_url": f"/cache-warm/job/{job_id}",
         "locations_to_warm": get_cache_warmer().get_locations_to_warm()
     }
 
@@ -2006,19 +2028,30 @@ async def get_locations_to_warm():
 
 @app.post("/cache-warm/startup")
 async def trigger_startup_warming():
-    """Trigger cache warming on startup (useful for deployment)."""
+    """Trigger cache warming on startup (useful for deployment) - now uses job system."""
     if not CACHE_WARMING_ENABLED or not get_cache_warmer():
         return {"status": "disabled", "message": "Cache warming is not enabled"}
     
-    if get_cache_warmer().warming_in_progress:
-        return {"status": "already_in_progress", "message": "Cache warming is already in progress"}
+    # Import job manager
+    from cache_utils import get_job_manager
+    job_manager = get_job_manager()
     
-    # Run warming in background
-    asyncio.create_task(get_cache_warmer().warm_all_locations())
+    if not job_manager:
+        return {"status": "error", "message": "Job manager not available"}
+    
+    # Create cache warming job
+    job_id = job_manager.create_job("cache_warming", {
+        "type": "all",
+        "locations": [],
+        "triggered_by": "startup_api",
+        "triggered_at": datetime.now(timezone.utc).isoformat()
+    })
     
     return {
-        "status": "started",
-        "message": "Startup cache warming started in background",
+        "status": "job_created",
+        "message": "Startup cache warming job created successfully",
+        "job_id": job_id,
+        "job_status_url": f"/cache-warm/job/{job_id}",
         "locations_to_warm": get_cache_warmer().get_locations_to_warm()
     }
 

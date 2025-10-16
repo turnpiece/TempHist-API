@@ -1596,7 +1596,7 @@ async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis)
         logger.warning(f"Error getting cache timestamp for {cache_key}: {e}")
         return None
 
-async def scheduled_cache_warming_job(cache_warmer: CacheWarmer):
+async def scheduled_cache_warming(cache_warmer: CacheWarmer):
     """Background task that schedules cache warming jobs on a schedule."""
     if not CACHE_WARMING_ENABLED or not cache_warmer:
         return
@@ -1638,32 +1638,6 @@ async def scheduled_cache_warming_job(cache_warmer: CacheWarmer):
             # Continue the loop even if there's an error
             await asyncio.sleep(300)  # Wait 5 minutes before retrying
 
-async def scheduled_cache_warming(cache_warmer: CacheWarmer):
-    """Legacy background task that runs cache warming on a schedule."""
-    if not CACHE_WARMING_ENABLED or not cache_warmer:
-        return
-    
-    while True:
-        try:
-            # Wait for the specified interval
-            await asyncio.sleep(CACHE_WARMING_INTERVAL_HOURS * 3600)
-            
-            # Check if warming is already in progress
-            if not cache_warmer.warming_in_progress:
-                if DEBUG:
-                    logger.info("🕐 SCHEDULED CACHE WARMING: Starting automatic warming cycle")
-                
-                # Run warming in background
-                asyncio.create_task(cache_warmer.warm_all_locations())
-            else:
-                if DEBUG:
-                    logger.info("⏭️  SCHEDULED CACHE WARMING: Skipping - warming already in progress")
-        
-        except Exception as e:
-            if DEBUG:
-                logger.error(f"❌ SCHEDULED CACHE WARMING ERROR: {str(e)}")
-            # Continue the loop even if there's an error
-            await asyncio.sleep(300)  # Wait 5 minutes before retrying
 
 # Global cache instances (will be initialized in main.py)
 enhanced_cache: Optional[EnhancedCache] = None
