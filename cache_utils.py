@@ -61,8 +61,10 @@ USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == 
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
 
 # Default popular locations for cache warming (from environment variable)
+# These should be simple location names that will be expanded to multiple formats
 DEFAULT_POPULAR_LOCATIONS = os.getenv("CACHE_WARMING_POPULAR_LOCATIONS", "london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin").split(",")
 DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCATIONS if loc.strip()]
+
 
 # Environment variables for cache warming
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -541,28 +543,41 @@ class CacheWarmer:
         }
     
     def get_locations_to_warm(self) -> List[str]:
-        """Get list of locations to warm using hybrid approach."""
+        """Get list of locations to warm, prioritizing preapproved locations."""
         locations = set()
         
-        # Always include default popular locations
-        locations.update(DEFAULT_POPULAR_LOCATIONS)
-        
-        # Add preapproved locations (if available)
+        # Priority 1: Preapproved locations in web app format
         preapproved_locations = self.get_preapproved_locations()
         if preapproved_locations:
             locations.update(preapproved_locations)
+            if DEBUG:
+                logger.info(f"🔥 CACHE WARMING: Added {len(preapproved_locations)} preapproved locations")
         
-        # Add recently popular locations from usage tracking
+        # Priority 2: Environment variable locations (simple format)
+        if DEFAULT_POPULAR_LOCATIONS:
+            locations.update(DEFAULT_POPULAR_LOCATIONS)
+            if DEBUG:
+                logger.info(f"🔥 CACHE WARMING: Added {len(DEFAULT_POPULAR_LOCATIONS)} environment variable locations")
+        
+        # Priority 3: Recently popular locations from usage tracking
         if self.usage_tracker and USAGE_TRACKING_ENABLED:
             recent_popular = self.usage_tracker.get_popular_locations(limit=10, hours=24)
             for location, count in recent_popular:
                 locations.add(location)
+            if DEBUG and recent_popular:
+                logger.info(f"🔥 CACHE WARMING: Added {len(recent_popular)} usage-based locations")
         
         # Limit to max locations
-        return list(locations)[:CACHE_WARMING_MAX_LOCATIONS]
+        final_locations = list(locations)[:CACHE_WARMING_MAX_LOCATIONS]
+        
+        if DEBUG:
+            logger.info(f"🔥 CACHE WARMING: Total locations to warm: {len(final_locations)}")
+            logger.info(f"🔥 SAMPLE LOCATIONS: {final_locations[:5]}...")
+        
+        return final_locations
     
     def get_preapproved_locations(self) -> List[str]:
-        """Get preapproved locations from the data file."""
+        """Get preapproved locations in the exact format the web app requests them."""
         try:
             import os
             import json
@@ -573,16 +588,16 @@ class CacheWarmer:
             with open(data_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # Extract location slugs (used as identifiers)
+            # Extract locations in the format: "Name, Admin1, Country Name"
             locations = []
             for item in data:
-                if 'slug' in item and item['slug']:
-                    locations.append(item['slug'].lower())
-                elif 'id' in item and item['id']:
-                    locations.append(item['id'].lower())
+                if 'name' in item and 'admin1' in item and 'country_name' in item:
+                    full_name = f"{item['name']}, {item['admin1']}, {item['country_name']}"
+                    locations.append(full_name.lower())
             
             if DEBUG:
-                logger.info(f"📋 PREAPPROVED LOCATIONS: Loaded {len(locations)} locations from data file")
+                logger.info(f"📋 PREAPPROVED LOCATIONS: Loaded {len(locations)} locations in web app format")
+                logger.info(f"📋 SAMPLE LOCATIONS: {locations[:3]}...")
             
             return locations
             
@@ -1538,9 +1553,21 @@ def set_cache_value(cache_key, lifetime, value, redis_client: redis.Redis):
         logger.debug(f"💾 CACHE SET: {cache_key} | TTL: {lifetime}")
     redis_client.setex(cache_key, lifetime, value)
 
+def normalize_location_for_cache(location: str) -> str:
+    """Normalize location string for consistent cache keys.
+    
+    Args:
+        location: Location name (e.g., "London, England, United Kingdom")
+        
+    Returns:
+        str: Normalized location (e.g., "london_england_united_kingdom")
+    """
+    return location.lower().replace(" ", "_").replace(",", "_")
+
 def get_weather_cache_key(location: str, date_str: str) -> str:
     """Generate cache key for weather data."""
-    return f"{location.lower()}_{date_str}"
+    normalized_location = normalize_location_for_cache(location)
+    return f"{normalized_location}_{date_str}"
 
 def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
     """Generate standardized cache keys.
@@ -1553,8 +1580,8 @@ def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
     Returns:
         str: Standardized cache key in format: {prefix}_{location}_{date_part}
     """
-    # Normalize location to lowercase
-    location = location.lower()
+    # Normalize location using centralized function
+    location = normalize_location_for_cache(location)
     
     if date_part:
         # Normalize date part by replacing hyphens with underscores

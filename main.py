@@ -3049,7 +3049,9 @@ async def get_record(
         end_date = datetime(current_year, month, day).date()
         
         # Create cache key for v1 endpoint with comprehensive format
-        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:values,average,trend,summary"
+        from cache_utils import normalize_location_for_cache
+        normalized_location = normalize_location_for_cache(location)
+        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
         
         # Check cache first
         if CACHE_ENABLED:
@@ -3138,7 +3140,9 @@ async def get_record_average(
         end_date = datetime(current_year, month, day).date()
         
         # Create cache key for subresource
-        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:average"
+        from cache_utils import normalize_location_for_cache
+        normalized_location = normalize_location_for_cache(location)
+        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:average"
         
         # Check cache first
         if CACHE_ENABLED:
@@ -3218,7 +3222,9 @@ async def get_record_trend(
         end_date = datetime(current_year, month, day).date()
         
         # Create cache key for subresource
-        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:trend"
+        from cache_utils import normalize_location_for_cache
+        normalized_location = normalize_location_for_cache(location)
+        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:trend"
         
         # Check cache first
         if CACHE_ENABLED:
@@ -3298,7 +3304,9 @@ async def get_record_summary(
         end_date = datetime(current_year, month, day).date()
         
         # Create cache key for subresource
-        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:summary"
+        from cache_utils import normalize_location_for_cache
+        normalized_location = normalize_location_for_cache(location)
+        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:summary"
         
         # Check cache first
         if CACHE_ENABLED:
@@ -3361,7 +3369,9 @@ async def get_record_updated(
     """
     try:
         # Create the same cache key that would be used by the main endpoint
-        cache_key = f"records:{period}:{location.lower()}:{identifier}:celsius:v1:values,average,trend,summary"
+        from cache_utils import normalize_location_for_cache
+        normalized_location = normalize_location_for_cache(location)
+        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
         
         # Import the cache timestamp function
         from cache_utils import get_cache_updated_timestamp
