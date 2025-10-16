@@ -1609,7 +1609,13 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             else:
                 period_capitalized = period_context.capitalize()
             avg_summary = "However, " if cold_summary else ""
-            avg_summary += f"{period_capitalized} {tense_context} {rounded_diff}°C warmer than average."
+            # Don't capitalize the period context when it follows "However, "
+            if cold_summary:  # Use the same condition as above
+                # Force lowercase for period context when following "However, "
+                period_lower = period_context.lower()
+                avg_summary += f"{period_lower} {tense_context} {rounded_diff}°C warmer than average."
+            else:
+                avg_summary += f"{period_capitalized} {tense_context} {rounded_diff}°C warmer than average."
     else:
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
@@ -1622,7 +1628,13 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             else:
                 period_capitalized = period_context.capitalize()
             avg_summary = "However, " if warm_summary else ""
-            avg_summary += f"{period_capitalized} {tense_context} {abs(rounded_diff)}°C cooler than average."
+            # Don't capitalize the period context when it follows "However, "
+            if warm_summary:  # Use the same condition as above
+                # Force lowercase for period context when following "However, "
+                period_lower = period_context.lower()
+                avg_summary += f"{period_lower} {tense_context} {abs(rounded_diff)}°C cooler than average."
+            else:
+                avg_summary += f"{period_capitalized} {tense_context} {abs(rounded_diff)}°C cooler than average."
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
