@@ -1154,14 +1154,176 @@ grep "RATE" temphist.log
 3. Set environment variables
 4. Deploy!
 
-**Key environment variables:**
+## 📋 Environment Variables
+
+### Hosting Requirements
+
+**Minimum Requirements:**
+
+- **Python 3.8+** runtime environment
+- **Redis database** (version 6.0+ recommended)
+- **Memory**: 512MB RAM minimum, 1GB+ recommended
+- **Storage**: 100MB+ for application and cache data
+- **Network**: Outbound HTTPS access to weather APIs
+
+**Supported Platforms:**
+
+- Railway, Render, Heroku, DigitalOcean App Platform
+- AWS Elastic Beanstalk, Google Cloud Run, Azure Container Instances
+- VPS/Cloud servers (Ubuntu 20.04+, CentOS 8+)
+- Docker containers
+
+### Environment Variables
+
+#### 🔑 **Required Variables**
+
+**API Keys (Required for main service):**
 
 ```bash
-VISUAL_CROSSING_API_KEY=your_key
-OPENWEATHER_API_KEY=your_key
-API_ACCESS_TOKEN=your_token
-REDIS_URL=${{Redis.REDIS_URL}}  # Auto-provided by Railway
-FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}  # Optional
+VISUAL_CROSSING_API_KEY=your_visual_crossing_key    # Primary weather data source
+OPENWEATHER_API_KEY=your_openweather_key            # Backup weather data source
+```
+
+**Database (Required):**
+
+```bash
+REDIS_URL=redis://localhost:6379                    # Redis connection string
+# Examples:
+# redis://username:password@host:port/db
+# rediss://username:password@host:port/db  (SSL)
+# redis://default:password@redis.internal:6379  (Railway)
+```
+
+#### 🔧 **Main API Service Variables**
+
+**Core Configuration:**
+
+```bash
+# Server settings
+PORT=8000                                           # Server port (default: 8000)
+BASE_URL=https://your-api-domain.com               # Public API URL for job callbacks
+
+# Caching
+CACHE_ENABLED=true                                  # Enable/disable caching (default: true)
+
+# Logging & Debug
+DEBUG=false                                         # Enable debug logging (default: false)
+LOG_VERBOSITY=normal                               # minimal|normal|verbose (default: normal)
+```
+
+**Rate Limiting & Security:**
+
+```bash
+# Rate limiting
+RATE_LIMIT_ENABLED=true                            # Enable rate limiting (default: true)
+MAX_LOCATIONS_PER_HOUR=10                          # Max unique locations per IP/hour (default: 10)
+MAX_REQUESTS_PER_HOUR=100                          # Max requests per IP/hour (default: 100)
+RATE_LIMIT_WINDOW_HOURS=1                          # Rate limit window in hours (default: 1)
+
+# IP filtering (comma-separated lists)
+IP_WHITELIST=192.168.1.100,10.0.0.5               # Bypass rate limits (optional)
+IP_BLACKLIST=192.168.1.200,10.0.0.99              # Block specific IPs (optional)
+
+# API access
+API_ACCESS_TOKEN=your_secure_token                 # Token for automated access (optional)
+TEST_TOKEN=your_test_token                         # Token for testing endpoints (optional)
+```
+
+**Data Processing:**
+
+```bash
+FILTER_WEATHER_DATA=true                           # Filter invalid weather data (default: true)
+UNIT_GROUP=celsius                                 # Default temperature unit (default: celsius)
+```
+
+**Firebase Integration (Optional):**
+
+```bash
+FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}  # Firebase service account JSON
+# OR
+FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}  # Alternative variable name
+```
+
+#### ⚙️ **Job Worker Service Variables**
+
+**Worker Configuration:**
+
+```bash
+# All main API variables above, plus:
+DEBUG=false                                         # Worker debug logging
+BASE_URL=https://your-api-domain.com               # API URL for job callbacks
+```
+
+**Note:** The job worker service uses the same environment variables as the main API service, as it needs access to the same Redis instance and API keys.
+
+#### 🗄️ **Cache Management Variables**
+
+**Cache Warming:**
+
+```bash
+CACHE_WARMING_ENABLED=true                         # Enable automatic cache warming (default: true)
+CACHE_WARMING_INTERVAL_HOURS=4                     # Hours between warming cycles (default: 4)
+CACHE_WARMING_DAYS_BACK=7                          # Days of data to warm (default: 7)
+CACHE_WARMING_CONCURRENT_REQUESTS=3                # Concurrent warming requests (default: 3)
+CACHE_WARMING_MAX_LOCATIONS=15                     # Max locations to warm (default: 15)
+CACHE_WARMING_POPULAR_LOCATIONS=london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin
+```
+
+**Cache Statistics:**
+
+```bash
+CACHE_STATS_ENABLED=true                           # Enable cache statistics (default: true)
+CACHE_STATS_RETENTION_HOURS=24                     # Hours to retain stats (default: 24)
+CACHE_HEALTH_THRESHOLD=0.7                         # Hit rate threshold for health (default: 0.7)
+```
+
+**Cache Invalidation:**
+
+```bash
+CACHE_INVALIDATION_ENABLED=true                    # Enable cache invalidation (default: true)
+CACHE_INVALIDATION_DRY_RUN=false                  # Test invalidation without executing (default: false)
+CACHE_INVALIDATION_BATCH_SIZE=100                 # Batch size for invalidation (default: 100)
+```
+
+**Usage Tracking:**
+
+```bash
+USAGE_TRACKING_ENABLED=true                        # Enable usage tracking (default: true)
+USAGE_RETENTION_DAYS=7                             # Days to retain usage data (default: 7)
+```
+
+### Platform-Specific Examples
+
+**Railway:**
+
+```bash
+REDIS_URL=redis://default:password@redis.internal:6379
+```
+
+**Render:**
+
+```bash
+REDIS_URL=redis://username:password@host:port
+```
+
+**Heroku:**
+
+```bash
+REDIS_URL=redis://username:password@host:port
+```
+
+**Docker:**
+
+```bash
+REDIS_URL=redis://redis:6379
+```
+
+**Local Development:**
+
+```bash
+REDIS_URL=redis://localhost:6379
+DEBUG=true
+LOG_VERBOSITY=verbose
 ```
 
 ### Health Checks

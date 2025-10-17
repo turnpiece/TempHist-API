@@ -33,21 +33,18 @@ from routers.locations_preapproved import router as locations_preapproved_router
 
 # Import enhanced caching utilities
 from cache_utils import (
-    initialize_cache, get_cache as get_enhanced_cache, get_job_manager,
-    CACHE_CONTROL_PUBLIC, JobStatus,
-    # Cache management classes
-    LocationUsageTracker, CacheWarmer, CacheStats, CacheInvalidator,
     # Cache utility functions
     get_cache_value, set_cache_value, get_weather_cache_key, generate_cache_key,
-    # Cache configuration
-    CACHE_WARMING_ENABLED, CACHE_WARMING_INTERVAL_HOURS, CACHE_WARMING_DAYS_BACK,
-    CACHE_WARMING_CONCURRENT_REQUESTS, CACHE_WARMING_MAX_LOCATIONS,
-    CACHE_STATS_ENABLED, CACHE_STATS_RETENTION_HOURS, CACHE_HEALTH_THRESHOLD,
-    CACHE_INVALIDATION_ENABLED, CACHE_INVALIDATION_DRY_RUN, CACHE_INVALIDATION_BATCH_SIZE,
-    USAGE_TRACKING_ENABLED, USAGE_RETENTION_DAYS, DEFAULT_POPULAR_LOCATIONS,
     # Global instances
-    get_usage_tracker, get_cache_warmer, get_cache_stats, get_cache_invalidator,
-    scheduled_cache_warming
+    get_cache_stats, get_usage_tracker, get_cache_warmer, get_cache_invalidator,
+    # Cache configuration
+    CACHE_WARMING_ENABLED, CACHE_WARMING_INTERVAL_HOURS, CACHE_STATS_ENABLED, CACHE_INVALIDATION_ENABLED,
+    # Job management
+    get_job_manager, JobStatus,
+    # Cache warming
+    scheduled_cache_warming,
+    # Cache initialization
+    initialize_cache
 )
 from version import __version__
 
