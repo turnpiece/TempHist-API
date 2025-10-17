@@ -2469,6 +2469,27 @@ def is_location_likely_invalid(location: str) -> bool:
     location_lower = location.lower().strip()
     return any(pattern.lower() in location_lower for pattern in invalid_patterns)
 
+def get_year_range(current_year: int, years_back: int = 50) -> List[int]:
+    """Get a list of years for historical data analysis."""
+    return list(range(current_year - years_back, current_year + 1))
+
+def create_metadata(total_years: int, available_years: int, missing_years: List[Dict], 
+                   additional_metadata: Dict = None) -> Dict:
+    """Create standardized metadata for temperature data responses."""
+    metadata = {
+        "total_years": total_years,
+        "available_years": available_years,
+        "missing_years": missing_years,
+        "completeness": round(available_years / total_years * 100, 1) if total_years > 0 else 0.0
+    }
+    if additional_metadata:
+        metadata.update(additional_metadata)
+    return metadata
+
+def track_missing_year(missing_years: List[Dict], year: int, reason: str):
+    """Add a missing year entry to the missing_years list."""
+    missing_years.append({"year": year, "reason": reason})
+
 async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     """Get temperature series data for a location and date over multiple years."""
     # Check for cached series first
@@ -2486,7 +2507,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     logger.debug(f"get_temperature_series for {location} on {day}/{month}")
     today = datetime.now()
     current_year = today.year
-    years = list(range(current_year - 50, current_year + 1))
+    years = get_year_range(current_year)
 
     data = []
     missing_years = []
@@ -2506,13 +2527,13 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                 logger.debug(f"Got forecast data {forecast_data}")
                 if "error" in forecast_data:
                     logger.warning(f"Forecast error: {forecast_data['error']}")
-                    missing_years.append({"year": year, "reason": "forecast_error"})
+                    track_missing_year(missing_years, year, "forecast_error")
                 else:
                     data.append({"x": year, "y": forecast_data["average_temperature"]})
                 continue
             except Exception as e:
                 logger.error(f"Error fetching forecast: {str(e)}")
-                missing_years.append({"year": year, "reason": "forecast_failed"})
+                track_missing_year(missing_years, year, "forecast_failed")
                 continue
         # Use historical data for all other dates
         if CACHE_ENABLED:
@@ -2532,10 +2553,10 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                             set_cache_value(cache_key, cache_duration, json.dumps(weather), redis_client)
                     else:
                         logger.debug(f"Temperature is None for {year}, marking as missing.")
-                        missing_years.append({"year": year, "reason": "no_temperature_data"})
+                        track_missing_year(missing_years, year, "no_temperature_data")
                 except (KeyError, IndexError, TypeError) as e:
                     logger.error(f"Error processing cached data for {date_str}: {str(e)}")
-                    missing_years.append({"year": year, "reason": "data_processing_error"})
+                    track_missing_year(missing_years, year, "data_processing_error")
                 continue
             else:
                 uncached_years.append(year)
@@ -2563,12 +2584,12 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
                             set_cache_value(cache_key, cache_duration, json.dumps(weather), redis_client)
                     else:
                         logger.debug(f"Temperature is None for {year}, marking as missing.")
-                        missing_years.append({"year": year, "reason": "no_temperature_data"})
+                        track_missing_year(missing_years, year, "no_temperature_data")
                 except (KeyError, IndexError, TypeError) as e:
                     logger.error(f"Error processing batch data for {date_str}: {str(e)}")
-                    missing_years.append({"year": year, "reason": "data_processing_error"})
+                    track_missing_year(missing_years, year, "data_processing_error")
             else:
-                missing_years.append({"year": year, "reason": weather.get("error", "api_error") if weather else "api_error"})
+                track_missing_year(missing_years, year, weather.get("error", "api_error") if weather else "api_error")
 
     # Print summary of collected data
     logger.debug("Data summary:")
@@ -2584,12 +2605,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
         logger.warning(f"No valid temperature data found for {location} on {month}-{day}")
         return {
             "data": [],
-            "metadata": {
-                "total_years": len(years),
-                "available_years": 0,
-                "missing_years": years,
-                "completeness": 0.0
-            },
+            "metadata": create_metadata(len(years), 0, [{"year": y, "reason": "no_data"} for y in years]),
             "error": f"Invalid location: {location}"
         }
 
@@ -2597,22 +2613,12 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
     if CACHE_ENABLED:
         set_cache_value(series_cache_key, SHORT_CACHE_DURATION, json.dumps({
             "data": data_list,
-            "metadata": {
-                "total_years": len(years),
-                "available_years": len(data),
-                "missing_years": missing_years,
-                "completeness": round(len(data) / len(years) * 100, 1) if years else 0
-            }
+            "metadata": create_metadata(len(years), len(data), missing_years)
         }), redis_client)
 
     return {
         "data": data_list,
-        "metadata": {
-            "total_years": len(years),
-            "available_years": len(data),
-            "missing_years": missing_years,
-            "completeness": round(len(data) / len(years) * 100, 1) if years else 0
-        }
+        "metadata": create_metadata(len(years), len(data), missing_years)
     }
 
 async def get_forecast_data(location: str, date) -> Dict:
@@ -2745,6 +2751,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
     # Use 50 years of data ending at current year (consistent with other endpoints)
     current_year = datetime.now().year
     start_year = current_year - 50  # 50 years back + current year = 51 years total
+    years = get_year_range(current_year)
     end_date = datetime(current_year, month, day)
     
     if period == "daily":
@@ -2769,11 +2776,16 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
     # Get temperature data for the date range across all years
     values = []
     all_temps = []
+    missing_years = []
     
     if period == "daily":
         # For daily, get data for just the specific day across all years
         weather_data = await get_temperature_series(location, month, day)
         if weather_data and 'data' in weather_data:
+            # Extract missing years from the series metadata
+            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
+                missing_years.extend(weather_data['metadata']['missing_years'])
+            
             for data_point in weather_data['data']:
                 year = int(data_point['x'])
                 temp = data_point['y']
@@ -2879,6 +2891,13 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     try:
                         weather_data = await get_temperature_series(location, current_date.month, current_date.day)
                         if weather_data and 'data' in weather_data:
+                            # Extract missing years from the series metadata
+                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
+                                for missing_year_info in weather_data['metadata']['missing_years']:
+                                    if missing_year_info['year'] == year:
+                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_sampling")
+                                        break
+                            
                             for data_point in weather_data['data']:
                                 if int(data_point['x']) == year and data_point['y'] is not None:
                                     year_temps.append(data_point['y'])
@@ -2886,6 +2905,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     except Exception as e:
                         if DEBUG:
                             logger.debug(f"Error getting data for {current_date}: {e}")
+                        track_missing_year(missing_years, year, "sampling_error")
                         continue
                 
                 # Calculate average for the year (only add one value per year)
@@ -2897,6 +2917,8 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                         year=year,
                         temperature=round(avg_temp, 1),
                     ))
+                else:
+                    track_missing_year(missing_years, year, "no_data_sampling")
     
     elif period == "yearly":
         # For yearly, use the Visual Crossing historysummary endpoint for efficiency
@@ -2934,6 +2956,13 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     try:
                         weather_data = await get_temperature_series(location, sample_month, sample_day)
                         if weather_data and 'data' in weather_data:
+                            # Extract missing years from the series metadata
+                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
+                                for missing_year_info in weather_data['metadata']['missing_years']:
+                                    if missing_year_info['year'] == year:
+                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_yearly_sampling")
+                                        break
+                            
                             for data_point in weather_data['data']:
                                 if int(data_point['x']) == year and data_point['y'] is not None:
                                     temp = data_point['y']
@@ -2943,6 +2972,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     except Exception as e:
                         if DEBUG:
                             logger.debug(f"Error getting data for {year}-{sample_month:02d}-{sample_day:02d}: {e}")
+                        track_missing_year(missing_years, year, "yearly_sampling_error")
                         continue
                 
                 # Calculate average for the year
@@ -2953,6 +2983,8 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                         year=year,
                         temperature=round(avg_temp, 1),
                     ))
+                else:
+                    track_missing_year(missing_years, year, "no_data_yearly_sampling")
     
     # Calculate date range
     if values:
@@ -3019,6 +3051,12 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
     # Replace the friendly date in the summary with our period-specific version
     summary_text = summary_text.replace(get_friendly_date(end_date), friendly_date)
     
+    # Create comprehensive metadata
+    additional_metadata = {
+        "period_days": date_range_days, 
+        "end_date": end_date.strftime("%Y-%m-%d")
+    }
+    
     return {
         "period": period,
         "location": location,
@@ -3029,7 +3067,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
         "average": avg_data.model_dump(),
         "trend": trend_data.model_dump(),
         "summary": summary_text,
-        "metadata": {"period_days": date_range_days, "end_date": end_date.strftime("%Y-%m-%d")}
+        "metadata": create_metadata(len(years), len(values), missing_years, additional_metadata)
     }
 
 @app.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
