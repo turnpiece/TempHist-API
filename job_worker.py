@@ -61,6 +61,31 @@ class JobWorker:
         self.running = False
         logger.info("📴 Job worker stop requested")
     
+    def _store_cache_data(self, cache_key: str, data: dict, data_type: str = "data") -> str:
+        """Helper function to store data in cache and generate ETag."""
+        from cache_utils import set_cache_value, CACHE_TTL_LONG
+        from datetime import timedelta
+        import hashlib
+        
+        try:
+            # Convert TTL to timedelta (CACHE_TTL_LONG is in seconds)
+            cache_duration = timedelta(seconds=CACHE_TTL_LONG)
+            
+            # Use the same cache storage function as the main endpoints
+            set_cache_value(cache_key, cache_duration, json.dumps(data), self.redis)
+            
+            # Generate ETag using the same method as the main endpoints
+            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+            
+            logger.info(f"✅ Cached {data_type} for {cache_key}")
+            return etag
+            
+        except Exception as cache_error:
+            logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
+            # Generate a simple ETag even if cache fails
+            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+            return etag
+    
     async def process_jobs(self):
         """Process pending jobs from the queue."""
         try:
@@ -209,21 +234,7 @@ class JobWorker:
             raise ValueError(f"{http_err.detail}") from http_err
         
         # Store in cache using the same utilities as the main endpoint
-        from cache_utils import set_cache_value, LONG_CACHE_DURATION
-        try:
-            # Use the same cache storage function as the main endpoint
-            set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(data), self.redis)
-            
-            # Generate ETag using the same method as the main endpoint
-            import hashlib
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
-            
-            logger.info(f"✅ Cached data for {cache_key}")
-        except Exception as cache_error:
-            logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
-            # Generate a simple ETag even if cache fails
-            import hashlib
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        etag = self._store_cache_data(cache_key, data)
         
         return {
             "cache_key": cache_key,
@@ -258,21 +269,7 @@ class JobWorker:
         cache_key = f"rolling_bundle:{location}:{anchor}:{unit_group}"
         
         # Store in cache using the same utilities as the rolling bundle endpoint
-        from cache_utils import set_cache_value, LONG_CACHE_DURATION
-        try:
-            # Use the same cache storage function as the rolling bundle endpoint
-            set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(data), self.redis)
-            
-            # Generate ETag using the same method as the rolling bundle endpoint
-            import hashlib
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
-            
-            logger.info(f"✅ Cached rolling bundle data for {cache_key}")
-        except Exception as cache_error:
-            logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
-            # Generate a simple ETag even if cache fails
-            import hashlib
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        etag = self._store_cache_data(cache_key, data, "rolling bundle")
         
         return {
             "cache_key": cache_key,

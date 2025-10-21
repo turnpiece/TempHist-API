@@ -3,3 +3,6 @@ source venv/bin/activate
 
 # 2. Run the development server
 uvicorn main:app --reload
+
+# 3. Run the worker
+python job_worker.py
