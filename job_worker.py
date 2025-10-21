@@ -196,12 +196,10 @@ class JobWorker:
         if not all([period, location, identifier]):
             raise ValueError(f"Missing required params - period: {period}, location: {location}, identifier: {identifier}")
         
-        # Build cache key
-        from cache_utils import CacheKeyBuilder
-        cache_key = CacheKeyBuilder.build_cache_key(
-            "v1/records",
-            {"period": period, "location": location, "identifier": identifier}
-        )
+        # Build cache key using the same format as the main endpoint
+        from cache_utils import normalize_location_for_cache
+        normalized_location = normalize_location_for_cache(location)
+        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
         
         # Compute the data - catch HTTPException and convert to regular exception
         try:
@@ -210,20 +208,15 @@ class JobWorker:
             # Convert HTTPException to regular exception for job error handling
             raise ValueError(f"{http_err.detail}") from http_err
         
-        # Store in cache using simple Redis string operations (avoid type conflicts)
-        from cache_utils import CACHE_TTL_LONG
+        # Store in cache using the same utilities as the main endpoint
+        from cache_utils import set_cache_value, LONG_CACHE_DURATION
         try:
-            # Use simple Redis string operations to avoid hash/string conflicts
-            cache_data = json.dumps(data)
-            self.redis.setex(cache_key, CACHE_TTL_LONG, cache_data)
+            # Use the same cache storage function as the main endpoint
+            set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(data), self.redis)
             
-            # Generate ETag
+            # Generate ETag using the same method as the main endpoint
             import hashlib
-            etag = hashlib.md5(cache_data.encode()).hexdigest()
-            
-            # Store ETag separately
-            etag_key = f"{cache_key}:etag"
-            self.redis.setex(etag_key, CACHE_TTL_LONG, etag)
+            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
             
             logger.info(f"✅ Cached data for {cache_key}")
         except Exception as cache_error:
@@ -261,34 +254,18 @@ class JobWorker:
             # Convert HTTPException to regular exception for job error handling
             raise ValueError(f"{http_err.detail}") from http_err
         
-        # Build cache key
-        from cache_utils import CacheKeyBuilder
-        cache_key = CacheKeyBuilder.build_cache_key(
-            "v1/records/rolling-bundle",
-            {"location": location, "anchor": anchor},
-            {
-                "unit_group": unit_group,
-                "month_mode": month_mode,
-                "days_back": days_back,
-                "include": include,
-                "exclude": exclude
-            }
-        )
+        # Build cache key using the same format as the rolling bundle endpoint
+        cache_key = f"rolling_bundle:{location}:{anchor}:{unit_group}"
         
-        # Store in cache using simple Redis string operations (avoid type conflicts)
-        from cache_utils import CACHE_TTL_LONG
+        # Store in cache using the same utilities as the rolling bundle endpoint
+        from cache_utils import set_cache_value, LONG_CACHE_DURATION
         try:
-            # Use simple Redis string operations to avoid hash/string conflicts
-            cache_data = json.dumps(data)
-            self.redis.setex(cache_key, CACHE_TTL_LONG, cache_data)
+            # Use the same cache storage function as the rolling bundle endpoint
+            set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(data), self.redis)
             
-            # Generate ETag
+            # Generate ETag using the same method as the rolling bundle endpoint
             import hashlib
-            etag = hashlib.md5(cache_data.encode()).hexdigest()
-            
-            # Store ETag separately
-            etag_key = f"{cache_key}:etag"
-            self.redis.setex(etag_key, CACHE_TTL_LONG, etag)
+            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
             
             logger.info(f"✅ Cached rolling bundle data for {cache_key}")
         except Exception as cache_error:
