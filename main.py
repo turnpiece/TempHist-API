@@ -1088,8 +1088,9 @@ app.add_middleware(
         "https://temphist.com",  # Main domain
         "https://www.temphist.com",  # www subdomain
         "https://dev.temphist.com",  # development site
+        "https://staging.temphist.com",  # staging site
         "https://temphist-develop.up.railway.app",  # development site on Railway
-        "https://temphist-staging.up.railway.app"  # staging site on Railway
+        "https://temphist-api-staging.up.railway.app"  # staging site on Railway
     ],
     allow_origin_regex=r"^https://.*\.onrender\.com$",  # Allow any Render subdomain
     allow_credentials=True,
