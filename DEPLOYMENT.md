@@ -147,6 +147,8 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | `IP_WHITELIST`             | Empty   | Comma-separated whitelisted IPs       |
 | `IP_BLACKLIST`             | Empty   | Comma-separated blacklisted IPs       |
 | `FILTER_WEATHER_DATA`      | `true`  | Filter to essential temperature data  |
+| `CORS_ORIGINS`             | Default | Comma-separated allowed origins       |
+| `CORS_ORIGIN_REGEX`        | Default | Regex pattern for allowed origins     |
 
 ### Firebase Configuration
 

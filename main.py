@@ -67,6 +67,10 @@ API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automat
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
+# CORS configuration from environment variables
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "").strip()
+CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip()
+
 # Rate limiting configuration
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
 MAX_LOCATIONS_PER_HOUR = int(os.getenv("MAX_LOCATIONS_PER_HOUR", "10"))
@@ -1080,19 +1084,39 @@ async def health_check_cors_middleware(request: Request, call_next):
     return await call_next(request)
 
 # Configure CORS
+def get_cors_origins():
+    """Parse CORS origins from environment variable or use defaults."""
+    if CORS_ORIGINS:
+        # Split by comma and strip whitespace
+        origins = [origin.strip() for origin in CORS_ORIGINS.split(",") if origin.strip()]
+        logger.debug(f"🔍 DEBUG: Using CORS_ORIGINS from environment: {origins}")
+        return origins
+    else:
+        # Default origins for development
+        default_origins = [
+            "http://localhost:3000",  # Local development
+            "http://localhost:5173",  # Vite default port
+            "https://temphist-develop.up.railway.app",  # development site on Railway
+            "https://temphist-api-staging.up.railway.app"  # staging site on Railway
+        ]
+        logger.debug(f"🔍 DEBUG: Using default CORS origins: {default_origins}")
+        return default_origins
+
+def get_cors_origin_regex():
+    """Parse CORS origin regex from environment variable or use default."""
+    if CORS_ORIGIN_REGEX:
+        logger.debug(f"🔍 DEBUG: Using CORS_ORIGIN_REGEX from environment: {CORS_ORIGIN_REGEX}")
+        return CORS_ORIGIN_REGEX
+    else:
+        # Default regex for temphist.com and all its subdomains
+        default_regex = r"^https://(.*\.)?temphist\.com$"
+        logger.debug(f"🔍 DEBUG: Using default CORS regex: {default_regex}")
+        return default_regex
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Local development
-        "http://localhost:5173",  # Vite default port
-        "https://temphist.com",  # Main domain
-        "https://www.temphist.com",  # www subdomain
-        "https://dev.temphist.com",  # development site
-        "https://staging.temphist.com",  # staging site
-        "https://temphist-develop.up.railway.app",  # development site on Railway
-        "https://temphist-api-staging.up.railway.app"  # staging site on Railway
-    ],
-    allow_origin_regex=r"^https://.*\.onrender\.com$",  # Allow any Render subdomain
+    allow_origins=get_cors_origins(),
+    allow_origin_regex=get_cors_origin_regex(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=[

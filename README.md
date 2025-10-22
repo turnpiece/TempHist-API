@@ -52,6 +52,10 @@ MAX_LOCATIONS_PER_HOUR=10  # Defaults to 10
 MAX_REQUESTS_PER_HOUR=100  # Defaults to 100
 RATE_LIMIT_WINDOW_HOURS=1  # Defaults to 1
 
+# CORS Configuration
+CORS_ORIGINS=https://yourdomain.com,https://staging.yourdomain.com  # Comma-separated list of allowed origins
+CORS_ORIGIN_REGEX=^https://.*\.yourdomain\.com$  # Regex pattern for allowed origins
+
 # IP Address Management
 IP_WHITELIST=192.168.1.100,10.0.0.5  # IPs exempt from rate limiting
 IP_BLACKLIST=192.168.1.200,10.0.0.99  # IPs blocked entirely
@@ -99,7 +103,13 @@ API_ACCESS_TOKEN=your_api_access_token_here  # API access token for automated sy
    redis-server
    ```
 
-6. **Run the development server**
+6. **Start the job worker service** (in a separate terminal)
+
+   ```bash
+   python worker_service.py
+   ```
+
+7. **Run the development server** (in another terminal)
    ```bash
    uvicorn main:app --reload
    ```
@@ -1234,6 +1244,13 @@ TEST_TOKEN=your_test_token                         # Token for testing endpoints
 ```bash
 FILTER_WEATHER_DATA=true                           # Filter invalid weather data (default: true)
 UNIT_GROUP=celsius                                 # Default temperature unit (default: celsius)
+```
+
+**CORS Configuration:**
+
+```bash
+CORS_ORIGINS=https://yourdomain.com,https://staging.yourdomain.com  # Comma-separated allowed origins
+CORS_ORIGIN_REGEX=^https://.*\.yourdomain\.com$                     # Regex pattern for allowed origins
 ```
 
 **Firebase Integration (Optional):**

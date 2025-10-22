@@ -148,6 +148,10 @@ FILTER_WEATHER_DATA=true
 
 # Cache Warming Configuration
 CACHE_WARMING_ENABLED=true
+
+# CORS Configuration (optional - uses defaults if not set)
+CORS_ORIGINS=https://yourdomain.com,https://staging.yourdomain.com
+CORS_ORIGIN_REGEX=^https://.*\.yourdomain\.com$
 CACHE_WARMING_INTERVAL_HOURS=4
 CACHE_WARMING_DAYS_BACK=7
 CACHE_WARMING_CONCURRENT_REQUESTS=3
