@@ -771,15 +771,22 @@ class CacheWarmer:
                 preapproved_url = f"{BASE_URL}/v1/locations/preapproved"
                 auth_token = API_ACCESS_TOKEN or TEST_TOKEN
                 if auth_token:
-                    async with aiohttp.ClientSession() as session:
+                    # Set a reasonable timeout for the request
+                    timeout = aiohttp.ClientTimeout(total=10)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.get(preapproved_url, headers={"Authorization": f"Bearer {auth_token}"}) as resp:
                             if resp.status == 200:
                                 if DEBUG:
                                     logger.info("✅ PREAPPROVED ENDPOINT: Warmed successfully")
                             else:
-                                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {resp.status}")
+                                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: HTTP {resp.status}")
                 else:
                     logger.warning("⚠️  PREAPPROVED ENDPOINT: No authentication token available")
+            except aiohttp.ClientConnectorError as e:
+                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Cannot connect to {BASE_URL} - {str(e)}")
+                logger.info("💡  TIP: Set BASE_URL environment variable to your API server URL on Railway")
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Request timeout to {BASE_URL}")
             except Exception as e:
                 logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {str(e)}")
             
