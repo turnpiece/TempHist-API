@@ -62,7 +62,9 @@ class TestV1RecordsEndpoints:
     ])
     def test_v1_records_endpoint(self, client, period, location, identifier, expected_status):
         """Test the v1 records endpoint with various inputs"""
-        with patch('main.get_temperature_data_v1') as mock_get_data:
+        with patch('main.get_temperature_data_v1') as mock_get_data, \
+             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
+             patch('main.is_location_likely_invalid', return_value=False):
             if expected_status == 200:
                 mock_get_data.return_value = {
                     "period": period,
@@ -70,12 +72,12 @@ class TestV1RecordsEndpoints:
                     "identifier": identifier,
                     "range": {"start": "1974-01-15", "end": "2024-01-15"},
                     "unit_group": "celsius",
-                    "values": [{"date": "2024-01-15", "temp": 15.0}],
+                    "values": [{"date": "2024-01-15", "temperature": 15.0}],
                     "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1, "unit": "celsius"},
                     "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
                     "summary": "Test summary"
                 }
-            
+    
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}",
                 headers={"Authorization": f"Bearer {TEST_TOKEN}"}
@@ -101,21 +103,23 @@ class TestV1RecordsEndpoints:
     ])
     def test_v1_subresource_endpoints(self, client, period, location, identifier, subresource):
         """Test the v1 subresource endpoints"""
-        with patch('main.get_temperature_data_v1') as mock_get_data:
+        with patch('main.get_temperature_data_v1') as mock_get_data, \
+             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
+             patch('main.is_location_likely_invalid', return_value=False):
             mock_data = {
                 "period": period,
                 "location": location,
                 "identifier": identifier,
                 "range": {"start": "1974-01-15", "end": "2024-01-15"},
                 "unit_group": "celsius",
-                "values": [{"date": "2024-01-15", "temp": 15.0}],
+                "values": [{"date": "2024-01-15", "temperature": 15.0}],
                 "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1, "unit": "celsius"},
                 "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
                 "summary": "Test summary",
                 "metadata": {"total_years": 1, "available_years": 1, "missing_years": [], "completeness": 100.0}
             }
             mock_get_data.return_value = mock_data
-            
+    
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}/{subresource}",
                 headers={"Authorization": f"Bearer {TEST_TOKEN}"}

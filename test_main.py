@@ -637,14 +637,31 @@ class TestRateLimitingManual:
         if data.get("status") == "disabled":
             pytest.skip("Rate limiting is disabled")
         
-        # Make a few requests to see rate limiting in action
-        for i in range(3):
-            response = client.get(
-                "/v1/records/daily/London/05-15",
-                headers={"Authorization": f"Bearer {TEST_TOKEN}"}
-            )
-            # Should succeed initially
-            assert response.status_code in [200, 429]  # Either success or rate limited
+        # Mock location validation and data fetching
+        with patch('main.get_temperature_data_v1') as mock_get_data, \
+             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
+             patch('main.is_location_likely_invalid', return_value=False):
+            
+            mock_get_data.return_value = {
+                "period": "daily",
+                "location": "London",
+                "identifier": "05-15",
+                "range": {"start": "1974-05-15", "end": "2024-05-15"},
+                "unit_group": "celsius",
+                "values": [{"date": "2024-05-15", "temperature": 20.0}],
+                "average": {"mean": 20.0, "tempmax": 22.0, "tempmin": 18.0, "data_points": 1, "unit": "celsius"},
+                "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
+                "summary": "Test summary"
+            }
+            
+            # Make a few requests to see rate limiting in action
+            for i in range(3):
+                response = client.get(
+                    "/v1/records/daily/London/05-15",
+                    headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+                )
+                # Should succeed initially
+                assert response.status_code in [200, 429]  # Either success or rate limited
     
     def test_rate_limit_configuration(self, client):
         """Test rate limiting configuration"""

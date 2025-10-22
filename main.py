@@ -1089,7 +1089,6 @@ def get_cors_origins():
     if CORS_ORIGINS:
         # Split by comma and strip whitespace
         origins = [origin.strip() for origin in CORS_ORIGINS.split(",") if origin.strip()]
-        logger.debug(f"🔍 DEBUG: Using CORS_ORIGINS from environment: {origins}")
         return origins
     else:
         # Default origins for development
@@ -1099,18 +1098,15 @@ def get_cors_origins():
             "https://temphist-develop.up.railway.app",  # development site on Railway
             "https://temphist-api-staging.up.railway.app"  # staging site on Railway
         ]
-        logger.debug(f"🔍 DEBUG: Using default CORS origins: {default_origins}")
         return default_origins
 
 def get_cors_origin_regex():
     """Parse CORS origin regex from environment variable or use default."""
     if CORS_ORIGIN_REGEX:
-        logger.debug(f"🔍 DEBUG: Using CORS_ORIGIN_REGEX from environment: {CORS_ORIGIN_REGEX}")
         return CORS_ORIGIN_REGEX
     else:
         # Default regex for temphist.com and all its subdomains
         default_regex = r"^https://(.*\.)?temphist\.com$"
-        logger.debug(f"🔍 DEBUG: Using default CORS regex: {default_regex}")
         return default_regex
 
 app.add_middleware(
