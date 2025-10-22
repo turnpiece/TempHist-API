@@ -147,7 +147,15 @@ def filter_locations(
 
 async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
     """Load and validate locations data from JSON file."""
-    data_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "preapproved_locations.json")
+    # Find project root by looking for pyproject.toml
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = current_dir
+    while project_root != os.path.dirname(project_root):  # Stop at filesystem root
+        if os.path.exists(os.path.join(project_root, "pyproject.toml")):
+            break
+        project_root = os.path.dirname(project_root)
+    
+    data_file = os.path.join(project_root, "data", "preapproved_locations.json")
     
     try:
         with open(data_file, 'r', encoding='utf-8') as f:
