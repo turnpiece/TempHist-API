@@ -1476,11 +1476,11 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             tense_context_alt = "is"
             tense_warm_cold = "is"
         elif target_date == yesterday:
-            # Yesterday - use past tense with "yesterday"
+            # Yesterday - use past tense but keep the actual date
             tense_context = "was"
             tense_context_alt = "was"
             tense_warm_cold = "was"
-            friendly_date = "yesterday" # We can't set the date to "yesterday"!
+            # Don't override friendly_date - keep the actual date like "October 25th"
         else:
             # Past date - use past tense
             tense_context = "was"
