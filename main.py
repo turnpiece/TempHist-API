@@ -2738,45 +2738,9 @@ def parse_identifier(period: str, identifier: str) -> tuple:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Identifier must be in MM-DD format: {str(e)}")
 
-async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, unit_group: str = "metric"):
-    """Fetch yearly summary data from Visual Crossing historysummary endpoint."""
-    from constants import VC_BASE_URL
-    url = f"{VC_BASE_URL}/weatherdata/historysummary"
-    params = {
-        "aggregateHours": 24,
-        "minYear": start_year,
-        "maxYear": end_year,
-        "chronoUnit": "years",
-        "breakBy": "years",
-        "dailySummaries": "false",
-        "contentType": "json",
-        "unitGroup": _vc_unit_group(unit_group),
-        "locations": location,
-        "key": API_KEY,
-    }
-    
-    async with visual_crossing_semaphore:
-        http = await get_http_client()
-        async with http:
-            r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
-    r.raise_for_status()
-    data = r.json()
-    
-    # Parse the response to extract yearly temperature data
-    yearly_data = []
-    if 'locations' in data and location in data['locations']:
-        location_data = data['locations'][location]
-        if 'values' in location_data:
-            for value in location_data['values']:
-                year = value.get('year')
-                temp = value.get('temp')
-                if year and temp is not None:
-                    yearly_data.append((year, temp))
-    
-    return yearly_data
 
 async def get_temperature_data_v1(location: str, period: str, identifier: str, unit_group: str = "celsius") -> Dict:
-    """Get temperature data for v1 API with unified logic using historysummary for weekly/monthly/yearly."""
+    """Get temperature data for v1 API with unified logic using timeline endpoint for all periods."""
     # Parse identifier based on period (all use MM-DD format representing end date)
     month, day, _ = parse_identifier(period, identifier)
     
@@ -2833,141 +2797,76 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     ))
     
     elif period in ["weekly", "monthly"]:
-        timeline_success = False
-        if USE_TIMELINE_APPROACH:
-            # Use timeline-based approach for more reliable data
-            try:
-                from routers.records_agg import _rolling_week_per_year_via_timeline, _rolling_30d_per_year_via_timeline, _dict_to_values_list, _historysummary_values, _row_week_start, _row_year, _row_mean_temp, _row_month
-                
-                if period == "weekly":
-                    year_means = await _rolling_week_per_year_via_timeline(
-                        location=location,
-                        min_year=start_year,
-                        max_year=current_year,
-                        mm=month,
-                        dd=day,
-                        unit_group=unit_group
-                    )
-                else:  # monthly
-                    year_means = await _rolling_30d_per_year_via_timeline(
-                        location=location,
-                        min_year=start_year,
-                        max_year=current_year,
-                        mm=month,
-                        dd=day,
-                        unit_group=unit_group
-                    )
-                
-                # Convert to TemperatureValue objects and track missing years
-                for year in range(start_year, current_year + 1):
-                    temp = year_means.get(year)
-                    if temp is not None:
-                        all_temps.append(temp)
-                        values.append(TemperatureValue(
-                            date=f"{year}-{month:02d}-{day:02d}",
-                            year=year,
-                            temperature=round(temp, 1),
-                        ))
-                    else:
-                        track_missing_year(missing_years, year, "insufficient_data_timeline")
-                
-                # Timeline approach completed successfully
-                timeline_success = True
-                        
-            except Exception as e:
-                # Fallback to old method if timeline fails
-                logger.warning(f"Timeline approach failed for {period}: {e}, using fallback")
-                timeline_success = False
-        
-        if not USE_TIMELINE_APPROACH or not timeline_success:
-            # Use historysummary for weekly/monthly data (fallback or default)
-            payload = await _fetch_yearly_summary(location, start_year, current_year, unit_group)
-            rows = _historysummary_values(payload)
+        # Use timeline-based approach for more reliable data
+        try:
+            from routers.records_agg import _rolling_week_per_year_via_timeline, _rolling_30d_per_year_via_timeline
             
             if period == "weekly":
-                # For weekly, we need to find the week containing the target date
-                target_week = datetime.strptime(f"{current_year}-{month:02d}-{day:02d}", "%Y-%m-%d").isocalendar().week
-                for r in rows:
-                    if _row_week_start(r):
-                        try:
-                            week_start = datetime.strptime(_row_week_start(r), "%Y-%m-%d")
-                            if week_start.isocalendar().week == target_week:
-                                y = _row_year(r)
-                                t = _row_mean_temp(r)
-                                if y and t is not None:
-                                    all_temps.append(t)
-                                    values.append(TemperatureValue(
-                                        date=f"{y}-{month:02d}-{day:02d}",
-                                        year=y,
-                                        temperature=round(t, 1),
-                                    ))
-                        except Exception:
-                            continue
-            else:  # monthly
-                for r in rows:
-                    if _row_month(r) == month:
-                        y = _row_year(r)
-                        t = _row_mean_temp(r)
-                        if y and t is not None:
-                            all_temps.append(t)
-                            values.append(TemperatureValue(
-                                date=f"{y}-{month:02d}-{day:02d}",
-                                year=y,
-                                temperature=round(t, 1),
-                            ))
-    
-    elif period == "yearly":
-        timeline_success = False
-        if USE_TIMELINE_APPROACH:
-            # Use timeline-based approach for yearly data
-            try:
-                from routers.records_agg import rolling_year_per_year_via_timeline
-                
-                year_means = await rolling_year_per_year_via_timeline(
+                year_means = await _rolling_week_per_year_via_timeline(
                     location=location,
                     min_year=start_year,
                     max_year=current_year,
-                    end_month=month,
-                    end_day=day,
+                    mm=month,
+                    dd=day,
                     unit_group=unit_group
                 )
-                
-                # Convert to TemperatureValue objects and track missing years
-                for year in range(start_year, current_year + 1):
-                    temp = year_means.get(year)
-                    if temp is not None:
-                        all_temps.append(temp)
-                        values.append(TemperatureValue(
-                            date=f"{year}-{month:02d}-{day:02d}",
-                            year=year,
-                            temperature=round(temp, 1),
-                        ))
-                    else:
-                        track_missing_year(missing_years, year, "insufficient_data_timeline")
-                
-                # Timeline approach completed successfully
-                timeline_success = True
-                        
-            except Exception as e:
-                # Fallback to old method if timeline fails
-                logger.warning(f"Timeline approach failed for yearly: {e}, using fallback")
-                timeline_success = False
-        
-        if not USE_TIMELINE_APPROACH or not timeline_success:
-            # Use historysummary for yearly data (fallback or default)
-            payload = await _fetch_yearly_summary(location, start_year, current_year, unit_group)
-            rows = _historysummary_values(payload)
+            else:  # monthly
+                year_means = await _rolling_30d_per_year_via_timeline(
+                    location=location,
+                    min_year=start_year,
+                    max_year=current_year,
+                    mm=month,
+                    dd=day,
+                    unit_group=unit_group
+                )
             
-            for r in rows:
-                y = _row_year(r)
-                t = _row_mean_temp(r)
-                if y and t is not None:
-                    all_temps.append(t)
+            # Convert to TemperatureValue objects and track missing years
+            for year in range(start_year, current_year + 1):
+                temp = year_means.get(year)
+                if temp is not None:
+                    all_temps.append(temp)
                     values.append(TemperatureValue(
-                        date=f"{y}-{month:02d}-{day:02d}",
-                        year=y,
-                        temperature=round(t, 1),
+                        date=f"{year}-{month:02d}-{day:02d}",
+                        year=year,
+                        temperature=round(temp, 1),
                     ))
+                else:
+                    track_missing_year(missing_years, year, "insufficient_data_timeline")
+                    
+        except Exception as e:
+            logger.error(f"Timeline approach failed for {period}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch {period} data: {str(e)}")
+    
+    elif period == "yearly":
+        # Use timeline-based approach for yearly data
+        try:
+            from routers.records_agg import rolling_year_per_year_via_timeline
+            
+            year_means = await rolling_year_per_year_via_timeline(
+                location=location,
+                min_year=start_year,
+                max_year=current_year,
+                end_month=month,
+                end_day=day,
+                unit_group=unit_group
+            )
+            
+            # Convert to TemperatureValue objects and track missing years
+            for year in range(start_year, current_year + 1):
+                temp = year_means.get(year)
+                if temp is not None:
+                    all_temps.append(temp)
+                    values.append(TemperatureValue(
+                        date=f"{year}-{month:02d}-{day:02d}",
+                        year=year,
+                        temperature=round(temp, 1),
+                    ))
+                else:
+                    track_missing_year(missing_years, year, "insufficient_data_timeline")
+                    
+        except Exception as e:
+            logger.error(f"Timeline approach failed for yearly: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch yearly data: {str(e)}")
     
     # Calculate date range
     if values:
