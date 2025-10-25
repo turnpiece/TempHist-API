@@ -12,6 +12,10 @@ import signal
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from cache_utils import get_job_manager, get_cache, JobStatus
 from routers.records_agg import rolling_bundle as rolling_bundle_func
@@ -210,7 +214,7 @@ class JobWorker:
     
     async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a record computation job."""
-        from main import get_temperature_data_v1
+        from temperature_data import get_temperature_data_v1
         from fastapi import HTTPException
         
         logger.info(f"🔍 Processing record job with params: {params}")
