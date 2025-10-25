@@ -2831,7 +2831,9 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                         temperature=round(temp, 1),
                     ))
                 else:
-                    track_missing_year(missing_years, year, "insufficient_data_timeline")
+                    # Get more detailed information about why data is insufficient
+                    reason = f"insufficient_data_timeline (no temperature data for year {year})"
+                    track_missing_year(missing_years, year, reason)
                     
         except Exception as e:
             logger.error(f"Timeline approach failed for {period}: {e}")
@@ -2862,7 +2864,9 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                         temperature=round(temp, 1),
                     ))
                 else:
-                    track_missing_year(missing_years, year, "insufficient_data_timeline")
+                    # Get more detailed information about why data is insufficient
+                    reason = f"insufficient_data_timeline (no temperature data for year {year})"
+                    track_missing_year(missing_years, year, reason)
                     
         except Exception as e:
             logger.error(f"Timeline approach failed for yearly: {e}")

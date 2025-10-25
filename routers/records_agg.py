@@ -182,18 +182,25 @@ async def _vc_timeline_days(
         async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
             if resp.status >= 400:
                 text = await resp.text()
+                logger.error(f"Visual Crossing API error {resp.status} for {location} ({start_iso} to {end_iso}): {text[:500]}")
                 
                 # Handle specific error cases
                 if resp.status == 400:
                     if "license level" in text.lower() or "not permitted" in text.lower():
                         # This is a permanent feature gate - don't retry
                         raise ValueError(f"Visual Crossing license limitation: {text[:200]}")
+                    elif "bad request" in text.lower():
+                        # Bad request - might be invalid parameters
+                        raise ValueError(f"VC timeline bad request (400): {text[:200]}")
                     else:
                         # Other 400 errors might be temporary
                         raise ValueError(f"VC timeline 400: {text[:200]}")
                 elif resp.status == 429:
                     # Rate limit - should retry later with concurrency=1
                     raise ValueError(f"VC timeline rate limited (429): {text[:200]}")
+                elif resp.status == 500:
+                    # Server error
+                    raise ValueError(f"VC timeline server error (500): {text[:200]}")
                 else:
                     raise ValueError(f"VC timeline {resp.status}: {text[:200]}")
             
@@ -270,17 +277,24 @@ def _per_year_rolling_means(
         y, m, dd = map(int, s.split("-"))
         by_date[date(y, m, dd)] = float(t)
 
+    logger.debug(f"Indexed {len(by_date)} temperature records for rolling means calculation")
+    logger.debug(f"Window: {window_days} days, minimum required: {min_days_required} days")
+
     results: Dict[int, Optional[float]] = {}
     # Work out min/max year from payload keys (safer than assuming full range)
     if not by_date:
+        logger.warning("No temperature data available for rolling means calculation")
         return results
     years = range(min(dt.year for dt in by_date), max(dt.year for dt in by_date) + 1)
+    logger.debug(f"Processing years {min(years)} to {max(years)}")
 
+    insufficient_data_years = []
     for y in years:
         try:
             end_dt = date(y, end_month, end_day)
         except ValueError:
             # Handles 2/29 in non-leap years etc.: skip that year
+            logger.debug(f"Skipping year {y} due to invalid end date {end_month}-{end_day}")
             results[y] = None
             continue
 
@@ -294,7 +308,17 @@ def _per_year_rolling_means(
                 vals.append(v)
             cur += timedelta(days=1)
 
-        results[y] = (sum(vals) / len(vals)) if len(vals) >= min_days_required else None
+        if len(vals) >= min_days_required:
+            mean_temp = sum(vals) / len(vals)
+            results[y] = mean_temp
+            logger.debug(f"Year {y}: {len(vals)}/{window_days} days available, mean temp: {mean_temp:.1f}°C")
+        else:
+            results[y] = None
+            insufficient_data_years.append(f"{y}({len(vals)}/{window_days})")
+            logger.debug(f"Year {y}: insufficient data - {len(vals)}/{window_days} days (need {min_days_required})")
+
+    if insufficient_data_years:
+        logger.info(f"Insufficient data for {len(insufficient_data_years)} years: {', '.join(insufficient_data_years[:10])}{'...' if len(insufficient_data_years) > 10 else ''}")
 
     return results
 
@@ -365,8 +389,12 @@ async def _rolling_week_per_year_via_timeline(
     # Apply station filtering if available (with fallback for low completeness)
     station_whitelist = _get_station_whitelist(location)
     if station_whitelist:
+        original_count = len(all_days)
         all_days = _filter_days_by_station(all_days, station_whitelist, min_completeness=0.9)
+        filtered_count = len(all_days)
+        logger.info(f"Station filtering for {location}: {original_count} -> {filtered_count} days")
     
+    logger.info(f"Computing weekly rolling means for {location} (mm={mm}, dd={dd}, window=7 days, min_required=5)")
     return _per_year_rolling_means(all_days, mm, dd, window_days=7, min_days_required=5)
 
 async def _rolling_30d_per_year_via_timeline(
@@ -395,8 +423,12 @@ async def _rolling_30d_per_year_via_timeline(
     # Apply station filtering if available (with fallback for low completeness)
     station_whitelist = _get_station_whitelist(location)
     if station_whitelist:
+        original_count = len(all_days)
         all_days = _filter_days_by_station(all_days, station_whitelist, min_completeness=0.9)
+        filtered_count = len(all_days)
+        logger.info(f"Station filtering for {location}: {original_count} -> {filtered_count} days")
     
+    logger.info(f"Computing monthly rolling means for {location} (mm={mm}, dd={dd}, window=30 days, min_required=20)")
     return _per_year_rolling_means(all_days, mm, dd, window_days=30, min_days_required=20)
 
 async def rolling_year_per_year_via_timeline(
@@ -677,22 +709,32 @@ async def _fetch_daily_data_cached(
     # Create cache key based on location, date range, and unit group
     cache_key = f"daily:{location}:{start_date.isoformat()}:{end_date.isoformat()}:{unit_group}"
     
+    logger.info(f"Fetching daily data for {location} from {start_date} to {end_date} (unit: {unit_group})")
+    
     # Try to get from cache first
     cached_data = await daily_cache.get(cache_key)
     if cached_data:
         try:
             import json
-            return json.loads(cached_data.decode())
-        except Exception:
+            cached_map = json.loads(cached_data.decode())
+            logger.info(f"Using cached data: {len(cached_map)} days for {location}")
+            return cached_map
+        except Exception as e:
+            logger.warning(f"Cache data corrupted for {location}, fetching fresh data: {e}")
             # If cache data is corrupted, continue to fetch fresh data
             pass
     
     # Fetch fresh data from Visual Crossing
     date_chunks = _split_date_range_optimally(start_date, end_date, max_days=10000)
-    all_days = []
+    logger.info(f"Split date range into {len(date_chunks)} chunks for {location}")
     
-    for chunk_start, chunk_end in date_chunks:
+    all_days = []
+    successful_chunks = 0
+    failed_chunks = 0
+    
+    for i, (chunk_start, chunk_end) in enumerate(date_chunks):
         try:
+            logger.debug(f"Fetching chunk {i+1}/{len(date_chunks)}: {chunk_start} to {chunk_end} for {location}")
             payload = await _vc_timeline_days(
                 location=location,
                 start_iso=chunk_start.isoformat(),
@@ -703,22 +745,32 @@ async def _fetch_daily_data_cached(
             )
             chunk_days = payload.get("days", [])
             all_days.extend(chunk_days)
+            successful_chunks += 1
+            logger.debug(f"Chunk {i+1} successful: {len(chunk_days)} days retrieved")
         except Exception as e:
-            logger.warning(f"Failed to fetch timeline data for {chunk_start} to {chunk_end}: {e}")
+            failed_chunks += 1
+            logger.error(f"Failed to fetch timeline data for {chunk_start} to {chunk_end} for {location}: {e}")
             continue
+    
+    logger.info(f"Timeline fetch complete for {location}: {successful_chunks} successful, {failed_chunks} failed chunks, {len(all_days)} total days")
     
     # Convert to daily map
     daily_map = {}
+    valid_temps = 0
     for day_data in all_days:
         dt = day_data.get("datetime")
         temp = day_data.get("temp")
         if isinstance(dt, str) and isinstance(temp, (int, float)):
             daily_map[dt] = float(temp)
+            valid_temps += 1
+    
+    logger.info(f"Processed {len(all_days)} raw days into {len(daily_map)} valid temperature records for {location}")
     
     # Cache the result
     if daily_map:
         import json
         await daily_cache.set(cache_key, json.dumps(daily_map).encode())
+        logger.debug(f"Cached {len(daily_map)} temperature records for {location}")
     
     return daily_map
 
