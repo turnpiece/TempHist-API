@@ -10,7 +10,8 @@ from dateutil.relativedelta import relativedelta
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+# Strip whitespace/newlines from API key to prevent authentication issues
+API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
 # Log API key status (without exposing the actual key)

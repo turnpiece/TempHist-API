@@ -46,8 +46,8 @@ logging.getLogger('asyncio').setLevel(logging.WARNING)
 def validate_environment():
     """Validate required environment variables are set."""
     required_vars = {
-        "REDIS_URL": os.getenv("REDIS_URL"),
-        "VISUAL_CROSSING_API_KEY": os.getenv("VISUAL_CROSSING_API_KEY"),
+        "REDIS_URL": os.getenv("REDIS_URL", "").strip(),
+        "VISUAL_CROSSING_API_KEY": os.getenv("VISUAL_CROSSING_API_KEY", "").strip(),
     }
     
     # Log API key status (without exposing the actual key)
