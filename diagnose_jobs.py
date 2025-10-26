@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Diagnostic tool for async job processing.
 Use this to troubleshoot job timeouts and background worker issues.
@@ -9,7 +10,6 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Any
 
 # Load environment
 from dotenv import load_dotenv
@@ -57,6 +57,9 @@ def diagnose_job_system():
     print("🔍 JOBS IN QUEUE")
     print("=" * 60)
     
+    # Initialize jobs_by_status early to avoid UnboundLocalError
+    jobs_by_status = {"pending": [], "processing": [], "ready": [], "error": []}
+    
     try:
         # Get jobs from queue instead of scanning all keys (KEYS command may not be available)
         job_ids = []
@@ -83,7 +86,6 @@ def diagnose_job_system():
         
         if job_keys:
             print(f"\n📝 Job details:")
-            jobs_by_status = {"pending": [], "processing": [], "ready": [], "error": []}
             
             for job_key in sorted(job_keys, reverse=True)[:20]:  # Show latest 20
                 try:

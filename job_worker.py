@@ -214,7 +214,7 @@ class JobWorker:
     
     async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a record computation job."""
-        from temperature_data import get_temperature_data_v1
+        from main import get_temperature_data_v1
         from fastapi import HTTPException
         
         logger.info(f"🔍 Processing record job with params: {params}")
