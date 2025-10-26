@@ -60,7 +60,6 @@ _temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {REDIS_URL}")
 
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-USE_TIMELINE_APPROACH = os.getenv("USE_TIMELINE_APPROACH", "false").lower() == "true"
 # Logging verbosity control - set to "minimal" to reduce Railway logging limits
 LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "normal", "verbose"
 TEST_TOKEN = os.getenv("TEST_TOKEN")
@@ -1795,14 +1794,12 @@ async def health_check():
     """Simple health check endpoint for Render load balancers."""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-@app.get("/test-timeline")
-async def test_timeline_approach():
-    """Test endpoint to check timeline approach configuration."""
+@app.get("/test-debug")
+async def test_debug_config():
+    """Test endpoint to check debug configuration."""
     return {
-        "timeline_approach_enabled": USE_TIMELINE_APPROACH,
         "debug_enabled": DEBUG,
         "environment": {
-            "USE_TIMELINE_APPROACH": os.getenv("USE_TIMELINE_APPROACH", "false"),
             "DEBUG": os.getenv("DEBUG", "false")
         }
     }
