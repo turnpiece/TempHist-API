@@ -50,6 +50,12 @@ def validate_environment():
         "VISUAL_CROSSING_API_KEY": os.getenv("VISUAL_CROSSING_API_KEY"),
     }
     
+    # Log API key status (without exposing the actual key)
+    if required_vars["VISUAL_CROSSING_API_KEY"]:
+        logger.info(f"✅ VISUAL_CROSSING_API_KEY loaded: {required_vars['VISUAL_CROSSING_API_KEY'][:10]}... (length: {len(required_vars['VISUAL_CROSSING_API_KEY'])})")
+    else:
+        logger.error("❌ VISUAL_CROSSING_API_KEY is NOT loaded or is empty!")
+    
     missing = [k for k, v in required_vars.items() if not v]
     if missing:
         logger.error(f"❌ Missing required environment variables: {', '.join(missing)}")

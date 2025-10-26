@@ -13,6 +13,12 @@ router = APIRouter()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
+# Log API key status (without exposing the actual key)
+if API_KEY:
+    logger.info(f"VISUAL_CROSSING_API_KEY loaded: {API_KEY[:10]}... (length: {len(API_KEY)})")
+else:
+    logger.error("❌ VISUAL_CROSSING_API_KEY is NOT loaded or is empty!")
+
 def _vc_unit_group(u: str) -> str:
     """Map our unit groups to Visual Crossing's expected values."""
     u = (u or "").lower()
@@ -179,8 +185,14 @@ async def _vc_timeline_days(
     
     # Log request details for debugging (without exposing API key)
     params_safe = {k: (v if k != "key" else f"{v[:10]}..." if v else "MISSING") for k, v in params.items()}
-    logger.debug(f"VC Request URL: {url}")
-    logger.debug(f"VC Request params: {params_safe}")
+    logger.info(f"VC Request URL: {url}")
+    logger.info(f"VC Request params: {params_safe}")
+    logger.info(f"VC API Key present: {bool(API_KEY)}, length: {len(API_KEY) if API_KEY else 0}")
+    
+    # Verify params are being passed
+    import urllib.parse
+    full_url = f"{url}?{urllib.parse.urlencode(params)}"
+    logger.info(f"VC Full request URL (with masked key): {full_url.replace(API_KEY, 'KEY_HIDDEN')}")
     
     sess = await _client_session()
     async with _sem:
