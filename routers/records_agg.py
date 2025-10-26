@@ -168,8 +168,8 @@ async def _vc_timeline_days(
     Fetch raw daily rows from the modern /timeline endpoint in one go.
     Returns Visual Crossing JSON (expects top-level 'days' list).
     """
-    if API_KEY is None:
-        raise RuntimeError("VISUAL_CROSSING_API_KEY is not configured")
+    if not API_KEY or len(API_KEY) == 0:
+        raise RuntimeError("VISUAL_CROSSING_API_KEY is not configured or is empty")
 
     # Validate that we have both start and end dates
     if not start_iso or not end_iso or start_iso == end_iso:
@@ -193,7 +193,11 @@ async def _vc_timeline_days(
     # Verify params are being passed
     import urllib.parse
     full_url = f"{url}?{urllib.parse.urlencode(params)}"
-    logger.info(f"VC Full request URL (with masked key): {full_url.replace(API_KEY, 'KEY_HIDDEN')}")
+    # Only mask the key if it exists and has content
+    if API_KEY and len(API_KEY) > 0:
+        logger.info(f"VC Full request URL (with masked key): {full_url.replace(API_KEY, 'KEY_HIDDEN')}")
+    else:
+        logger.error(f"VC Full request URL (KEY MISSING!): {full_url}")
     
     sess = await _client_session()
     async with _sem:
@@ -767,7 +771,12 @@ async def _fetch_daily_data_cached(
             logger.debug(f"Chunk {i+1} successful: {len(chunk_days)} days retrieved")
         except Exception as e:
             failed_chunks += 1
-            logger.error(f"Failed to fetch timeline data for {chunk_start} to {chunk_end} for {location}: {e}")
+            error_msg = str(e)
+            error_type = type(e).__name__
+            logger.error(f"Failed to fetch timeline data for {chunk_start} to {chunk_end} for {location}: {error_type}: {error_msg}")
+            logger.error(f"Chunk {i+1}/{len(date_chunks)} error details: {repr(e)}")
+            import traceback
+            logger.error(f"Chunk error traceback:\n{traceback.format_exc()}")
             continue
     
     logger.info(f"Timeline fetch complete for {location}: {successful_chunks} successful, {failed_chunks} failed chunks, {len(all_days)} total days")
