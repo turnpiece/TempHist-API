@@ -177,6 +177,11 @@ async def _vc_timeline_days(
         "key": API_KEY,
     }
     
+    # Log request details for debugging (without exposing API key)
+    params_safe = {k: (v if k != "key" else f"{v[:10]}..." if v else "MISSING") for k, v in params.items()}
+    logger.debug(f"VC Request URL: {url}")
+    logger.debug(f"VC Request params: {params_safe}")
+    
     sess = await _client_session()
     async with _sem:
         async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
