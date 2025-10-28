@@ -139,7 +139,14 @@ _sem = asyncio.Semaphore(1)  # Professional plan: concurrency=1 to avoid 429s
 async def _client_session() -> aiohttp.ClientSession:
     global _client
     if _client is None or _client.closed:
-        _client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        # Increased timeout for large date ranges, with connection and read timeouts
+        _client = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(
+                total=120,  # 2 minutes total timeout for large requests
+                connect=30,  # 30 seconds to establish connection
+                sock_read=90  # 90 seconds to read response data
+            )
+        )
     return _client
 
 async def _close_client_session():
@@ -163,6 +170,7 @@ async def _vc_timeline_days(
     unit_group: str = UNIT_GROUP_DEFAULT,
     elements: str = "datetime,temp",
     include: str = "obs,stats,stations",
+    max_retries: int = 3,
 ) -> Dict[str, Any]:
     """
     Fetch raw daily rows from the modern /timeline endpoint in one go.
@@ -200,41 +208,96 @@ async def _vc_timeline_days(
         logger.error(f"VC Full request URL (KEY MISSING!): {full_url}")
     
     sess = await _client_session()
-    async with _sem:
-        async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
-            if resp.status >= 400:
-                text = await resp.text()
-                logger.error(f"Visual Crossing API error {resp.status} for {location} ({start_iso} to {end_iso}): {text[:500]}")
-                
-                # Handle specific error cases
-                if resp.status == 400:
-                    if "license level" in text.lower() or "not permitted" in text.lower():
-                        # This is a permanent feature gate - don't retry
-                        raise ValueError(f"Visual Crossing license limitation: {text[:200]}")
-                    elif "bad request" in text.lower():
-                        # Bad request - might be invalid parameters
-                        raise ValueError(f"VC timeline bad request (400): {text[:200]}")
-                    else:
-                        # Other 400 errors might be temporary
-                        raise ValueError(f"VC timeline 400: {text[:200]}")
-                elif resp.status == 429:
-                    # Rate limit - should retry later with concurrency=1
-                    raise ValueError(f"VC timeline rate limited (429): {text[:200]}")
-                elif resp.status == 500:
-                    # Server error
-                    raise ValueError(f"VC timeline server error (500): {text[:200]}")
-                else:
-                    raise ValueError(f"VC timeline {resp.status}: {text[:200]}")
-            
-            result = await resp.json()
-            return result
+    
+    # Retry logic with exponential backoff
+    for attempt in range(max_retries + 1):
+        try:
+            async with _sem:
+                async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
+                    if resp.status >= 400:
+                        text = await resp.text()
+                        logger.error(f"Visual Crossing API error {resp.status} for {location} ({start_iso} to {end_iso}): {text[:500]}")
+                        
+                        # Handle specific error cases
+                        if resp.status == 400:
+                            if "license level" in text.lower() or "not permitted" in text.lower():
+                                # This is a permanent feature gate - don't retry
+                                raise ValueError(f"Visual Crossing license limitation: {text[:200]}")
+                            elif "bad request" in text.lower():
+                                # Bad request - might be invalid parameters
+                                raise ValueError(f"VC timeline bad request (400): {text[:200]}")
+                            else:
+                                # Other 400 errors might be temporary
+                                if attempt < max_retries:
+                                    logger.warning(f"Retrying 400 error for {location} (attempt {attempt + 1}/{max_retries + 1})")
+                                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                                    continue
+                                raise ValueError(f"VC timeline 400: {text[:200]}")
+                        elif resp.status == 429:
+                            # Rate limit - retry with exponential backoff
+                            if attempt < max_retries:
+                                wait_time = 2 ** attempt
+                                logger.warning(f"Rate limited for {location}, waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            raise ValueError(f"VC timeline rate limited (429): {text[:200]}")
+                        elif resp.status == 500:
+                            # Server error - retry with exponential backoff
+                            if attempt < max_retries:
+                                wait_time = 2 ** attempt
+                                logger.warning(f"Server error for {location}, waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            raise ValueError(f"VC timeline server error (500): {text[:200]}")
+                        else:
+                            if attempt < max_retries:
+                                wait_time = 2 ** attempt
+                                logger.warning(f"HTTP {resp.status} for {location}, waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            raise ValueError(f"VC timeline {resp.status}: {text[:200]}")
+                    
+                    result = await resp.json()
+                    logger.info(f"Successfully fetched timeline data for {location} ({start_iso} to {end_iso}) on attempt {attempt + 1}")
+                    return result
+                    
+        except asyncio.TimeoutError as e:
+            if attempt < max_retries:
+                wait_time = 2 ** attempt
+                logger.warning(f"Timeout for {location} ({start_iso} to {end_iso}), waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
+                await asyncio.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"Final timeout after {max_retries + 1} attempts for {location} ({start_iso} to {end_iso})")
+                raise ValueError(f"VC timeline timeout after {max_retries + 1} attempts: {str(e)}")
+        except Exception as e:
+            if attempt < max_retries:
+                wait_time = 2 ** attempt
+                logger.warning(f"Request failed for {location} ({start_iso} to {end_iso}): {str(e)}, waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
+                await asyncio.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"Final failure after {max_retries + 1} attempts for {location} ({start_iso} to {end_iso}): {str(e)}")
+                raise
+    
+    # This should never be reached, but just in case
+    raise ValueError(f"Unexpected error: exhausted all retry attempts for {location}")
 
 def _split_date_range_optimally(start_date: date, end_date: date, max_days: int = 10000) -> List[Tuple[date, date]]:
     """
     Split a date range into optimal chunks to stay under the 10,000 record limit.
+    For very large ranges (>20 years), use smaller chunks to avoid timeouts.
     Returns list of (start, end) date tuples.
     """
     total_days = (end_date - start_date).days + 1
+    
+    # For very large ranges, use smaller chunks to avoid timeouts
+    if total_days > 7300:  # More than 20 years
+        max_days = 5000  # Reduce chunk size for very large ranges
+        logger.info(f"Large date range detected ({total_days} days), using smaller chunks ({max_days} days max)")
+    elif total_days > 3650:  # More than 10 years
+        max_days = 7000  # Slightly smaller chunks for large ranges
+        logger.info(f"Medium-large date range detected ({total_days} days), using medium chunks ({max_days} days max)")
     
     if total_days <= max_days:
         return [(start_date, end_date)]
@@ -257,6 +320,7 @@ def _split_date_range_optimally(start_date: date, end_date: date, max_days: int 
         if current_start > end_date:
             break
     
+    logger.info(f"Split {total_days} days into {len(chunks)} chunks (max {max_days} days per chunk)")
     return chunks
 
 def _daterange_for_rolling_window(
@@ -755,8 +819,10 @@ async def _fetch_daily_data_cached(
     failed_chunks = 0
     
     for i, (chunk_start, chunk_end) in enumerate(date_chunks):
+        chunk_days_count = (chunk_end - chunk_start).days + 1
+        logger.info(f"Fetching chunk {i+1}/{len(date_chunks)}: {chunk_start} to {chunk_end} ({chunk_days_count} days) for {location}")
+        
         try:
-            logger.debug(f"Fetching chunk {i+1}/{len(date_chunks)}: {chunk_start} to {chunk_end} for {location}")
             payload = await _vc_timeline_days(
                 location=location,
                 start_iso=chunk_start.isoformat(),
@@ -764,19 +830,23 @@ async def _fetch_daily_data_cached(
                 unit_group=unit_group,
                 elements="datetime,temp",
                 include="obs,stats,stations",
+                max_retries=3  # Use retry logic
             )
             chunk_days = payload.get("days", [])
             all_days.extend(chunk_days)
             successful_chunks += 1
-            logger.debug(f"Chunk {i+1} successful: {len(chunk_days)} days retrieved")
+            logger.info(f"Chunk {i+1} successful: {len(chunk_days)}/{chunk_days_count} days retrieved for {location}")
         except Exception as e:
             failed_chunks += 1
             error_msg = str(e)
             error_type = type(e).__name__
-            logger.error(f"Failed to fetch timeline data for {chunk_start} to {chunk_end} for {location}: {error_type}: {error_msg}")
+            logger.error(f"Failed to fetch timeline data for {chunk_start} to {chunk_end} ({chunk_days_count} days) for {location}: {error_type}: {error_msg}")
             logger.error(f"Chunk {i+1}/{len(date_chunks)} error details: {repr(e)}")
-            import traceback
-            logger.error(f"Chunk error traceback:\n{traceback.format_exc()}")
+            
+            # Only log full traceback for unexpected errors, not timeout/retry errors
+            if "timeout" not in error_msg.lower() and "retry" not in error_msg.lower():
+                import traceback
+                logger.error(f"Chunk error traceback:\n{traceback.format_exc()}")
             continue
     
     logger.info(f"Timeline fetch complete for {location}: {successful_chunks} successful, {failed_chunks} failed chunks, {len(all_days)} total days")
@@ -809,7 +879,14 @@ async def _get_rolling_http_client() -> aiohttp.ClientSession:
     """Get or create the rolling bundle HTTP client."""
     global _http
     if _http is None or _http.closed:
-        _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
+        # Increased timeout for rolling bundle requests
+        _http = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(
+                total=120,  # 2 minutes total timeout
+                connect=30,  # 30 seconds to establish connection
+                sock_read=90  # 90 seconds to read response data
+            )
+        )
     return _http
 
 async def _close_rolling_http_client():
