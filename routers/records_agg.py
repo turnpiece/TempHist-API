@@ -744,7 +744,7 @@ ALLOWED_SECTIONS = {"day", "week", "month", "year"}
 
 # Station filtering for continuity (e.g., Berlin airport changes)
 STATION_WHITELISTS = {
-    "berlin": {"10382099999", "10385099999", "10386099999", "10395099999"},  # Berlin area stations
+    "berlin": {"10382099999", "10385099999", "10386099999", "10395099999", "10379099999"},  # Berlin area stations
     "london": {"037720-99999", "037760-99999"},  # London area stations
     # Add more cities as needed
 }
