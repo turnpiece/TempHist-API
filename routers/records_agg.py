@@ -8,7 +8,7 @@ from constants import VC_BASE_URL
 from dateutil.relativedelta import relativedelta
 
 # Import improved caching utilities
-from app.cache_utils import cache_get, cache_set, canonicalize_location
+from app.cache_utils import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -597,27 +597,39 @@ async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DE
     # ym is YYYY-MM (same month across all years)
     try:
         month = datetime.strptime(ym, "%Y-%m").month
+        year = datetime.strptime(ym, "%Y-%m").year
     except ValueError:
         raise HTTPException(status_code=400, detail="Identifier must be YYYY-MM")
     
+    # Compute end_date once (last day of month) - used for cache keys
+    last_day_of_month = (datetime.strptime(ym, "%Y-%m") + relativedelta(months=1) - timedelta(days=1)).day
+    cache_end_date = date(year, month, last_day_of_month)
+    
     # Try improved cache first
     try:
-        # Convert YYYY-MM to MM-DD format for cache key (using last day of month)
-        last_day = (datetime.strptime(ym, "%Y-%m") + relativedelta(months=1) - timedelta(days=1)).day
-        cache_date = f"{month:02d}-{last_day:02d}"
+        from redis.asyncio import Redis as AsyncRedis
         
-        # Import redis_client from main module
-        import redis
+        # Create async Redis client if needed (TODO: use shared client from main)
         REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        async_redis = AsyncRedis.from_url(REDIS_URL, decode_responses=False)
         
-        cached_result = await cache_get(redis_client, "monthly", location, cache_date)
-        if cached_result:
-            payload, meta = cached_result
-            logger.info(f"✅ SERVING IMPROVED CACHED MONTHLY: {location} | {ym}")
-            if meta["approximate"]["temporal"]:
-                logger.info(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
-            return payload
+        try:
+            cached_result = await cache_get(
+                async_redis,
+                agg="monthly",
+                original_location=location,
+                end_date=cache_end_date
+            )
+            if cached_result:
+                payload = cached_result["data"]
+                meta = cached_result["meta"]
+                logger.info(f"✅ SERVING IMPROVED CACHED MONTHLY: {location} | {ym}")
+                if meta["approximate"]["temporal"]:
+                    logger.info(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
+                await async_redis.aclose()
+                return payload
+        finally:
+            await async_redis.aclose()
     except Exception as e:
         logger.error(f"Improved cache error for monthly {location}:{ym}: {e}")
     
@@ -627,13 +639,12 @@ async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DE
     try:
         # For monthly, we use the last day of the month as the anchor
         # This gives us a 30-day rolling window ending on the last day of the month
-        last_day = (datetime.strptime(ym, "%Y-%m") + relativedelta(months=1) - timedelta(days=1)).day
         year_means = await _rolling_30d_per_year_via_timeline(
             location=location,
             min_year=min_year,
             max_year=max_year,
             mm=month,
-            dd=last_day,
+            dd=last_day_of_month,
             unit_group=unit_group
         )
         items = _dict_to_values_list(year_means)
@@ -672,9 +683,23 @@ async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DE
     
     # Store in improved cache
     try:
-        cache_date = f"{month:02d}-{last_day:02d}"
-        await cache_set(redis_client, "monthly", location, cache_date, result)
-        logger.info(f"💾 STORED IMPROVED CACHED MONTHLY: {location} | {ym}")
+        from redis.asyncio import Redis as AsyncRedis
+        
+        # Use the same end_date computed earlier
+        REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
+        async_redis = AsyncRedis.from_url(REDIS_URL, decode_responses=False)
+        
+        try:
+            await cache_set(
+                async_redis,
+                agg="monthly",
+                original_location=location,
+                end_date=cache_end_date,
+                payload=result
+            )
+            logger.info(f"💾 STORED IMPROVED CACHED MONTHLY: {location} | {ym}")
+        finally:
+            await async_redis.aclose()
     except Exception as e:
         logger.error(f"Failed to store monthly data in improved cache: {e}")
     

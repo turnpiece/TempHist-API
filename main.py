@@ -12,6 +12,7 @@ import time
 import aiohttp
 import firebase_admin
 import redis
+from redis.asyncio import Redis as AsyncRedis
 import requests
 import httpx
 from dotenv import load_dotenv
@@ -24,6 +25,7 @@ from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from pathlib import Path as PathLib
+from datetime import date as dt_date
 
 # Load environment variables before importing routers
 # Use the directory where main.py is located to find .env file (more robust than current working directory)
@@ -654,13 +656,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ CACHE SYSTEM: Failed to initialize - {e}")
     
-    # Initialize improved cache system
+    # Initialize improved cache system with async Redis
+    global async_redis_client
     try:
-        initialize_improved_cache(redis_client)
-        logger.info("✅ IMPROVED CACHE SYSTEM: Initialized successfully")
+        async_redis_client = AsyncRedis.from_url(REDIS_URL, decode_responses=False)  # Store bytes for gzip
+        await initialize_improved_cache(async_redis_client)
+        logger.info("✅ IMPROVED CACHE SYSTEM: Initialized successfully (async Redis)")
     except Exception as e:
         logger.error(f"❌ IMPROVED CACHE SYSTEM: Failed to initialize - {e}")
         logger.warning("⚠️  Improved cache operations will be skipped until initialization succeeds")
+        async_redis_client = None
     
     # Initialize preapproved locations data
     try:
@@ -701,6 +706,15 @@ async def lifespan(app: FastAPI):
     # Shutdown
     if DEBUG:
         logger.info("🛑 APPLICATION SHUTDOWN: Cleaning up resources")
+    
+    # Clean up async Redis client (global already declared at function start)
+    if async_redis_client:
+        try:
+            await async_redis_client.aclose()
+            if DEBUG:
+                logger.info("✅ Async Redis client closed successfully")
+        except Exception as e:
+            logger.error(f"⚠️  Error closing async Redis client: {e}")
     
     # Clean up HTTP client sessions
     try:
@@ -774,8 +788,11 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
 app.include_router(records_agg_router)
 app.include_router(locations_preapproved_router)
 
-# Initialize Redis with decode_responses for consistent string handling
+# Initialize Redis clients
+# Blocking client for legacy cache operations
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+# Async client for improved cache (non-blocking)
+async_redis_client: Optional[AsyncRedis] = None
 
 # Note: initialize_cache() is called in the lifespan handler (line 614)
 # to ensure proper initialization order during app startup
@@ -1254,11 +1271,25 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
     logger.debug(f"get_weather_for_date for {location} on {date_str}")
     
     # Try improved cache first (for daily data with exact match)
-    if CACHE_ENABLED:
+    if CACHE_ENABLED and async_redis_client:
         try:
-            cached_result = await cache_get(redis_client, "daily", location, date_str)
+            # Parse date string to date object
+            try:
+                end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                # Try MM-DD format
+                month, day = map(int, date_str.split("-"))
+                end_date = datetime(datetime.now().year, month, day).date()
+            
+            cached_result = await cache_get(
+                async_redis_client,
+                agg="daily",
+                original_location=location,
+                end_date=end_date
+            )
             if cached_result:
-                payload, meta = cached_result
+                payload = cached_result["data"]
+                meta = cached_result["meta"]
                 if DEBUG:
                     logger.debug(f"✅ SERVING IMPROVED CACHED WEATHER: {location} | Date: {date_str}")
                     if meta["approximate"]["temporal"]:
@@ -1297,56 +1328,95 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
         timeout = aiohttp.ClientTimeout(total=60)  # Increased from 30s to 60s for better reliability
         logger.info(f"[DEBUG] Creating aiohttp session with 60-second timeout")
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            logger.info(f"[DEBUG] Session created successfully, making GET request to: {url}")
-            async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
-                logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
-                if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
-                    logger.info(f"[DEBUG] Parsing JSON response...")
-                    data = await resp.json()
-                    logger.info(f"[DEBUG] JSON parsed successfully, checking for 'days' data")
-                    days = data.get('days')
-                    if days is not None and len(days) > 0:
-                        # Check if we got valid temperature data
-                        day_data = days[0]
-                        temp = day_data.get('temp')
-                        
-                        if temp is not None:
-                            # Success! Cache and return the data
-                            if FILTER_WEATHER_DATA:
-                                # Filter to only essential temperature data
-                                filtered_days = []
-                                for day_data in days:
-                                    filtered_day = {
-                                        'datetime': day_data.get('datetime'),
-                                        'temp': day_data.get('temp'),
-                                        'tempmin': day_data.get('tempmin'),
-                                        'tempmax': day_data.get('tempmax')
-                                    }
-                                    filtered_days.append(filtered_day)
-                                to_cache = {"days": filtered_days}
-                            else:
-                                # Return full data if filtering is disabled
-                                to_cache = {"days": days}
-
-                            if DEBUG:
-                                logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
-
-                            if CACHE_ENABLED:
-                                cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
-                                set_cache_value(cache_key, cache_duration, json.dumps(to_cache), redis_client)
-                                
-                                # Also store in improved cache
+            # Retry logic for Visual Crossing API rate limiting
+            max_retries = 3
+            for attempt in range(max_retries + 1):
+                logger.info(f"[DEBUG] Session created successfully, making GET request to: {url} (attempt {attempt + 1}/{max_retries + 1})")
+                async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
+                    logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
+                    
+                    # Handle 429 rate limit from Visual Crossing
+                    if resp.status == 429:
+                        if attempt < max_retries:
+                            wait_time = min(2 ** attempt, 60)  # Exponential backoff, max 60 seconds
+                            retry_after = resp.headers.get("Retry-After")
+                            if retry_after:
                                 try:
-                                    await cache_set(redis_client, "daily", location, date_str, to_cache)
-                                except Exception as e:
-                                    logger.error(f"Failed to store in improved cache: {e}")
-                            return to_cache
+                                    wait_time = max(int(retry_after), wait_time)
+                                except ValueError:
+                                    pass
+                            
+                            logger.warning(f"⚠️  Visual Crossing rate limit (429) for {location} on {date_str}, waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
+                            await asyncio.sleep(wait_time)
+                            continue
                         else:
-                            logger.debug(f"No temperature data in first attempt for {date_str}")
-                    else:
-                        logger.debug(f"No 'days' data in first attempt for {date_str}")
-                else:
-                    logger.debug(f"First attempt failed with status {resp.status}")
+                            logger.error(f"❌ Visual Crossing rate limit (429) exceeded after {max_retries + 1} attempts for {location} on {date_str}")
+                            # Fall through to try remote data or return error
+                    
+                    if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
+                        logger.info(f"[DEBUG] Parsing JSON response...")
+                        data = await resp.json()
+                        logger.info(f"[DEBUG] JSON parsed successfully, checking for 'days' data")
+                        days = data.get('days')
+                        if days is not None and len(days) > 0:
+                            # Check if we got valid temperature data
+                            day_data = days[0]
+                            temp = day_data.get('temp')
+                            
+                            if temp is not None:
+                                # Success! Cache and return the data
+                                if FILTER_WEATHER_DATA:
+                                    # Filter to only essential temperature data
+                                    filtered_days = []
+                                    for day_data in days:
+                                        filtered_day = {
+                                            'datetime': day_data.get('datetime'),
+                                            'temp': day_data.get('temp'),
+                                            'tempmin': day_data.get('tempmin'),
+                                            'tempmax': day_data.get('tempmax')
+                                        }
+                                        filtered_days.append(filtered_day)
+                                    to_cache = {"days": filtered_days}
+                                else:
+                                    # Return full data if filtering is disabled
+                                    to_cache = {"days": days}
+
+                                if DEBUG:
+                                    logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
+
+                                if CACHE_ENABLED:
+                                    cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
+                                    set_cache_value(cache_key, cache_duration, json.dumps(to_cache), redis_client)
+                                    
+                                    # Also store in improved cache
+                                    if async_redis_client:
+                                        try:
+                                            # Extract resolvedAddress from VC response if available
+                                            resolved_address = data.get("resolvedAddress")
+                                            end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                                            success = await cache_set(
+                                                async_redis_client,
+                                                agg="daily",
+                                                original_location=location,
+                                                end_date=end_date,
+                                                payload=to_cache,
+                                                resolved_address=resolved_address
+                                            )
+                                            if not success:
+                                                logger.debug(f"Failed to store in improved cache (silent failure expected if cache unavailable)")
+                                        except Exception as e:
+                                            # Log at debug level since cache failures are non-critical
+                                            logger.debug(f"Improved cache storage failed (non-critical): {e}")
+                                return to_cache
+                            else:
+                                logger.debug(f"No temperature data in first attempt for {date_str}")
+                        else:
+                            logger.debug(f"No 'days' data in first attempt for {date_str}")
+                    
+                    # If we didn't return above, break out of retry loop if we got a non-429 error
+                    # (429 will continue the loop, other errors break)
+                    if resp.status != 429:
+                        break
                 
                 # If we reach here, the first attempt didn't provide valid temperature data
                 # Check if we should try with remote data parameters
@@ -1355,43 +1425,83 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                     url_with_remote = build_visual_crossing_url(location, date_str, remote=True)
                     logger.info(f"[DEBUG] Remote fallback URL: {url_with_remote}")
                     
-                    logger.info(f"[DEBUG] Making remote fallback request...")
-                    async with session.get(url_with_remote, headers={"Accept-Encoding": "gzip"}) as remote_resp:
-                        logger.info(f"[DEBUG] Remote response received: status={remote_resp.status}, content-type={remote_resp.headers.get('Content-Type')}")
-                        if remote_resp.status == 200 and 'application/json' in remote_resp.headers.get('Content-Type', ''):
-                            logger.info(f"[DEBUG] Parsing remote JSON response...")
-                            remote_data = await remote_resp.json()
-                            logger.info(f"[DEBUG] Remote JSON parsed successfully, checking for 'days' data")
-                            remote_days = remote_data.get('days')
-                            if remote_days is not None and len(remote_days) > 0:
-                                remote_day_data = remote_days[0]
-                                remote_temp = remote_day_data.get('temp')
-                                
-                                if remote_temp is not None:
-                                    # Success with remote data! Cache and return
-                                    logger.debug(f"Remote data fallback successful for {date_str}")
-                                    to_cache = {"days": remote_days}
-                                    if DEBUG:
-                                        logger.debug(f"🌤️ REMOTE FALLBACK RESPONSE: {location} | {date_str}")
-                                    if CACHE_ENABLED:
-                                        set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(to_cache), redis_client)
-                                        
-                                        # Also store in improved cache
+                    # Retry logic for remote fallback with Visual Crossing API rate limiting
+                    max_retries_remote = 3
+                    for remote_attempt in range(max_retries_remote + 1):
+                        logger.info(f"[DEBUG] Making remote fallback request... (attempt {remote_attempt + 1}/{max_retries_remote + 1})")
+                        async with session.get(url_with_remote, headers={"Accept-Encoding": "gzip"}) as remote_resp:
+                            logger.info(f"[DEBUG] Remote response received: status={remote_resp.status}, content-type={remote_resp.headers.get('Content-Type')}")
+                            
+                            # Handle 429 rate limit from Visual Crossing in remote fallback
+                            if remote_resp.status == 429:
+                                if remote_attempt < max_retries_remote:
+                                    wait_time = min(2 ** remote_attempt, 60)  # Exponential backoff, max 60 seconds
+                                    retry_after = remote_resp.headers.get("Retry-After")
+                                    if retry_after:
                                         try:
-                                            await cache_set(redis_client, "daily", location, date_str, to_cache)
-                                        except Exception as e:
-                                            logger.error(f"Failed to store in improved cache (remote): {e}")
-                                    return to_cache
+                                            wait_time = max(int(retry_after), wait_time)
+                                        except ValueError:
+                                            pass
+                                    
+                                    logger.warning(f"⚠️  Visual Crossing rate limit (429) in remote fallback for {location} on {date_str}, waiting {wait_time}s before retry (attempt {remote_attempt + 1}/{max_retries_remote + 1})")
+                                    await asyncio.sleep(wait_time)
+                                    continue
                                 else:
-                                    logger.debug(f"No temperature data in remote fallback for {date_str}")
-                            else:
-                                logger.debug(f"No 'days' data in remote fallback for {date_str}")
-                        else:
-                            logger.debug(f"Remote fallback failed with status {remote_resp.status}")
+                                    logger.error(f"❌ Visual Crossing rate limit (429) exceeded after {max_retries_remote + 1} remote fallback attempts for {location} on {date_str}")
+                                    # Fall through to return error
+                            
+                            if remote_resp.status == 200 and 'application/json' in remote_resp.headers.get('Content-Type', ''):
+                                logger.info(f"[DEBUG] Parsing remote JSON response...")
+                                remote_data = await remote_resp.json()
+                                logger.info(f"[DEBUG] Remote JSON parsed successfully, checking for 'days' data")
+                                remote_days = remote_data.get('days')
+                                if remote_days is not None and len(remote_days) > 0:
+                                    remote_day_data = remote_days[0]
+                                    remote_temp = remote_day_data.get('temp')
+                                    
+                                    if remote_temp is not None:
+                                        # Success with remote data! Cache and return
+                                        logger.debug(f"Remote data fallback successful for {date_str}")
+                                        to_cache = {"days": remote_days}
+                                        if DEBUG:
+                                            logger.debug(f"🌤️ REMOTE FALLBACK RESPONSE: {location} | {date_str}")
+                                        if CACHE_ENABLED:
+                                            set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(to_cache), redis_client)
+                                            
+                                            # Also store in improved cache
+                                            if async_redis_client:
+                                                try:
+                                                    # Extract resolvedAddress from VC response if available
+                                                    resolved_address = remote_data.get("resolvedAddress")
+                                                    end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                                                    success = await cache_set(
+                                                        async_redis_client,
+                                                        agg="daily",
+                                                        original_location=location,
+                                                        end_date=end_date,
+                                                        payload=to_cache,
+                                                        resolved_address=resolved_address
+                                                    )
+                                                    if not success:
+                                                        logger.debug(f"Failed to store in improved cache (remote, silent failure expected)")
+                                                except Exception as e:
+                                                    # Log at debug level since cache failures are non-critical
+                                                    logger.debug(f"Improved cache storage failed (remote, non-critical): {e}")
+                                        return to_cache
+                                    else:
+                                        logger.debug(f"No temperature data in remote fallback for {date_str}")
+                                else:
+                                    logger.debug(f"No 'days' data in remote fallback for {date_str}")
+                            
+                            # If we didn't return above, break out of retry loop if we got a non-429 error
+                            # (429 will continue the loop, other errors break)
+                            if remote_resp.status != 429:
+                                logger.debug(f"Remote fallback failed with status {remote_resp.status}")
+                                break
                 
                 # If we reach here, neither attempt provided valid temperature data
                 logger.info(f"[DEBUG] Both attempts failed, returning error response")
-                return {"error": "No temperature data available", "status": resp.status}
+                return {"error": "No temperature data available", "status": "unavailable"}
                 
     except Exception as e:
         logger.error(f"[DEBUG] Exception occurred in get_weather_for_date for {date_str}: {str(e)}")
@@ -2786,20 +2896,37 @@ def parse_identifier(period: str, identifier: str) -> tuple:
 
 async def get_temperature_data_v1(location: str, period: str, identifier: str, unit_group: str = "celsius") -> Dict:
     """Get temperature data for v1 API with unified logic using timeline endpoint for all periods."""
-    # Try improved cache first
-    try:
-        cached_result = await cache_get(redis_client, period, location, identifier)
-        if cached_result:
-            payload, meta = cached_result
-            logger.info(f"✅ SERVING IMPROVED CACHED {period.upper()}: {location} | {identifier}")
-            if meta["approximate"]["temporal"]:
-                logger.info(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
-            return payload
-    except Exception as e:
-        logger.error(f"Improved cache error for {period} {location}:{identifier}: {e}")
-    
-    # Parse identifier based on period (all use MM-DD format representing end date)
+    # Parse identifier to get month/day for date conversion
     month, day, _ = parse_identifier(period, identifier)
+    
+    # Convert MM-DD to full date (use current year, but for monthly use last day of month)
+    current_year = datetime.now().year
+    if period == "monthly":
+        # For monthly, use the last day of the month as the anchor date
+        from dateutil.relativedelta import relativedelta
+        last_day_of_month = (datetime(current_year, month, 1) + relativedelta(months=1) - timedelta(days=1)).day
+        end_date = datetime(current_year, month, last_day_of_month).date()
+    else:
+        end_date = datetime(current_year, month, day).date()
+    
+    # Try improved cache first
+    if async_redis_client:
+        try:
+            cached_result = await cache_get(
+                async_redis_client,
+                agg=period,  # type: ignore
+                original_location=location,
+                end_date=end_date
+            )
+            if cached_result:
+                payload = cached_result["data"]
+                meta = cached_result["meta"]
+                logger.info(f"✅ SERVING IMPROVED CACHED {period.upper()}: {location} | {identifier}")
+                if meta["approximate"]["temporal"]:
+                    logger.info(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
+                return payload
+        except Exception as e:
+            logger.error(f"Improved cache error for {period} {location}:{identifier}: {e}")
     
     # Calculate date range based on period and end date
     from datetime import datetime, timedelta
@@ -3014,11 +3141,24 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
     }
     
     # Store in improved cache
-    try:
-        await cache_set(redis_client, period, location, identifier, result)
-        logger.info(f"💾 STORED IMPROVED CACHED {period.upper()}: {location} | {identifier}")
-    except Exception as e:
-        logger.error(f"Failed to store {period} data in improved cache: {e}")
+    if async_redis_client:
+        try:
+            # Use the end_date we computed earlier (with last day of month for monthly)
+            success = await cache_set(
+                async_redis_client,
+                agg=period,  # type: ignore
+                original_location=location,
+                end_date=end_date,
+                payload=result
+                # Note: No resolvedAddress available here as data comes from timeline endpoints
+            )
+            if success:
+                logger.info(f"💾 STORED IMPROVED CACHED {period.upper()}: {location} | {identifier}")
+            else:
+                logger.debug(f"Failed to store {period} data in improved cache (silent failure expected)")
+        except Exception as e:
+            # Log at debug level since cache failures are non-critical
+            logger.debug(f"Improved cache storage failed ({period}, non-critical): {e}")
     
     return result
 
