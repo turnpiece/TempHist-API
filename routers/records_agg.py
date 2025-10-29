@@ -172,7 +172,7 @@ async def _vc_timeline_days(
     end_iso: str,
     unit_group: str = UNIT_GROUP_DEFAULT,
     elements: str = "datetime,temp",
-    include: str = "obs,stats,stations",
+    include: str = "days,stats",  # Reduced from "obs,stats,stations" to control costs
     max_retries: int = 3,
 ) -> Dict[str, Any]:
     """
@@ -793,9 +793,12 @@ class RollingBundleResponse(BaseModel):
     notes: Optional[str] = None
 
 # Configuration
-YEARS_BACK = 50  # 50-year history
-ROLLING_BUNDLE_YEARS_BACK = 10  # 10-year history for rolling bundle (more efficient)
-VC_MAX_CONCURRENCY = 2
+# COST NOTE: YEARS_BACK directly affects Visual Crossing API costs
+# Timeline endpoint charges per record/day retrieved (50 years ≈ 18,250 records per yearly query)
+# Reduce this value to lower costs - consider 10-20 years for most use cases
+YEARS_BACK = int(os.getenv("YEARS_BACK", "20"))  # Reduced from 50 to 20 to control costs (configurable via env var)
+ROLLING_BUNDLE_YEARS_BACK = int(os.getenv("ROLLING_BUNDLE_YEARS_BACK", "10"))  # 10-year history for rolling bundle (more efficient)
+VC_MAX_CONCURRENCY = int(os.getenv("VC_MAX_CONCURRENT_REQUESTS", "1"))  # Conservative default: 1 concurrent request to avoid VC rate limits
 DEFAULT_DAYS_BACK = 0  # Default number of previous days to include (0 = only anchor day)
 
 # Allowed sections for include/exclude parameters
@@ -819,8 +822,9 @@ def _get_station_whitelist(location: str) -> Optional[Set[str]]:
     return None
 
 # Cache for daily data
+# Use longer TTL for historical data (doesn't change, expensive to fetch)
 class KVCache:
-    def __init__(self, redis=None, ttl_seconds: int = 24 * 60 * 60):
+    def __init__(self, redis=None, ttl_seconds: int = 7 * 24 * 60 * 60):  # 7 days for historical data
         self.redis = redis
         self.ttl = ttl_seconds
     
@@ -854,7 +858,12 @@ async def _fetch_daily_data_cached(
     # Create cache key based on location, date range, and unit group
     cache_key = f"daily:{location}:{start_date.isoformat()}:{end_date.isoformat()}:{unit_group}"
     
-    logger.info(f"Fetching daily data for {location} from {start_date} to {end_date} (unit: {unit_group})")
+    date_range_days = (end_date - start_date).days + 1
+    logger.info(f"Fetching daily data for {location} from {start_date} to {end_date} ({date_range_days} days, unit: {unit_group})")
+    
+    # Cost estimation: Visual Crossing charges per record/day retrieved
+    if date_range_days > 1000:
+        logger.warning(f"⚠️  EXPENSIVE QUERY: Fetching {date_range_days} days for {location} (≈{date_range_days} VC records, ~${date_range_days * 0.0001:.2f} estimated)")
     
     # Try to get from cache first
     cached_data = await daily_cache.get(cache_key)
@@ -888,7 +897,7 @@ async def _fetch_daily_data_cached(
                 end_iso=chunk_end.isoformat(),
                 unit_group=unit_group,
                 elements="datetime,temp",
-                include="obs,stats,stations",
+                include="days,stats",  # Reduced from "obs,stats,stations" to control costs
                 max_retries=3  # Use retry logic
             )
             chunk_days = payload.get("days", [])
@@ -922,11 +931,14 @@ async def _fetch_daily_data_cached(
     
     logger.info(f"Processed {len(all_days)} raw days into {len(daily_map)} valid temperature records for {location}")
     
-    # Cache the result
+    # Cache the result (important for expensive queries!)
     if daily_map:
         import json
         await daily_cache.set(cache_key, json.dumps(daily_map).encode())
-        logger.debug(f"Cached {len(daily_map)} temperature records for {location}")
+        if date_range_days > 1000:
+            logger.info(f"💾 CACHED EXPENSIVE QUERY: {len(daily_map)} records for {location} ({date_range_days} days) - future requests will use cache")
+        else:
+            logger.debug(f"Cached {len(daily_map)} temperature records for {location}")
     
     return daily_map
 
@@ -1024,7 +1036,7 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
     url = f"{VC_BASE_URL}/timeline/{location}/{start.isoformat()}/{end.isoformat()}"
     params = {
         "unitGroup": _vc_unit_group(unit_group),
-        "include": "obs,stats,stations",
+        "include": "days,stats",  # Reduced from "obs,stats,stations" to control costs
         "elements": "datetime,temp",  # keep payload small
         "contentType": "json",
             "key": API_KEY,

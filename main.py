@@ -812,10 +812,15 @@ if DEBUG:
 
 # HTTP client configuration
 HTTP_TIMEOUT = 60.0  # Increased from 30s to 60s for better reliability
-MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
+MAX_CONCURRENT_REQUESTS = int(os.getenv("VC_MAX_CONCURRENT_REQUESTS", "1"))  # Conservative default: 1 concurrent request to avoid VC rate limits
+MIN_REQUEST_INTERVAL = float(os.getenv("VC_MIN_REQUEST_INTERVAL", "1.0"))  # Minimum seconds between requests (default: 1s)
 
-# Simple global semaphore - no longer need complex event loop handling with separate services
+# Simple global semaphore - prevents stampeding Visual Crossing API
+# Lower concurrency reduces 429 errors by spacing out requests
 visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+# Track last request time to enforce minimum interval
+_last_vc_request_time = [0.0]  # Use list to allow modification in nested scopes
 
 # HTTP client for external API calls
 async def get_http_client():
@@ -1328,95 +1333,119 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
         timeout = aiohttp.ClientTimeout(total=60)  # Increased from 30s to 60s for better reliability
         logger.info(f"[DEBUG] Creating aiohttp session with 60-second timeout")
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Retry logic for Visual Crossing API rate limiting
-            max_retries = 3
-            for attempt in range(max_retries + 1):
-                logger.info(f"[DEBUG] Session created successfully, making GET request to: {url} (attempt {attempt + 1}/{max_retries + 1})")
-                async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
-                    logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
+            # Protect Visual Crossing API calls with semaphore to prevent rate limiting
+            async with visual_crossing_semaphore:
+                # Enforce minimum interval between requests
+                now = time.time()
+                time_since_last = now - _last_vc_request_time[0]
+                if time_since_last < MIN_REQUEST_INTERVAL:
+                    wait_for_interval = MIN_REQUEST_INTERVAL - time_since_last
+                    logger.debug(f"⏱️  Rate limiting: waiting {wait_for_interval:.2f}s to respect minimum interval")
+                    await asyncio.sleep(wait_for_interval)
+                
+                # Retry logic for Visual Crossing API rate limiting
+                max_retries = 3
+                first_attempt_success = False
+                
+                for attempt in range(max_retries + 1):
+                    logger.info(f"[DEBUG] Making GET request to: {url} (attempt {attempt + 1}/{max_retries + 1})")
+                    should_retry = False
+                    wait_time = 0
                     
-                    # Handle 429 rate limit from Visual Crossing
-                    if resp.status == 429:
-                        if attempt < max_retries:
-                            wait_time = min(2 ** attempt, 60)  # Exponential backoff, max 60 seconds
-                            retry_after = resp.headers.get("Retry-After")
-                            if retry_after:
-                                try:
-                                    wait_time = max(int(retry_after), wait_time)
-                                except ValueError:
-                                    pass
-                            
-                            logger.warning(f"⚠️  Visual Crossing rate limit (429) for {location} on {date_str}, waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
-                            await asyncio.sleep(wait_time)
-                            continue
-                        else:
-                            logger.error(f"❌ Visual Crossing rate limit (429) exceeded after {max_retries + 1} attempts for {location} on {date_str}")
-                            # Fall through to try remote data or return error
+                    # Record request time
+                    _last_vc_request_time[0] = time.time()
                     
-                    if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
-                        logger.info(f"[DEBUG] Parsing JSON response...")
-                        data = await resp.json()
-                        logger.info(f"[DEBUG] JSON parsed successfully, checking for 'days' data")
-                        days = data.get('days')
-                        if days is not None and len(days) > 0:
-                            # Check if we got valid temperature data
-                            day_data = days[0]
-                            temp = day_data.get('temp')
-                            
-                            if temp is not None:
-                                # Success! Cache and return the data
-                                if FILTER_WEATHER_DATA:
-                                    # Filter to only essential temperature data
-                                    filtered_days = []
-                                    for day_data in days:
-                                        filtered_day = {
-                                            'datetime': day_data.get('datetime'),
-                                            'temp': day_data.get('temp'),
-                                            'tempmin': day_data.get('tempmin'),
-                                            'tempmax': day_data.get('tempmax')
-                                        }
-                                        filtered_days.append(filtered_day)
-                                    to_cache = {"days": filtered_days}
-                                else:
-                                    # Return full data if filtering is disabled
-                                    to_cache = {"days": days}
-
-                                if DEBUG:
-                                    logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
-
-                                if CACHE_ENABLED:
-                                    cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
-                                    set_cache_value(cache_key, cache_duration, json.dumps(to_cache), redis_client)
-                                    
-                                    # Also store in improved cache
-                                    if async_redis_client:
-                                        try:
-                                            # Extract resolvedAddress from VC response if available
-                                            resolved_address = data.get("resolvedAddress")
-                                            end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                                            success = await cache_set(
-                                                async_redis_client,
-                                                agg="daily",
-                                                original_location=location,
-                                                end_date=end_date,
-                                                payload=to_cache,
-                                                resolved_address=resolved_address
-                                            )
-                                            if not success:
-                                                logger.debug(f"Failed to store in improved cache (silent failure expected if cache unavailable)")
-                                        except Exception as e:
-                                            # Log at debug level since cache failures are non-critical
-                                            logger.debug(f"Improved cache storage failed (non-critical): {e}")
-                                return to_cache
+                    async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
+                        logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
+                        
+                        # Handle 429 rate limit from Visual Crossing
+                        if resp.status == 429:
+                            if attempt < max_retries:
+                                wait_time = min(2 ** attempt, 60)  # Exponential backoff, max 60 seconds
+                                retry_after = resp.headers.get("Retry-After")
+                                if retry_after:
+                                    try:
+                                        wait_time = max(int(retry_after), wait_time)
+                                    except ValueError:
+                                        pass
+                                
+                                logger.warning(f"⚠️  Visual Crossing rate limit (429) for {location} on {date_str}, will wait {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
+                                should_retry = True
+                                # Exit response context, then wait and retry
                             else:
-                                logger.debug(f"No temperature data in first attempt for {date_str}")
-                        else:
-                            logger.debug(f"No 'days' data in first attempt for {date_str}")
+                                logger.error(f"❌ Visual Crossing rate limit (429) exceeded after {max_retries + 1} attempts for {location} on {date_str}")
+                                # Fall through to try remote data
+                        
+                        if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
+                            logger.info(f"[DEBUG] Parsing JSON response...")
+                            data = await resp.json()
+                            logger.info(f"[DEBUG] JSON parsed successfully, checking for 'days' data")
+                            days = data.get('days')
+                            if days is not None and len(days) > 0:
+                                # Check if we got valid temperature data
+                                day_data = days[0]
+                                temp = day_data.get('temp')
+                                
+                                if temp is not None:
+                                    # Success! Cache and return the data
+                                    if FILTER_WEATHER_DATA:
+                                        # Filter to only essential temperature data
+                                        filtered_days = []
+                                        for day_data in days:
+                                            filtered_day = {
+                                                'datetime': day_data.get('datetime'),
+                                                'temp': day_data.get('temp'),
+                                                'tempmin': day_data.get('tempmin'),
+                                                'tempmax': day_data.get('tempmax')
+                                            }
+                                            filtered_days.append(filtered_day)
+                                        to_cache = {"days": filtered_days}
+                                    else:
+                                        # Return full data if filtering is disabled
+                                        to_cache = {"days": days}
+
+                                    if DEBUG:
+                                        logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
+
+                                    if CACHE_ENABLED:
+                                        cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
+                                        set_cache_value(cache_key, cache_duration, json.dumps(to_cache), redis_client)
+                                        
+                                        # Also store in improved cache
+                                        if async_redis_client:
+                                            try:
+                                                # Extract resolvedAddress from VC response if available
+                                                resolved_address = data.get("resolvedAddress")
+                                                end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                                                success = await cache_set(
+                                                    async_redis_client,
+                                                    agg="daily",
+                                                    original_location=location,
+                                                    end_date=end_date,
+                                                    payload=to_cache,
+                                                    resolved_address=resolved_address
+                                                )
+                                                if not success:
+                                                    logger.debug(f"Failed to store in improved cache (silent failure expected if cache unavailable)")
+                                            except Exception as e:
+                                                # Log at debug level since cache failures are non-critical
+                                                logger.debug(f"Improved cache storage failed (non-critical): {e}")
+                                    first_attempt_success = True
+                                    return to_cache
+                                else:
+                                    logger.debug(f"No temperature data in first attempt for {date_str}")
+                            else:
+                                logger.debug(f"No 'days' data in first attempt for {date_str}")
+                        
+                        # Mark that we got a non-429 response (even if not successful)
+                        if resp.status != 429:
+                            break  # Exit retry loop for non-429 errors
                     
-                    # If we didn't return above, break out of retry loop if we got a non-429 error
-                    # (429 will continue the loop, other errors break)
-                    if resp.status != 429:
-                        break
+                    # After exiting response context: handle retry if needed
+                    if should_retry and wait_time > 0:
+                        logger.warning(f"⏳ Waiting {wait_time}s before retrying Visual Crossing API request...")
+                        await asyncio.sleep(wait_time)
+                        continue  # Retry with a new request
                 
                 # If we reach here, the first attempt didn't provide valid temperature data
                 # Check if we should try with remote data parameters
@@ -1429,23 +1458,25 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                     max_retries_remote = 3
                     for remote_attempt in range(max_retries_remote + 1):
                         logger.info(f"[DEBUG] Making remote fallback request... (attempt {remote_attempt + 1}/{max_retries_remote + 1})")
+                        should_retry_remote = False
+                        wait_time_remote = 0
+                        
                         async with session.get(url_with_remote, headers={"Accept-Encoding": "gzip"}) as remote_resp:
                             logger.info(f"[DEBUG] Remote response received: status={remote_resp.status}, content-type={remote_resp.headers.get('Content-Type')}")
                             
                             # Handle 429 rate limit from Visual Crossing in remote fallback
                             if remote_resp.status == 429:
                                 if remote_attempt < max_retries_remote:
-                                    wait_time = min(2 ** remote_attempt, 60)  # Exponential backoff, max 60 seconds
+                                    wait_time_remote = min(2 ** remote_attempt, 60)  # Exponential backoff, max 60 seconds
                                     retry_after = remote_resp.headers.get("Retry-After")
                                     if retry_after:
                                         try:
-                                            wait_time = max(int(retry_after), wait_time)
+                                            wait_time_remote = max(int(retry_after), wait_time_remote)
                                         except ValueError:
                                             pass
                                     
-                                    logger.warning(f"⚠️  Visual Crossing rate limit (429) in remote fallback for {location} on {date_str}, waiting {wait_time}s before retry (attempt {remote_attempt + 1}/{max_retries_remote + 1})")
-                                    await asyncio.sleep(wait_time)
-                                    continue
+                                    logger.warning(f"⚠️  Visual Crossing rate limit (429) in remote fallback for {location} on {date_str}, will wait {wait_time_remote}s before retry (attempt {remote_attempt + 1}/{max_retries_remote + 1})")
+                                    should_retry_remote = True
                                 else:
                                     logger.error(f"❌ Visual Crossing rate limit (429) exceeded after {max_retries_remote + 1} remote fallback attempts for {location} on {date_str}")
                                     # Fall through to return error
@@ -1493,11 +1524,16 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                                 else:
                                     logger.debug(f"No 'days' data in remote fallback for {date_str}")
                             
-                            # If we didn't return above, break out of retry loop if we got a non-429 error
-                            # (429 will continue the loop, other errors break)
+                            # Mark that we got a non-429 response (even if not successful)
                             if remote_resp.status != 429:
                                 logger.debug(f"Remote fallback failed with status {remote_resp.status}")
-                                break
+                                break  # Exit retry loop for non-429 errors
+                        
+                        # After exiting response context: handle retry if needed
+                        if should_retry_remote and wait_time_remote > 0:
+                            logger.warning(f"⏳ Waiting {wait_time_remote}s before retrying remote fallback...")
+                            await asyncio.sleep(wait_time_remote)
+                            continue  # Retry with a new request
                 
                 # If we reach here, neither attempt provided valid temperature data
                 logger.info(f"[DEBUG] Both attempts failed, returning error response")
@@ -2659,8 +2695,11 @@ def is_location_likely_invalid(location: str) -> bool:
     location_lower = location.lower().strip()
     return any(pattern.lower() in location_lower for pattern in invalid_patterns)
 
-def get_year_range(current_year: int, years_back: int = 50) -> List[int]:
+def get_year_range(current_year: int, years_back: int = None) -> List[int]:
     """Get a list of years for historical data analysis."""
+    if years_back is None:
+        # Use configurable YEARS_BACK from environment (default: 20 to control costs)
+        years_back = int(os.getenv("YEARS_BACK", "20"))
     return list(range(current_year - years_back, current_year + 1))
 
 def create_metadata(total_years: int, available_years: int, missing_years: List[Dict], 
@@ -2931,9 +2970,10 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
     # Calculate date range based on period and end date
     from datetime import datetime, timedelta
     
-    # Use 50 years of data ending at current year (consistent with other endpoints)
+    # Use configurable years of data (default: 20 to control costs)
     current_year = datetime.now().year
-    start_year = current_year - 50  # 50 years back + current year = 51 years total
+    years_back = int(os.getenv("YEARS_BACK", "20"))
+    start_year = current_year - years_back  # Years back + current year
     years = get_year_range(current_year)
     end_date = datetime(current_year, month, day)
     
