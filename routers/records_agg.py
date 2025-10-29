@@ -897,7 +897,7 @@ async def _fetch_daily_data_cached(
                 end_iso=chunk_end.isoformat(),
                 unit_group=unit_group,
                 elements="datetime,temp",
-                include="days,stats",  # Reduced from "obs,stats,stations" to control costs
+                include="days,stats",
                 max_retries=3  # Use retry logic
             )
             chunk_days = payload.get("days", [])
