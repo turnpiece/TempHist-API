@@ -7,6 +7,9 @@ from pydantic import BaseModel
 from constants import VC_BASE_URL
 from dateutil.relativedelta import relativedelta
 
+# Import improved caching utilities
+from app.cache_utils import cache_get, cache_set, canonicalize_location
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -597,6 +600,27 @@ async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DE
     except ValueError:
         raise HTTPException(status_code=400, detail="Identifier must be YYYY-MM")
     
+    # Try improved cache first
+    try:
+        # Convert YYYY-MM to MM-DD format for cache key (using last day of month)
+        last_day = (datetime.strptime(ym, "%Y-%m") + relativedelta(months=1) - timedelta(days=1)).day
+        cache_date = f"{month:02d}-{last_day:02d}"
+        
+        # Import redis_client from main module
+        import redis
+        REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        
+        cached_result = await cache_get(redis_client, "monthly", location, cache_date)
+        if cached_result:
+            payload, meta = cached_result
+            logger.info(f"✅ SERVING IMPROVED CACHED MONTHLY: {location} | {ym}")
+            if meta["approximate"]["temporal"]:
+                logger.info(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
+            return payload
+    except Exception as e:
+        logger.error(f"Improved cache error for monthly {location}:{ym}: {e}")
+    
     min_year, max_year = _years_range()
     
     # Use timeline-based approach for more reliable data
@@ -630,7 +654,7 @@ async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DE
     
     completeness = round(available_years / total_years * 100, 1) if total_years > 0 else 0.0
     
-    return {
+    result = {
         "period": "monthly", 
         "location": location, 
         "identifier": ym, 
@@ -645,6 +669,16 @@ async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DE
             "completeness": completeness
         }
     }
+    
+    # Store in improved cache
+    try:
+        cache_date = f"{month:02d}-{last_day:02d}"
+        await cache_set(redis_client, "monthly", location, cache_date, result)
+        logger.info(f"💾 STORED IMPROVED CACHED MONTHLY: {location} | {ym}")
+    except Exception as e:
+        logger.error(f"Failed to store monthly data in improved cache: {e}")
+    
+    return result
 
 @router.get("/v1/records/weekly/{location}/{week_start}/series")
 async def weekly_series(location: str, week_start: str, unit_group: str = UNIT_GROUP_DEFAULT):

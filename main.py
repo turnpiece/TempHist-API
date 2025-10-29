@@ -23,9 +23,12 @@ from pydantic import ValidationError
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from pathlib import Path as PathLib
 
 # Load environment variables before importing routers
-load_dotenv()
+# Use the directory where main.py is located to find .env file (more robust than current working directory)
+env_path = PathLib(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # Import the new router
 from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
@@ -45,6 +48,13 @@ from cache_utils import (
     scheduled_cache_warming,
     # Cache initialization
     initialize_cache
+)
+
+# Import improved caching utilities
+from app.cache_utils import (
+    initialize_improved_cache,
+    cache_get,
+    cache_set
 )
 from version import __version__
 
@@ -644,6 +654,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ CACHE SYSTEM: Failed to initialize - {e}")
     
+    # Initialize improved cache system
+    try:
+        initialize_improved_cache(redis_client)
+        logger.info("✅ IMPROVED CACHE SYSTEM: Initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ IMPROVED CACHE SYSTEM: Failed to initialize - {e}")
+        logger.warning("⚠️  Improved cache operations will be skipped until initialization succeeds")
+    
     # Initialize preapproved locations data
     try:
         await initialize_locations_data(redis_client)
@@ -1230,14 +1248,32 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
     1. First tries without remote data parameters
     2. If no temperature data and year >= 2005, retries with remote data parameters
     3. Never uses remote data for today's data
+    
+    Uses improved caching with canonicalized location keys and temporal tolerance.
     """
     logger.debug(f"get_weather_for_date for {location} on {date_str}")
+    
+    # Try improved cache first (for daily data with exact match)
+    if CACHE_ENABLED:
+        try:
+            cached_result = await cache_get(redis_client, "daily", location, date_str)
+            if cached_result:
+                payload, meta = cached_result
+                if DEBUG:
+                    logger.debug(f"✅ SERVING IMPROVED CACHED WEATHER: {location} | Date: {date_str}")
+                    if meta["approximate"]["temporal"]:
+                        logger.debug(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
+                return payload
+        except Exception as e:
+            logger.error(f"Improved cache error for {location}:{date_str}: {e}")
+    
+    # Fallback to legacy cache
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
         cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
         if cached_data:
             if DEBUG:
-                logger.debug(f"✅ SERVING CACHED WEATHER: {cache_key} | Location: {location} | Date: {date_str}")
+                logger.debug(f"✅ SERVING LEGACY CACHED WEATHER: {cache_key} | Location: {location} | Date: {date_str}")
             try:
                 return json.loads(cached_data)
             except Exception as e:
@@ -1298,6 +1334,12 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                             if CACHE_ENABLED:
                                 cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
                                 set_cache_value(cache_key, cache_duration, json.dumps(to_cache), redis_client)
+                                
+                                # Also store in improved cache
+                                try:
+                                    await cache_set(redis_client, "daily", location, date_str, to_cache)
+                                except Exception as e:
+                                    logger.error(f"Failed to store in improved cache: {e}")
                             return to_cache
                         else:
                             logger.debug(f"No temperature data in first attempt for {date_str}")
@@ -1333,6 +1375,12 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                                         logger.debug(f"🌤️ REMOTE FALLBACK RESPONSE: {location} | {date_str}")
                                     if CACHE_ENABLED:
                                         set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(to_cache), redis_client)
+                                        
+                                        # Also store in improved cache
+                                        try:
+                                            await cache_set(redis_client, "daily", location, date_str, to_cache)
+                                        except Exception as e:
+                                            logger.error(f"Failed to store in improved cache (remote): {e}")
                                     return to_cache
                                 else:
                                     logger.debug(f"No temperature data in remote fallback for {date_str}")
@@ -2738,6 +2786,18 @@ def parse_identifier(period: str, identifier: str) -> tuple:
 
 async def get_temperature_data_v1(location: str, period: str, identifier: str, unit_group: str = "celsius") -> Dict:
     """Get temperature data for v1 API with unified logic using timeline endpoint for all periods."""
+    # Try improved cache first
+    try:
+        cached_result = await cache_get(redis_client, period, location, identifier)
+        if cached_result:
+            payload, meta = cached_result
+            logger.info(f"✅ SERVING IMPROVED CACHED {period.upper()}: {location} | {identifier}")
+            if meta["approximate"]["temporal"]:
+                logger.info(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
+            return payload
+    except Exception as e:
+        logger.error(f"Improved cache error for {period} {location}:{identifier}: {e}")
+    
     # Parse identifier based on period (all use MM-DD format representing end date)
     month, day, _ = parse_identifier(period, identifier)
     
@@ -2940,7 +3000,7 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
         "end_date": end_date.strftime("%Y-%m-%d")
     }
     
-    return {
+    result = {
         "period": period,
         "location": location,
         "identifier": identifier,
@@ -2952,6 +3012,15 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
         "summary": summary_text,
         "metadata": create_metadata(len(years), len(values), missing_years, additional_metadata)
     }
+    
+    # Store in improved cache
+    try:
+        await cache_set(redis_client, period, location, identifier, result)
+        logger.info(f"💾 STORED IMPROVED CACHED {period.upper()}: {location} | {identifier}")
+    except Exception as e:
+        logger.error(f"Failed to store {period} data in improved cache: {e}")
+    
+    return result
 
 @app.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
 async def get_record(
