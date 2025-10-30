@@ -166,7 +166,8 @@ async def fetch_historysummary(
         "contentType": "json",
         "unitGroup": unit_group,
         "locations": location,
-            "key": API_KEY,
+        "maxStations": 8,
+        "key": API_KEY,
     }
     if params_extra:
         params.update(params_extra)

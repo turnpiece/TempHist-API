@@ -2729,6 +2729,7 @@ async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, u
         "contentType": "json",
         "unitGroup": unit_group,
         "locations": location,
+        "maxStations": 8,
         "key": API_KEY,
     }
     
