@@ -1,6 +1,6 @@
 # routers/records_agg.py
 from fastapi import APIRouter, HTTPException, Query
-from typing import List, Dict, Any, Optional, Tuple, Literal, Set, Iterable
+from typing import List, Dict, Any, Optional, Tuple, Literal, Set
 import os, aiohttp, asyncio, json
 from datetime import datetime, date, timedelta
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ router = APIRouter()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
+<<<<<<< HEAD
 # Log API key status (without exposing the actual key)
 if API_KEY:
     logger.info(f"VISUAL_CROSSING_API_KEY loaded: {API_KEY[:10]}... (length: {len(API_KEY)})")
@@ -28,6 +29,8 @@ def _vc_unit_group(u: str) -> str:
     # Default sensibly
     return "metric"
 
+=======
+>>>>>>> parent of 7c50047 (Use Visual Crossing timeline endpoint rather than historysummary)
 @router.api_route("/v1/records/rolling-bundle/test-cors", methods=["GET", "OPTIONS"])
 async def test_rolling_bundle_cors():
     """Test CORS for rolling-bundle endpoint"""
@@ -117,9 +120,9 @@ async def _rolling_bundle_preload_impl(
             "optimized": True,
             "included_sections": ["week", "month", "year"],
             "data_sources": {
-                "weekly": "timeline + local aggregation",
-                "monthly": "timeline + local aggregation", 
-                "yearly": "timeline + local aggregation"
+                "weekly": "historysummary API",
+                "monthly": "historysummary API", 
+                "yearly": "historysummary API"
             }
         },
         "notes": notes,
@@ -180,7 +183,7 @@ async def fetch_historysummary(
         "breakBy": break_by,              # years | self | none
         "dailySummaries": "true" if daily_summaries else "false",
         "contentType": "json",
-        "unitGroup": _vc_unit_group(unit_group),
+        "unitGroup": unit_group,
         "locations": location,
             "key": API_KEY,
     }
@@ -209,6 +212,7 @@ def _historysummary_values(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         return data["values"]
     return []
 
+<<<<<<< HEAD
 # --- New: timeline-based fetch + per-year rolling means ---
 
 async def _vc_timeline_days(
@@ -558,6 +562,8 @@ async def rolling_year_per_year_via_timeline(
 
     return out
 
+=======
+>>>>>>> parent of 7c50047 (Use Visual Crossing timeline endpoint rather than historysummary)
 def _row_year(row: Dict[str, Any]) -> Optional[int]:
     for k in ("year", "years"):
         v = row.get(k)
@@ -603,133 +609,44 @@ async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DE
         month = datetime.strptime(ym, "%Y-%m").month
     except ValueError:
         raise HTTPException(status_code=400, detail="Identifier must be YYYY-MM")
-    
     min_year, max_year = _years_range()
-    
-    # Use timeline-based approach for more reliable data
-    try:
-        # For monthly, we use the last day of the month as the anchor
-        # This gives us a 30-day rolling window ending on the last day of the month
-        last_day = (datetime.strptime(ym, "%Y-%m") + relativedelta(months=1) - timedelta(days=1)).day
-        year_means = await _rolling_30d_per_year_via_timeline(
-            location=location,
-            min_year=min_year,
-            max_year=max_year,
-            mm=month,
-            dd=last_day,
-            unit_group=unit_group
-        )
-        items = _dict_to_values_list(year_means)
-    except Exception as e:
-        # Fallback to old method if timeline fails
-        payload = await fetch_historysummary(location, min_year, max_year, chrono_unit="months", break_by="years", unit_group=unit_group)
-        rows = _historysummary_values(payload)
-        items = []
-        for r in rows:
-            if _row_month(r) == month:
-                y = _row_year(r); t = _row_mean_temp(r)
-                if y is not None and t is not None:
-                    items.append({"year": y, "temp": round(t, 2)})
-        items.sort(key=lambda x: x["year"])
-    
-    # Calculate completeness metadata
-    total_years = max_year - min_year + 1
-    available_years = len(items)
-    missing_years = []
-    
-    # Track missing years
-    available_years_set = {item["year"] for item in items}
-    for year in range(min_year, max_year + 1):
-        if year not in available_years_set:
-            missing_years.append({"year": year, "reason": "insufficient_data_timeline"})
-    
-    completeness = round(available_years / total_years * 100, 1) if total_years > 0 else 0.0
-    
-    return {
-        "period": "monthly", 
-        "location": location, 
-        "identifier": ym, 
-        "unit_group": unit_group, 
-        "values": items, 
-        "count": len(items),
-        "note": "timeline + local aggregation (30-day rolling window, min 20 days required)",
-        "metadata": {
-            "total_years": total_years,
-            "available_years": available_years,
-            "missing_years": missing_years,
-            "completeness": completeness
-        }
-    }
+    payload = await fetch_historysummary(location, min_year, max_year, chrono_unit="months", break_by="years", unit_group=unit_group)
+    rows = _historysummary_values(payload)
+    items = []
+    for r in rows:
+        if _row_month(r) == month:
+            y = _row_year(r); t = _row_mean_temp(r)
+            if y is not None and t is not None:
+                items.append({"year": y, "temp": round(t, 2)})
+    items.sort(key=lambda x: x["year"])
+    return {"period": "monthly", "location": location, "identifier": ym, "unit_group": unit_group, "values": items, "count": len(items)}
 
 @router.get("/v1/records/weekly/{location}/{week_start}/series")
 async def weekly_series(location: str, week_start: str, unit_group: str = UNIT_GROUP_DEFAULT):
     """
-    week_start = MM-DD or YYYY-MM-DD (anchor). Uses timeline endpoint for reliable data.
+    week_start = MM-DD or YYYY-MM-DD (anchor). We match the *ISO week number* of that anchor
+    across all years using historysummary weeks (one call).
     """
     try:
         mmdd = week_start if len(week_start) == 5 else datetime.strptime(week_start, "%Y-%m-%d").strftime("%m-%d")
-        mm, dd = map(int, mmdd.split("-"))
     except Exception:
         raise HTTPException(status_code=400, detail="Identifier must be MM-DD or YYYY-MM-DD")
-    
     min_year, max_year = _years_range()
-    
-    # Use timeline-based approach for more reliable data
-    try:
-        year_means = await _rolling_week_per_year_via_timeline(
-            location=location,
-            min_year=min_year,
-            max_year=max_year,
-            mm=mm,
-            dd=dd,
-            unit_group=unit_group
-        )
-        items = _dict_to_values_list(year_means)
-    except Exception as e:
-        # Fallback to old method if timeline fails
-        payload = await fetch_historysummary(location, min_year, max_year, chrono_unit="weeks", break_by="years", unit_group=unit_group)
-        rows = _historysummary_values(payload)
-        desired_week = {y: datetime.strptime(f"{y}-{mmdd}", "%Y-%m-%d").isocalendar().week for y in range(min_year, max_year + 1)}
-        items = []
-        for r in rows:
-            y = _row_year(r); start = _row_week_start(r); t = _row_mean_temp(r)
-            if y is None or t is None or not start: continue
-            try:
-                wn = datetime.strptime(start, "%Y-%m-%d").isocalendar().week
-            except Exception:
-                continue
-            if wn == desired_week.get(y):
-                items.append({"year": y, "temp": round(t, 2)})
-        items.sort(key=lambda x: x["year"])
-    
-    # Calculate completeness metadata
-    total_years = max_year - min_year + 1
-    available_years = len(items)
-    missing_years = []
-    
-    # Track missing years
-    available_years_set = {item["year"] for item in items}
-    for year in range(min_year, max_year + 1):
-        if year not in available_years_set:
-            missing_years.append({"year": year, "reason": "insufficient_data_timeline"})
-    
-    completeness = round(available_years / total_years * 100, 1) if total_years > 0 else 0.0
-    
-    return {
-        "period": "weekly", 
-        "location": location, 
-        "identifier": mmdd, 
-        "unit_group": unit_group, 
-        "values": items, 
-        "count": len(items), 
-        "note": "timeline + local aggregation (7-day rolling window, min 5 days required)",
-        "metadata": {
-            "total_years": total_years,
-            "available_years": available_years,
-            "missing_years": missing_years,
-            "completeness": completeness
-        }
-    }
+    payload = await fetch_historysummary(location, min_year, max_year, chrono_unit="weeks", break_by="years", unit_group=unit_group)
+    rows = _historysummary_values(payload)
+    desired_week = {y: datetime.strptime(f"{y}-{mmdd}", "%Y-%m-%d").isocalendar().week for y in range(min_year, max_year + 1)}
+    items = []
+    for r in rows:
+        y = _row_year(r); start = _row_week_start(r); t = _row_mean_temp(r)
+        if y is None or t is None or not start: continue
+        try:
+            wn = datetime.strptime(start, "%Y-%m-%d").isocalendar().week
+        except Exception:
+            continue
+        if wn == desired_week.get(y):
+            items.append({"year": y, "temp": round(t, 2)})
+    items.sort(key=lambda x: x["year"])
+    return {"period": "weekly", "location": location, "identifier": mmdd, "unit_group": unit_group, "values": items, "count": len(items), "note": "historysummary uses week bins; we align via ISO week number"}
 
 # ============================================================================
 # ROLLING BUNDLE ENDPOINT
@@ -770,6 +687,7 @@ DEFAULT_DAYS_BACK = 0  # Default number of previous days to include (0 = only an
 # Allowed sections for include/exclude parameters
 ALLOWED_SECTIONS = {"day", "week", "month", "year"}
 
+<<<<<<< HEAD
 # Station filtering for continuity (e.g., Berlin airport changes)
 STATION_WHITELISTS = {
     "berlin": {"10382099999", "10385099999", "10386099999", "10395099999", "10379099999"},  # Berlin area stations
@@ -787,6 +705,8 @@ def _get_station_whitelist(location: str) -> Optional[Set[str]]:
             return stations
     return None
 
+=======
+>>>>>>> parent of 7c50047 (Use Visual Crossing timeline endpoint rather than historysummary)
 # Cache for daily data
 class KVCache:
     def __init__(self, redis=None, ttl_seconds: int = 24 * 60 * 60):
@@ -903,8 +823,8 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
     
     url = f"{VC_BASE_URL}/timeline/{location}/{start.isoformat()}/{end.isoformat()}"
     params = {
-        "unitGroup": _vc_unit_group(unit_group),
-        "include": "obs,stats,stations",
+        "unitGroup": unit_group,
+        "include": "days",
         "elements": "datetime,temp",  # keep payload small
         "contentType": "json",
             "key": API_KEY,
@@ -1152,9 +1072,9 @@ async def _rolling_bundle_impl(
             "included_sections": list(wanted),
             "data_sources": {
                 "daily": "Timeline API",
-                "weekly": "timeline + local aggregation",
-                "monthly": "timeline + local aggregation", 
-                "yearly": "timeline + local aggregation"
+                "weekly": "historysummary API",
+                "monthly": "historysummary API", 
+                "yearly": "historysummary API"
             }
         },
         "notes": notes,
