@@ -1469,11 +1469,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             tense_context = "was"
             tense_context_alt = "was"
             tense_warm_cold = "was"
-<<<<<<< HEAD
             # Don't override friendly_date - keep the actual date like "October 25th"
-=======
-            friendly_date = "yesterday"
->>>>>>> parent of 7c50047 (Use Visual Crossing timeline endpoint rather than historysummary)
         else:
             # Past date - use past tense
             tense_context = "was"
@@ -1788,19 +1784,6 @@ async def health_check():
     """Simple health check endpoint for Render load balancers."""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-<<<<<<< HEAD
-@app.get("/test-debug")
-async def test_debug_config():
-    """Test endpoint to check debug configuration."""
-    return {
-        "debug_enabled": DEBUG,
-        "environment": {
-            "DEBUG": os.getenv("DEBUG", "false")
-        }
-    }
-
-=======
->>>>>>> parent of 7c50047 (Use Visual Crossing timeline endpoint rather than historysummary)
 @app.get("/health/detailed")
 async def detailed_health_check():
     """Comprehensive health check endpoint for debugging and monitoring."""
