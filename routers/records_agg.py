@@ -167,6 +167,7 @@ async def fetch_historysummary(
         "unitGroup": unit_group,
         "locations": location,
         "maxStations": 8,
+        "maxDistance": 120000,
         "key": API_KEY,
     }
     if params_extra:
