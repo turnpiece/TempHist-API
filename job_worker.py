@@ -12,10 +12,6 @@ import signal
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Any
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
 
 from cache_utils import get_job_manager, get_cache, JobStatus
 from routers.records_agg import rolling_bundle as rolling_bundle_func

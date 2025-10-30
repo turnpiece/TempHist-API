@@ -409,16 +409,6 @@ VISUAL_CROSSING_UNIT_GROUP = "metric"  # Visual Crossing API still uses "metric"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
 VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 
-def _vc_unit_group(u: str) -> str:
-    """Map our unit groups to Visual Crossing's expected values."""
-    u = (u or "").lower()
-    if u in ("c", "celsius", "metric", "si"):
-        return "metric"
-    if u in ("f", "fahrenheit", "us"):
-        return "us"
-    # Default sensibly
-    return "metric"
-
 def clean_location_string(location: str) -> str:
     """Clean location string by removing non-printable ASCII characters."""
     import re
@@ -1988,16 +1978,6 @@ async def health_check():
     """Simple health check endpoint for Render load balancers."""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-@app.get("/test-debug")
-async def test_debug_config():
-    """Test endpoint to check debug configuration."""
-    return {
-        "debug_enabled": DEBUG,
-        "environment": {
-            "DEBUG": os.getenv("DEBUG", "false")
-        }
-    }
-
 @app.get("/health/detailed")
 async def detailed_health_check():
     """Comprehensive health check endpoint for debugging and monitoring."""
@@ -2932,11 +2912,47 @@ def parse_identifier(period: str, identifier: str) -> tuple:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Identifier must be in MM-DD format: {str(e)}")
 
+async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, unit_group: str = "metric"):
+    """Fetch yearly summary data from Visual Crossing historysummary endpoint."""
+    from constants import VC_BASE_URL
+    url = f"{VC_BASE_URL}/weatherdata/historysummary"
+    params = {
+        "aggregateHours": 24,
+        "minYear": start_year,
+        "maxYear": end_year,
+        "chronoUnit": "years",
+        "breakBy": "years",
+        "dailySummaries": "false",
+        "contentType": "json",
+        "unitGroup": unit_group,
+        "locations": location,
+        "key": API_KEY,
+    }
+    
+    async with visual_crossing_semaphore:
+        http = await get_http_client()
+        async with http:
+            r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
+    r.raise_for_status()
+    data = r.json()
+    
+    # Parse the response to extract yearly temperature data
+    yearly_data = []
+    if 'locations' in data and location in data['locations']:
+        location_data = data['locations'][location]
+        if 'values' in location_data:
+            for value in location_data['values']:
+                year = value.get('year')
+                temp = value.get('temp')
+                if year and temp is not None:
+                    yearly_data.append((year, temp))
+    
+    return yearly_data
 
 async def get_temperature_data_v1(location: str, period: str, identifier: str, unit_group: str = "celsius") -> Dict:
-    """Get temperature data for v1 API with unified logic using timeline endpoint for all periods."""
-    # Parse identifier to get month/day for date conversion
-    month, day, _ = parse_identifier(period, identifier)
+    """Get temperature data for v1 API with unified logic using historysummary for weekly/monthly/yearly."""
+    # Parse identifier based on period (all use MM-DD format representing end date)
+    month, day, period_type = parse_identifier(period, identifier)
     
     # Convert MM-DD to full date (use current year, but for monthly use last day of month)
     current_year = datetime.now().year
@@ -3021,80 +3037,193 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
                     ))
     
     elif period in ["weekly", "monthly"]:
-        # Use timeline-based approach for more reliable data
+        # Use historysummary endpoint for weekly/monthly data (much more efficient)
         try:
-            from routers.records_agg import _rolling_week_per_year_via_timeline, _rolling_30d_per_year_via_timeline
+            from routers.records_agg import fetch_historysummary, _historysummary_values, _row_year, _row_mean_temp
             
-            if period == "weekly":
-                year_means = await _rolling_week_per_year_via_timeline(
-                    location=location,
-                    min_year=start_year,
-                    max_year=current_year,
-                    mm=month,
-                    dd=day,
-                    unit_group=unit_group
-                )
-            else:  # monthly
-                year_means = await _rolling_30d_per_year_via_timeline(
-                    location=location,
-                    min_year=start_year,
-                    max_year=current_year,
-                    mm=month,
-                    dd=day,
-                    unit_group=unit_group
-                )
+            # Determine chrono_unit based on period
+            chrono_unit = "weeks" if period == "weekly" else "months"
             
-            # Convert to TemperatureValue objects and track missing years
-            for year in range(start_year, current_year + 1):
-                temp = year_means.get(year)
-                if temp is not None:
-                    all_temps.append(temp)
-                    values.append(TemperatureValue(
-                        date=f"{year}-{month:02d}-{day:02d}",
-                        year=year,
-                        temperature=round(temp, 1),
-                    ))
-                else:
-                    # Get more detailed information about why data is insufficient
-                    reason = f"insufficient_data_timeline (no temperature data for year {year})"
-                    track_missing_year(missing_years, year, reason)
-                    
-        except Exception as e:
-            logger.error(f"Timeline approach failed for {period}: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to fetch {period} data: {str(e)}")
-    
-    elif period == "yearly":
-        # Use timeline-based approach for yearly data
-        try:
-            from routers.records_agg import rolling_year_per_year_via_timeline
+            if DEBUG:
+                logger.debug(f"Fetching {period} summary for {location} from {start_year} to {current_year}")
             
-            year_means = await rolling_year_per_year_via_timeline(
-                location=location,
-                min_year=start_year,
-                max_year=current_year,
-                end_month=month,
-                end_day=day,
-                unit_group=unit_group
+            payload = await fetch_historysummary(
+                location, 
+                start_year, 
+                current_year, 
+                chrono_unit=chrono_unit, 
+                break_by="years"
             )
             
-            # Convert to TemperatureValue objects and track missing years
+            rows = _historysummary_values(payload)
+            if DEBUG:
+                logger.debug(f"Got {len(rows)} {period} data points")
+            
+            # For weekly, we need to match by ISO week number
+            if period == "weekly":
+                desired_week = datetime(current_year, month, day).isocalendar().week
+                for r in rows:
+                    y = _row_year(r)
+                    t = _row_mean_temp(r)
+                    if y is not None and t is not None:
+                        # Check if this row corresponds to the desired week
+                        try:
+                            # Try to extract week info from the row
+                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
+                            if period_str:
+                                row_date = datetime.strptime(period_str[:10], "%Y-%m-%d")
+                                row_week = row_date.isocalendar().week
+                                if row_week == desired_week:
+                                    all_temps.append(t)
+                                    values.append(TemperatureValue(
+                                        date=f"{y}-{month:02d}-{day:02d}",
+                                        year=y,
+                                        temperature=round(t, 1),
+                                    ))
+                        except Exception as e:
+                            if DEBUG:
+                                logger.debug(f"Error processing weekly row: {e}")
+                            continue
+            
+            # For monthly, we need to match by month
+            elif period == "monthly":
+                for r in rows:
+                    y = _row_year(r)
+                    t = _row_mean_temp(r)
+                    if y is not None and t is not None:
+                        # Check if this row corresponds to the desired month
+                        try:
+                            # Try to extract month info from the row
+                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
+                            if period_str:
+                                row_month = int(period_str[5:7])
+                                if row_month == month:
+                                    all_temps.append(t)
+                                    values.append(TemperatureValue(
+                                        date=f"{y}-{month:02d}-{day:02d}",
+                                        year=y,
+                                        temperature=round(t, 1),
+                                    ))
+                        except Exception as e:
+                            if DEBUG:
+                                logger.debug(f"Error processing monthly row: {e}")
+                            continue
+            
+            if not values:
+                if DEBUG:
+                    logger.debug(f"No {period} data found, falling back to sampling")
+                raise Exception(f"No {period} data found")
+                
+        except Exception as e:
+            # Only log on first occurrence to reduce log noise (historysummary often fails, fallback is expected)
+            if DEBUG and "historysummary" not in str(e).lower():
+                logger.debug(f"Error fetching {period} summary: {e}, falling back to sampling")
+            # Fallback to sampling approach if historysummary fails
+            sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
+            step = max(1, date_range_days // sample_days)
+            
             for year in range(start_year, current_year + 1):
-                temp = year_means.get(year)
-                if temp is not None:
+                year_temps = []
+                for day_offset in range(0, date_range_days, step):
+                    current_date = start_date.replace(year=year) + timedelta(days=day_offset)
+                    
+                    try:
+                        weather_data = await get_temperature_series(location, current_date.month, current_date.day)
+                        if weather_data and 'data' in weather_data:
+                            # Extract missing years from the series metadata
+                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
+                                for missing_year_info in weather_data['metadata']['missing_years']:
+                                    if missing_year_info['year'] == year:
+                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_sampling")
+                                        break
+                            
+                            for data_point in weather_data['data']:
+                                if int(data_point['x']) == year and data_point['y'] is not None:
+                                    year_temps.append(data_point['y'])
+                                    break
+                    except Exception as e:
+                        if DEBUG:
+                            logger.debug(f"Error getting data for {current_date}: {e}")
+                        track_missing_year(missing_years, year, "sampling_error")
+                        continue
+                
+                # Calculate average for the year (only add one value per year)
+                if year_temps:
+                    avg_temp = sum(year_temps) / len(year_temps)
+                    all_temps.append(avg_temp)  # Add to all_temps only once per year
+                    values.append(TemperatureValue(
+                        date=end_date.replace(year=year).strftime("%Y-%m-%d"),
+                        year=year,
+                        temperature=round(avg_temp, 1),
+                    ))
+                else:
+                    track_missing_year(missing_years, year, "no_data_sampling")
+    
+    elif period == "yearly":
+        # For yearly, use the Visual Crossing historysummary endpoint for efficiency
+        try:
+            if DEBUG:
+                logger.debug(f"Fetching yearly summary for {location} from {start_year} to {current_year}")
+            yearly_data = await _fetch_yearly_summary(location, start_year, current_year)
+            if DEBUG:
+                logger.debug(f"Got {len(yearly_data)} yearly data points")
+            
+            if yearly_data:
+                for year, temp in yearly_data:
                     all_temps.append(temp)
                     values.append(TemperatureValue(
                         date=f"{year}-{month:02d}-{day:02d}",
                         year=year,
                         temperature=round(temp, 1),
                     ))
-                else:
-                    # Get more detailed information about why data is insufficient
-                    reason = f"insufficient_data_timeline (no temperature data for year {year})"
-                    track_missing_year(missing_years, year, reason)
-                    
+            else:
+                if DEBUG:
+                    logger.debug("No yearly data returned, falling back to sampling")
+                raise Exception("No yearly data returned")
         except Exception as e:
-            logger.error(f"Timeline approach failed for yearly: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to fetch yearly data: {str(e)}")
+            # Historysummary endpoint often fails (400 errors), fallback is normal - don't log every occurrence
+            pass
+            # Fallback to simple sampling approach if historysummary fails
+            # Just sample a few representative days for each year
+            sample_dates = [
+                (1, 15), (4, 15), (7, 15), (10, 15)  # Mid-month samples for each season
+            ]
+            
+            for year in range(start_year, current_year + 1):
+                year_values = []
+                for sample_month, sample_day in sample_dates:
+                    try:
+                        weather_data = await get_temperature_series(location, sample_month, sample_day)
+                        if weather_data and 'data' in weather_data:
+                            # Extract missing years from the series metadata
+                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
+                                for missing_year_info in weather_data['metadata']['missing_years']:
+                                    if missing_year_info['year'] == year:
+                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_yearly_sampling")
+                                        break
+                            
+                            for data_point in weather_data['data']:
+                                if int(data_point['x']) == year and data_point['y'] is not None:
+                                    temp = data_point['y']
+                                    year_values.append(temp)
+                                    all_temps.append(temp)
+                                    break
+                    except Exception as e:
+                        if DEBUG:
+                            logger.debug(f"Error getting data for {year}-{sample_month:02d}-{sample_day:02d}: {e}")
+                        track_missing_year(missing_years, year, "yearly_sampling_error")
+                        continue
+                
+                # Calculate average for the year
+                if year_values:
+                    avg_temp = sum(year_values) / len(year_values)
+                    values.append(TemperatureValue(
+                        date=f"{year}-{month:02d}-{day:02d}",
+                        year=year,
+                        temperature=round(avg_temp, 1),
+                    ))
+                else:
+                    track_missing_year(missing_years, year, "no_data_yearly_sampling")
     
     # Calculate date range
     if values:
