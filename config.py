@@ -75,6 +75,13 @@ LONG_CACHE_DURATION_SECONDS = 604800  # 1 week for historical data (168 hours * 
 FORECAST_DAY_CACHE_DURATION_SECONDS = 1800  # 30 minutes
 FORECAST_NIGHT_CACHE_DURATION_SECONDS = 7200  # 2 hours
 
+# Import timedelta for compatibility
+from datetime import timedelta
+SHORT_CACHE_DURATION = timedelta(seconds=SHORT_CACHE_DURATION_SECONDS)
+LONG_CACHE_DURATION = timedelta(seconds=LONG_CACHE_DURATION_SECONDS)
+FORECAST_DAY_CACHE_DURATION = timedelta(seconds=FORECAST_DAY_CACHE_DURATION_SECONDS)
+FORECAST_NIGHT_CACHE_DURATION = timedelta(seconds=FORECAST_NIGHT_CACHE_DURATION_SECONDS)
+
 # Analytics rate limiting
 ANALYTICS_RATE_LIMIT = int(os.getenv("ANALYTICS_RATE_LIMIT", "100"))  # 100 requests per hour per IP
 
