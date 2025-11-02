@@ -320,13 +320,14 @@ async def verify_csrf_token(
 
 ---
 
-### HIGH-002: Information Disclosure in Error Messages
+### HIGH-002: Information Disclosure in Error Messages ✅ FIXED
 
 **File**: `main.py`, `routers/records_agg.py`  
-**Lines**: 1057, 182, 449  
+**Lines**: 1482-1501 (main.py), 189-194 (records_agg.py)  
 **Severity**: High  
 **CWE**: CWE-209 (Information Exposure Through Error Message)  
-**Found by**: Both audits
+**Found by**: Both audits  
+**Status**: ✅ **RESOLVED** - 2025-11-02
 
 **Issue**: Detailed error messages expose internal implementation details.
 
@@ -358,12 +359,23 @@ except Exception as e:
         raise HTTPException(status_code=403, detail="Authentication failed")
 ```
 
+**Resolution**:
+
+- Updated Firebase token error handling (main.py:1482-1501)
+  - Logs detailed errors server-side with `exc_info=True`
+  - Returns generic "Authentication failed" in production
+  - Only shows detailed errors in DEBUG mode
+- Updated Visual Crossing API error handling (routers/records_agg.py:189-194)
+  - Logs detailed API errors server-side
+  - Returns generic "External API error: {status}" to clients
+  - Prevents exposure of API response details
+
 **Recommendation**:
 
-- Log detailed errors server-side only (with exc_info=True)
-- Return generic error messages to clients
-- Use DEBUG flag to control error verbosity
-- Never expose stack traces in production
+- ✅ Completed: Error messages sanitized for production
+- ✅ Completed: DEBUG flag controls error verbosity
+- ✅ Completed: Detailed errors logged server-side only
+- Continue to review all error handlers for consistency
 
 ---
 
@@ -498,13 +510,14 @@ except KeyError as e:
 
 ---
 
-### HIGH-005: Redis Connection Without Authentication Validation
+### HIGH-005: Redis Connection Without Authentication Validation ✅ FIXED
 
 **File**: `main.py`  
-**Line**: 750  
+**Lines**: 1109-1149  
 **Severity**: High  
 **CWE**: CWE-306 (Missing Authentication for Critical Function)  
-**Found by**: Claude
+**Found by**: Claude  
+**Status**: ✅ **RESOLVED** - 2025-11-02
 
 **Issue**: Redis connection established without validating if authentication is required.
 
@@ -552,12 +565,20 @@ def create_redis_client(url: str):
 redis_client = create_redis_client(REDIS_URL)
 ```
 
+**Resolution**:
+
+- Created `create_redis_client()` function (main.py:1109-1149) with security validation:
+  - Enforces password requirement in production
+  - Warns if not using SSL (`rediss://`) in production
+  - Tests connection with `ping()` before returning client
+  - Validates environment to apply appropriate security rules
+
 **Recommendation**:
 
-- Validate Redis connection requirements in production
-- Enforce SSL/TLS for production Redis connections (use `rediss://`)
-- Use connection pooling with proper configuration
-- Monitor Redis connection health
+- ✅ Completed: Redis connection validation added
+- ✅ Completed: Production password enforcement
+- ✅ Completed: SSL warnings for production
+- Consider: Making SSL required (error instead of warning) in production
 
 ---
 
@@ -640,12 +661,14 @@ class LocationRequest(BaseModel):
 
 ---
 
-### HIGH-007: Missing Security Headers
+### HIGH-007: Missing Security Headers ✅ FIXED
 
-**File**: `main.py` (application configuration)  
+**File**: `main.py`  
+**Lines**: 1302-1343  
 **Severity**: High  
 **CWE**: CWE-1021 (Improper Restriction of Rendered UI Layers)  
-**Found by**: Both audits
+**Found by**: Both audits  
+**Status**: ✅ **RESOLVED** - 2025-11-02
 
 **Issue**: Application doesn't set critical security headers:
 
@@ -708,22 +731,34 @@ async def add_security_headers(request: Request, call_next):
     return response
 ```
 
+**Resolution**:
+
+- Added `add_security_headers` middleware (main.py:1302-1343):
+  - `X-Frame-Options: DENY` - Prevents clickjacking
+  - `X-Content-Type-Options: nosniff` - Prevents MIME sniffing
+  - `X-XSS-Protection: 1; mode=block` - Legacy XSS protection
+  - `Content-Security-Policy` - Comprehensive CSP policy
+  - `Strict-Transport-Security` - HSTS for HTTPS connections
+  - `Referrer-Policy: strict-origin-when-cross-origin` - Controls referrer information
+  - `Permissions-Policy` - Disables unnecessary browser features
+
 **Recommendation**:
 
-- Add security headers middleware
-- Configure CSP based on actual requirements
-- Test headers with securityheaders.com
-- Review and adjust CSP based on frontend requirements
+- ✅ Completed: Security headers middleware added
+- ✅ Completed: All critical security headers implemented
+- Consider: Test with securityheaders.com
+- Consider: Adjust CSP if frontend requirements change
 
 ---
 
-### HIGH-008: Potential CORS Misconfiguration
+### HIGH-008: Potential CORS Misconfiguration ✅ FIXED
 
-**File**: `main.py:71-72, 1088-1110`  
-**Lines**: 71-72  
+**File**: `main.py`  
+**Lines**: 103-139  
 **Severity**: High  
 **CWE**: CWE-942 (Overly Permissive CORS Policy)  
-**Found by**: Claude
+**Found by**: Claude  
+**Status**: ✅ **RESOLVED** - 2025-11-02
 
 **Issue**: CORS configuration loaded from environment variables without validation:
 
@@ -773,12 +808,21 @@ def validate_cors_config():
 CORS_ORIGINS, CORS_ORIGIN_REGEX = validate_cors_config()
 ```
 
+**Resolution**:
+
+- Created `validate_cors_config()` function (main.py:103-139):
+  - Validates CORS origins and regex patterns at startup
+  - Rejects wildcard origins (`*`) in production (warns in dev)
+  - Warns about overly permissive regex patterns (e.g., `.*`)
+  - Errors on invalid regex syntax
+  - Warns if no CORS configuration provided
+
 **Recommendation**:
 
-- Validate CORS configuration at startup
-- Reject wildcard origins
-- Warn about permissive regex patterns
-- Document allowed origins in code
+- ✅ Completed: CORS validation at startup
+- ✅ Completed: Wildcard origin rejection in production
+- ✅ Completed: Permissive regex detection
+- Continue to monitor CORS configuration in production
 
 ---
 
@@ -838,13 +882,14 @@ SERVICE_TOKEN_RATE_LIMITS = {
 
 ---
 
-### HIGH-010: Redis KEYS Command Usage
+### HIGH-010: Redis KEYS Command Usage ✅ FIXED
 
 **File**: `cache_utils.py`  
-**Lines**: 1170, 1305, 1377  
+**Lines**: 1167-1199, 1321-1351, 1413-1436, 1464-1493  
 **Severity**: High  
 **CWE**: CWE-400 (Uncontrolled Resource Consumption)  
-**Found by**: Cursor
+**Found by**: Cursor  
+**Status**: ✅ **RESOLVED** - 2025-11-02
 
 **Issue**: Redis `KEYS` command is used which can block the server on large datasets.
 
@@ -980,13 +1025,14 @@ exc = _parse_csv(exclude, ALLOWED_SECTIONS) if exclude else set()
 
 ---
 
-### HIGH-012: Missing Authentication on Some Endpoints
+### HIGH-012: Missing Authentication on Some Endpoints ✅ FIXED
 
 **File**: `main.py`  
-**Line**: 941-945  
+**Lines**: 2456, 2483, 2497, 2657, 2666, 2675, 2691, 2707, 2719  
 **Severity**: High  
 **CWE**: CWE-306 (Missing Authentication for Critical Function)  
-**Found by**: Cursor
+**Found by**: Cursor  
+**Status**: ✅ **RESOLVED** - 2025-11-02
 
 **Issue**: Several endpoints are marked as public that may expose sensitive information.
 

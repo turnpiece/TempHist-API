@@ -186,7 +186,12 @@ async def fetch_historysummary(
             if resp.status >= 400:
                 text = await resp.text()
                 # Historysummary endpoint often returns 400s - don't raise HTTPException, let caller handle fallback
-                raise ValueError(f"VC historysummary {resp.status}: {text[:180]}")
+                # Log detailed error but return generic error to prevent information disclosure
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Visual Crossing API error: status={resp.status}, response={text[:200]}")
+                # Return generic error - don't expose API response details
+                raise ValueError(f"External API error: {resp.status}")
             return await resp.json()
 
 def _historysummary_values(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -610,11 +615,39 @@ async def _rolling_bundle_impl(
     anchor_d = _safe_parse_date(anchor)
     
     # Parse CSV parameters and determine which sections to include
-    def _parse_csv(s: str | None) -> Set[str]:
-        return {p.strip() for p in s.split(",")} if s else set()
+    def _parse_csv(s: str | None, allowed: Set[str], max_length: int = 100, max_items: int = 20) -> Set[str]:
+        """Parse and validate CSV parameter with security checks."""
+        if not s:
+            return set()
+        
+        # Length validation to prevent DoS
+        if len(s) > max_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV parameter too long (max {max_length} chars)"
+            )
+        
+        parsed = {p.strip() for p in s.split(",") if p.strip()}
+        
+        # Limit number of items to prevent DoS
+        if len(parsed) > max_items:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many items in CSV (max {max_items})"
+            )
+        
+        # Validate against whitelist of allowed values
+        invalid = parsed - allowed
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid values: {', '.join(sorted(invalid))}. Allowed: {', '.join(sorted(allowed))}"
+            )
+        
+        return parsed
 
-    inc = (_parse_csv(include) & ALLOWED_SECTIONS) if include else set()
-    exc = (_parse_csv(exclude) & ALLOWED_SECTIONS) if exclude else set()
+    inc = _parse_csv(include, ALLOWED_SECTIONS) if include else set()
+    exc = _parse_csv(exclude, ALLOWED_SECTIONS) if exclude else set()
 
     if inc:
         wanted = inc

@@ -100,8 +100,43 @@ CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stal
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
 # CORS configuration from environment variables
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "").strip()
-CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip()
+def validate_cors_config():
+    """Validate CORS configuration to prevent misconfiguration."""
+    origins = os.getenv("CORS_ORIGINS", "").strip()
+    regex = os.getenv("CORS_ORIGIN_REGEX", "").strip()
+    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    
+    # Warn about permissive configurations
+    if not origins and not regex:
+        logger.warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
+    
+    if regex:
+        # Test regex is valid and not too permissive
+        import re
+        try:
+            pattern = re.compile(regex)
+            # Warn if regex looks too permissive
+            permissive_patterns = [".*", ".+", r".*\.*"]
+            if regex in permissive_patterns or (".*" in regex and env == "production"):
+                logger.error(f"❌ CORS regex very permissive: {regex}")
+                if env == "production":
+                    raise ValueError("Overly permissive CORS regex not allowed in production")
+                else:
+                    logger.warning(f"⚠️  Permissive CORS regex in {env} environment: {regex}")
+        except re.error as e:
+            logger.error(f"❌ Invalid CORS_ORIGIN_REGEX: {e}")
+            raise ValueError(f"Invalid CORS_ORIGIN_REGEX: {e}")
+    
+    if origins == "*":
+        logger.error("❌ CORS_ORIGINS set to '*' - this is insecure!")
+        if env == "production":
+            raise ValueError("Wildcard CORS not allowed in production")
+        else:
+            logger.warning("⚠️  Wildcard CORS in non-production environment")
+    
+    return origins, regex
+
+CORS_ORIGINS, CORS_ORIGIN_REGEX = validate_cors_config()
 
 # Rate limiting configuration
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
@@ -1105,8 +1140,47 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
 app.include_router(records_agg_router)
 app.include_router(locations_preapproved_router)
 
-# Initialize Redis with decode_responses for consistent string handling
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+# Initialize Redis with security validation
+def create_redis_client(url: str):
+    """Create Redis client with security validation."""
+    import ssl
+    from urllib.parse import urlparse
+    
+    parsed = urlparse(url)
+    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    
+    # Enforce password in production
+    if env == "production" and not parsed.password:
+        logger.error("❌ Redis password required in production")
+        raise ValueError("Redis password required in production environment")
+    
+    # Enforce SSL in production
+    ssl_context = None
+    if parsed.scheme == "rediss":
+        ssl_context = ssl.create_default_context()
+    elif env == "production":
+        logger.warning("⚠️  Redis not using SSL (rediss://) in production! Consider using rediss:// for encrypted connections.")
+        # In production, warn but don't fail (some providers handle SSL at network level)
+    
+    # Create Redis client with SSL if needed
+    # Note: from_url handles SSL automatically when using rediss:// scheme
+    client = redis.from_url(
+        url,
+        decode_responses=True
+    )
+    
+    # Test connection
+    try:
+        client.ping()
+        if DEBUG:
+            logger.info("✅ Redis connection validated successfully")
+    except Exception as e:
+        logger.error(f"❌ Redis connection failed: {e}")
+        raise
+    
+    return client
+
+redis_client = create_redis_client(REDIS_URL)
 
 # Note: initialize_cache() is called in the lifespan handler (line 614)
 # to ensure proper initialization order during app startup
@@ -1225,6 +1299,49 @@ async def log_requests_middleware(request: Request, call_next):
         return await call_next(request)
 
 @app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses to prevent various attacks."""
+    response = await call_next(request)
+    
+    # Prevent clickjacking
+    response.headers["X-Frame-Options"] = "DENY"
+    
+    # Prevent MIME sniffing
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    
+    # XSS protection (legacy browsers)
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    # Content Security Policy
+    # Note: Adjust based on your frontend requirements
+    csp_policy = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self'; "
+        "connect-src 'self' https://weather.visualcrossing.com; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["Content-Security-Policy"] = csp_policy
+    
+    # HSTS (only if using HTTPS)
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains; preload"
+        )
+    
+    # Referrer policy
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    # Permissions policy (disable unnecessary browser features)
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), microphone=(), camera=()"
+    )
+    
+    return response
+
+@app.middleware("http")
 async def request_size_middleware(request: Request, call_next):
     """Middleware to enforce request size limits and validate content types."""
     client_ip = get_client_ip(request)
@@ -1297,7 +1414,8 @@ async def verify_token_middleware(request: Request, call_next):
         )
 
     # Public paths that don't require a token or rate limiting
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors", "/v1/jobs/diagnostics/worker-status"]
+    # Note: Stats endpoints removed - they require authentication (HIGH-012)
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors", "/v1/jobs/diagnostics/worker-status"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
         if DEBUG:
             logger.debug(f"[DEBUG] Middleware: Public path, allowing through")
@@ -1408,10 +1526,22 @@ async def verify_token_middleware(request: Request, call_next):
             logger.error(f"[DEBUG] Middleware: Firebase token verification failed: {e}")
             logger.error(f"[DEBUG] Middleware: Error type: {type(e).__name__}")
             logger.error(f"[DEBUG] Middleware: Error message: {str(e)}")
-            return JSONResponse(
-                status_code=403,
-                content={"detail": f"Invalid Firebase token: {str(e)}"}
-            )
+            # Log detailed error server-side only
+            logger.error(f"Firebase token verification failed: {e}", exc_info=True)
+            
+            # Return generic error message to client (don't expose internal details)
+            if DEBUG:
+                # In debug mode, provide more details
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"Invalid Firebase token: {str(e)}"}
+                )
+            else:
+                # In production, use generic error message
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Authentication failed"}
+                )
 
     logger.info(f"[DEBUG] Middleware: Token verified, calling next handler...")
     response = await call_next(request)
@@ -2322,8 +2452,8 @@ async def get_rate_limit_status(request: Request):
         }
 
 @app.get("/rate-limit-stats")
-async def get_rate_limit_stats():
-    """Get overall rate limiting statistics (admin endpoint)."""
+async def get_rate_limit_stats(request: Request, user=Depends(verify_firebase_token)):
+    """Get overall rate limiting statistics (admin endpoint - requires authentication)."""
     if not RATE_LIMIT_ENABLED:
         return {"status": "disabled", "message": "Rate limiting is not enabled"}
     
@@ -2349,7 +2479,7 @@ async def get_rate_limit_stats():
     }
 
 @app.get("/usage-stats")
-async def get_usage_stats():
+async def get_usage_stats(request: Request, user=Depends(verify_firebase_token)):
     """Get usage tracking statistics."""
     if not USAGE_TRACKING_ENABLED or not get_usage_tracker():
         return {"status": "disabled", "message": "Usage tracking is not enabled"}
@@ -2523,7 +2653,7 @@ async def get_cache_warming_job_status(job_id: str):
     return job_status
 
 @app.get("/cache-stats")
-async def get_cache_statistics():
+async def get_cache_statistics(request: Request, user=Depends(verify_firebase_token)):
     """Get comprehensive cache statistics and performance metrics."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -2532,7 +2662,7 @@ async def get_cache_statistics():
     return cache_stats_instance.get_comprehensive_stats()
 
 @app.get("/cache-stats/health")
-async def get_cache_health():
+async def get_cache_health(request: Request, user=Depends(verify_firebase_token)):
     """Get cache health assessment and alerts."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -2541,7 +2671,7 @@ async def get_cache_health():
     return cache_stats_instance.get_cache_health()
 
 @app.get("/cache-stats/endpoints")
-async def get_cache_endpoint_stats():
+async def get_cache_endpoint_stats(request: Request, user=Depends(verify_firebase_token)):
     """Get cache statistics broken down by endpoint."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -2557,7 +2687,7 @@ async def get_cache_endpoint_stats():
     }
 
 @app.get("/cache-stats/locations")
-async def get_cache_location_stats():
+async def get_cache_location_stats(request: Request, user=Depends(verify_firebase_token)):
     """Get cache statistics broken down by location."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -2573,7 +2703,7 @@ async def get_cache_location_stats():
     }
 
 @app.get("/cache-stats/hourly")
-async def get_cache_hourly_stats(hours: int = 24):
+async def get_cache_hourly_stats(hours: int = 24, request: Request = None, user=Depends(verify_firebase_token)):
     """Get hourly cache statistics for the last N hours."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -2585,7 +2715,7 @@ async def get_cache_hourly_stats(hours: int = 24):
     }
 
 @app.post("/cache-stats/reset")
-async def reset_cache_statistics():
+async def reset_cache_statistics(request: Request, user=Depends(verify_firebase_token)):
     """Reset all cache statistics (admin endpoint)."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:

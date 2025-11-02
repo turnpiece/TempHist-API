@@ -1164,16 +1164,35 @@ class CacheInvalidator:
             return {"status": "disabled", "message": "Cache invalidation is not enabled"}
         
         try:
-            # Try to find keys matching pattern (may fail on managed Redis)
+            # Use SCAN instead of KEYS to avoid blocking Redis (O(N) blocking operation)
+            matching_keys = []
+            cursor = 0
+            max_keys = 100000  # Safety limit to prevent runaway scans
+            
             try:
-                matching_keys = self.redis_client.keys(pattern)
+                while cursor != 0 or len(matching_keys) == 0:  # Start iteration
+                    cursor, keys = self.redis_client.scan(
+                        cursor,
+                        match=pattern,
+                        count=100  # Process in batches
+                    )
+                    matching_keys.extend(keys)
+                    
+                    # Safety limit to prevent infinite loops or excessive memory usage
+                    if len(matching_keys) > max_keys:
+                        logger.warning(f"Pattern matches >{max_keys} keys, stopping scan at {len(matching_keys)} keys")
+                        break
+                    
+                    # Prevent infinite loop (shouldn't happen, but safety check)
+                    if cursor == 0:
+                        break
             except Exception as e:
-                # Handle Redis permissions error (e.g., KEYS command not allowed)
-                if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                # Handle Redis permissions error or other issues
+                if "permissions" in str(e).lower() or "scan" in str(e).lower():
                     return {
                         "status": "error",
                         "pattern": pattern,
-                        "error": "Redis KEYS command not permitted on this instance",
+                        "error": "Redis SCAN command not permitted on this instance",
                         "message": "Cache invalidation by pattern is not available on managed Redis services"
                     }
                 else:
@@ -1299,15 +1318,33 @@ class CacheInvalidator:
             return {"status": "disabled", "message": "Cache invalidation is not enabled"}
         
         try:
-            # Try to get all keys (may fail on managed Redis)
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            all_keys = []
+            cursor = 0
+            max_keys = 100000  # Safety limit
+            
             try:
-                all_keys = self.redis_client.keys("*")
+                while cursor != 0 or len(all_keys) == 0:  # Start iteration
+                    cursor, keys = self.redis_client.scan(
+                        cursor,
+                        match="*",
+                        count=100  # Process in batches
+                    )
+                    all_keys.extend(keys)
+                    
+                    # Safety limit
+                    if len(all_keys) > max_keys:
+                        logger.warning(f"Found >{max_keys} keys, stopping scan at {len(all_keys)} keys")
+                        break
+                    
+                    if cursor == 0:
+                        break
             except Exception as e:
-                # Handle Redis permissions error (e.g., KEYS command not allowed)
-                if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                # Handle Redis permissions error
+                if "permissions" in str(e).lower() or "scan" in str(e).lower():
                     return {
                         "status": "error",
-                        "error": "Redis KEYS command not permitted on this instance",
+                        "error": "Redis SCAN command not permitted on this instance",
                         "message": "Expired key invalidation is not available on managed Redis services"
                     }
                 else:
@@ -1373,11 +1410,30 @@ class CacheInvalidator:
             pattern_counts = {}
             for name, pattern in patterns.items():
                 try:
-                    count = len(self.redis_client.keys(pattern))
-                    pattern_counts[name] = count
-                except Exception:
-                    # Handle Redis permissions error (KEYS command not allowed)
-                    pattern_counts[name] = "N/A (permissions required)"
+                    # Use SCAN instead of KEYS to avoid blocking
+                    matching_keys = []
+                    cursor = 0
+                    max_keys = 10000  # Limit for stats gathering
+                    
+                    while cursor != 0 or len(matching_keys) == 0:
+                        cursor, keys = self.redis_client.scan(
+                            cursor,
+                            match=pattern,
+                            count=100
+                        )
+                        matching_keys.extend(keys)
+                        if len(matching_keys) > max_keys:
+                            break
+                        if cursor == 0:
+                            break
+                    
+                    pattern_counts[name] = len(matching_keys)
+                except Exception as e:
+                    # Handle Redis permissions error
+                    if "permissions" in str(e).lower() or "scan" in str(e).lower():
+                        pattern_counts[name] = "N/A (permissions required)"
+                    else:
+                        pattern_counts[name] = f"N/A (error: {str(e)[:50]})"
             
             return {
                 "redis_info": {
@@ -1403,19 +1459,34 @@ class CacheInvalidator:
         
         try:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
-                # Try to count keys without deleting (may fail on managed Redis)
+                # Use SCAN to count keys without deleting (may fail on managed Redis)
                 try:
-                    all_keys = self.redis_client.keys("*")
+                    all_keys = []
+                    cursor = 0
+                    max_keys = 100000  # Safety limit
+                    
+                    while cursor != 0 or len(all_keys) == 0:
+                        cursor, keys = self.redis_client.scan(
+                            cursor,
+                            match="*",
+                            count=100
+                        )
+                        all_keys.extend(keys)
+                        if len(all_keys) > max_keys:
+                            break
+                        if cursor == 0:
+                            break
+                    
                     return {
                         "status": "dry_run",
                         "total_keys": len(all_keys),
                         "action": "would_delete_all"
                     }
                 except Exception as e:
-                    if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                    if "permissions" in str(e).lower() or "scan" in str(e).lower():
                         return {
                             "status": "error",
-                            "error": "Redis KEYS command not permitted on this instance",
+                            "error": "Redis SCAN command not permitted on this instance",
                             "message": "Cannot count keys on managed Redis service for dry run"
                         }
                     else:
