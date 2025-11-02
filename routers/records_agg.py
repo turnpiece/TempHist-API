@@ -152,6 +152,13 @@ async def fetch_historysummary(
     daily_summaries: bool = False,
     params_extra: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
+    # Validate location to prevent SSRF attacks
+    from main import validate_location_for_ssrf
+    try:
+        location = validate_location_for_ssrf(location)
+    except ValueError as e:
+        raise ValueError(f"Invalid location: {str(e)}") from e
+    
     if API_KEY is None:
         raise RuntimeError("VISUAL_CROSSING_API_KEY is not configured")
     if min_year is None or max_year is None:
@@ -373,10 +380,23 @@ async def cleanup_http_sessions():
 
 # Helper functions
 def _safe_parse_date(s: str) -> date:
+    """Parse and validate date string with SSRF protection."""
+    if not s or not isinstance(s, str):
+        raise HTTPException(400, "Date must be a non-empty string")
+    
+    # Validate date format strictly
+    import re
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', s):
+        raise HTTPException(400, "Date must be in YYYY-MM-DD format")
+    
     try:
-        return datetime.strptime(s, "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(400, "anchor must be YYYY-MM-DD")
+        parsed_date = datetime.strptime(s, "%Y-%m-%d").date()
+        # Validate reasonable date range
+        if parsed_date.year < 1800 or parsed_date.year > 2100:
+            raise HTTPException(400, "Year out of valid range")
+        return parsed_date
+    except ValueError as e:
+        raise HTTPException(400, f"Invalid date format: {s}")
 
 def _years_range(now: date) -> Tuple[int, int]:
     end = now.year
@@ -429,10 +449,20 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
     Fetch daily temps for [start..end] once using VC Timeline.
     Returns dict { 'YYYY-MM-DD': temp }.
     """
+    # Validate location to prevent SSRF attacks
+    from main import validate_location_for_ssrf
+    try:
+        location = validate_location_for_ssrf(location)
+    except ValueError as e:
+        raise HTTPException(400, f"Invalid location: {str(e)}")
+    
     if not API_KEY:
         raise HTTPException(500, "Missing VISUAL_CROSSING_API_KEY")
     
-    url = f"{VC_BASE_URL}/timeline/{location}/{start.isoformat()}/{end.isoformat()}"
+    # URL-encode location for use in path
+    from urllib.parse import quote
+    encoded_location = quote(location, safe='')
+    url = f"{VC_BASE_URL}/timeline/{encoded_location}/{start.isoformat()}/{end.isoformat()}"
     params = {
         "unitGroup": unit_group,
         "include": "days",

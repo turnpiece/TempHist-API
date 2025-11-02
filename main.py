@@ -53,10 +53,43 @@ API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 
-# Debug: Log the REDIS_URL value to diagnose connection issues
+# Debug: Log the REDIS_URL value to diagnose connection issues (sanitized)
 import logging as _logging
+from urllib.parse import urlparse, urlunparse
+
+def sanitize_url(url: str) -> str:
+    """Remove credentials and API keys from URL for logging to prevent sensitive data exposure."""
+    try:
+        from urllib.parse import parse_qs, urlencode
+        parsed = urlparse(url)
+        
+        # Redact password from netloc
+        if parsed.password:
+            username = parsed.username or ""
+            netloc = f"{username}:***@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            parsed = parsed._replace(netloc=netloc)
+        
+        # Redact API keys from query parameters
+        if parsed.query:
+            query_params = parse_qs(parsed.query, keep_blank_values=True)
+            # Redact sensitive parameters
+            sensitive_params = ['key', 'api_key', 'apikey', 'token', 'password', 'secret']
+            for param in sensitive_params:
+                if param in query_params:
+                    query_params[param] = ['[REDACTED]']
+            # Reconstruct query string
+            sanitized_query = urlencode(query_params, doseq=True)
+            parsed = parsed._replace(query=sanitized_query)
+        
+        return urlunparse(parsed)
+    except Exception:
+        # If parsing fails, return a safe placeholder
+        return "[REDACTED_URL]"
+
 _temp_logger = _logging.getLogger(__name__)
-_temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {REDIS_URL}")
+_temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {sanitize_url(REDIS_URL)}")
 
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -406,23 +439,182 @@ def clean_location_string(location: str) -> str:
     cleaned = re.sub(r'\s+', ' ', cleaned)
     return cleaned.strip()
 
-def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
-    """Build Visual Crossing API URL with consistent parameters.
+def validate_location_for_ssrf(location: str) -> str:
+    """Validate location string to prevent SSRF attacks.
     
     Args:
-        location: The location to get weather data for
-        date: The date in YYYY-MM-DD format
+        location: The location string to validate
+        
+    Returns:
+        Validated location string
+        
+    Raises:
+        ValueError: If location is invalid or potentially dangerous
+    """
+    import re
+    
+    if not location or not isinstance(location, str):
+        raise ValueError("Location must be a non-empty string")
+    
+    # Length validation
+    if len(location) > 200:
+        raise ValueError(f"Location string too long (max 200 characters, got {len(location)})")
+    
+    # Check for null bytes
+    if '\x00' in location:
+        raise ValueError("Location contains null bytes")
+    
+    # Check for control characters
+    if any(ord(c) < 32 and c not in ['\t', '\n', '\r'] for c in location):
+        raise ValueError("Location contains control characters")
+    
+    # Whitelist allowed characters (letters, numbers, spaces, commas, hyphens, periods, apostrophes)
+    if not re.match(r'^[a-zA-Z0-9\s,.\-\']+$', location):
+        raise ValueError("Location contains invalid characters. Only letters, numbers, spaces, commas, hyphens, periods, and apostrophes are allowed")
+    
+    # Prevent path traversal attempts
+    dangerous_patterns = ['..', '/', '\\', '//']
+    for pattern in dangerous_patterns:
+        if pattern in location:
+            raise ValueError(f"Location contains dangerous pattern: {pattern}")
+    
+    # Prevent SSRF patterns - block URLs, IP addresses, and special schemes
+    location_lower = location.lower()
+    ssrf_patterns = [
+        '://',           # URL scheme
+        '@',             # URL auth separator
+        'localhost',
+        '127.0.0.1',
+        '0.0.0.0',
+        '169.254',       # Link-local
+        '10.',           # Private IP range start
+        '172.16',        # Private IP range start
+        '172.17',
+        '172.18',
+        '172.19',
+        '172.20',
+        '172.21',
+        '172.22',
+        '172.23',
+        '172.24',
+        '172.25',
+        '172.26',
+        '172.27',
+        '172.28',
+        '172.29',
+        '172.30',
+        '172.31',
+        '192.168',       # Private IP range start
+        '[::1]',         # IPv6 localhost
+        '[fc00:',        # IPv6 private range
+        '[fe80:',        # IPv6 link-local
+    ]
+    
+    for pattern in ssrf_patterns:
+        if pattern in location_lower:
+            raise ValueError(f"Location contains potentially dangerous SSRF pattern: {pattern}")
+    
+    # Additional validation: block URL-encoded dangerous characters
+    # This prevents encoding-based bypasses
+    if '%' in location:
+        # Check for encoded versions of dangerous patterns
+        encoded_patterns = [
+            '%2f',   # /
+            '%5c',   # \
+            '%2e',   # .
+            '%40',   # @
+            '%3a',   # :
+        ]
+        for enc_pattern in encoded_patterns:
+            if enc_pattern in location_lower:
+                raise ValueError(f"Location contains encoded dangerous character: {enc_pattern}")
+    
+    return location.strip()
+
+def validate_date_format(date: str) -> str:
+    """Validate date format to prevent injection attacks.
+    
+    Args:
+        date: Date string in YYYY-MM-DD format
+        
+    Returns:
+        Validated date string
+        
+    Raises:
+        ValueError: If date format is invalid
+    """
+    import re
+    
+    if not date or not isinstance(date, str):
+        raise ValueError("Date must be a non-empty string")
+    
+    # Strict date format validation
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+        raise ValueError(f"Invalid date format. Must be YYYY-MM-DD, got: {date}")
+    
+    # Validate date values are reasonable
+    try:
+        year, month, day = map(int, date.split('-'))
+        # Check year range (reasonable bounds)
+        if year < 1800 or year > 2100:
+            raise ValueError(f"Year out of range: {year}")
+        if month < 1 or month > 12:
+            raise ValueError(f"Month out of range: {month}")
+        if day < 1 or day > 31:
+            raise ValueError(f"Day out of range: {day}")
+        
+        # Try to create date to validate it's a real date
+        from datetime import datetime
+        datetime(year, month, day)
+    except ValueError as e:
+        if "out of range" in str(e):
+            raise
+        raise ValueError(f"Invalid date: {date}")
+    
+    return date
+
+def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
+    """Build Visual Crossing API URL with consistent parameters and SSRF protection.
+    
+    Args:
+        location: The location to get weather data for (will be validated)
+        date: The date in YYYY-MM-DD format (will be validated)
         remote: Whether to include remote data parameters (default: True)
+        
+    Returns:
+        URL string for Visual Crossing API
+        
+    Raises:
+        ValueError: If location or date validation fails
     """
     from urllib.parse import quote
-    # Clean and URL-encode the location to handle special characters
-    cleaned_location = clean_location_string(location)
+    
+    # Validate inputs to prevent SSRF and injection attacks
+    try:
+        validated_location = validate_location_for_ssrf(location)
+        validated_date = validate_date_format(date)
+    except ValueError as e:
+        # Log the error but don't expose the exact validation failure to prevent information disclosure
+        logger.error(f"Location or date validation failed: {str(e)}")
+        raise ValueError("Invalid location or date format") from e
+    
+    # Clean and URL-encode the validated location
+    cleaned_location = clean_location_string(validated_location)
     encoded_location = quote(cleaned_location, safe='')
+    
+    # Final validation: ensure encoded location doesn't reintroduce dangerous patterns
+    encoded_lower = encoded_location.lower()
+    dangerous_encoded = ['%2f', '%5c', '%40', '%3a%3a%2f', 'localhost', '127.0.0.1']
+    for pattern in dangerous_encoded:
+        if pattern in encoded_lower:
+            logger.error(f"Encoded location contains dangerous pattern after encoding: {pattern}")
+            raise ValueError("Invalid location format")
+    
     base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
     if remote:
-        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
     else:
-        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{base_params}"
 
 # Cache durations
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
@@ -1239,13 +1431,13 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
     
     # First attempt: without remote data parameters
     url = build_visual_crossing_url(location, date_str, remote=False)
-    logger.debug(f"First attempt (no remote data): {url}")
+    logger.debug(f"First attempt (no remote data): {sanitize_url(url)}")
     
     try:
         timeout = aiohttp.ClientTimeout(total=60)  # Increased from 30s to 60s for better reliability
         logger.info(f"[DEBUG] Creating aiohttp session with 60-second timeout")
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            logger.info(f"[DEBUG] Session created successfully, making GET request to: {url}")
+            logger.info(f"[DEBUG] Session created successfully, making GET request to: {sanitize_url(url)}")
             async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
                 logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
                 if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
@@ -1295,7 +1487,7 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
                 if not is_today_date and year >= 2005:
                     logger.info(f"[DEBUG] First attempt failed, trying remote fallback for {date_str} (year {year})")
                     url_with_remote = build_visual_crossing_url(location, date_str, remote=True)
-                    logger.info(f"[DEBUG] Remote fallback URL: {url_with_remote}")
+                    logger.info(f"[DEBUG] Remote fallback URL: {sanitize_url(url_with_remote)}")
                     
                     logger.info(f"[DEBUG] Making remote fallback request...")
                     async with session.get(url_with_remote, headers={"Accept-Encoding": "gzip"}) as remote_resp:
@@ -2456,6 +2648,7 @@ def is_location_likely_invalid(location: str) -> bool:
     """
     Check if a location string looks obviously invalid.
     This is a quick check before making API calls.
+    Enhanced with security checks for SSRF prevention.
     """
     if not location or not isinstance(location, str):
         return True
@@ -2473,7 +2666,41 @@ def is_location_likely_invalid(location: str) -> bool:
     ]
     
     location_lower = location.lower().strip()
-    return any(pattern.lower() in location_lower for pattern in invalid_patterns)
+    if any(pattern.lower() in location_lower for pattern in invalid_patterns):
+        return True
+    
+    # Security checks for SSRF prevention
+    # Length check
+    if len(location) > 200:
+        return True
+    
+    # Check for dangerous patterns that could indicate SSRF attempts
+    dangerous_patterns = [
+        '://',      # URL scheme
+        '@',        # URL auth
+        'localhost',
+        '127.0.0.1',
+        '0.0.0.0',
+        '..',       # Path traversal
+        '/',        # Path separator
+        '\\',       # Windows path separator
+        '//',       # Protocol-relative
+    ]
+    
+    for pattern in dangerous_patterns:
+        if pattern in location_lower:
+            return True
+    
+    # Check for private IP ranges
+    private_ip_patterns = ['10.', '172.16', '172.17', '172.18', '172.19', '172.20',
+                          '172.21', '172.22', '172.23', '172.24', '172.25', '172.26',
+                          '172.27', '172.28', '172.29', '172.30', '172.31', '192.168']
+    
+    for pattern in private_ip_patterns:
+        if pattern in location_lower:
+            return True
+    
+    return False
 
 def get_year_range(current_year: int, years_back: int = 50) -> List[int]:
     """Get a list of years for historical data analysis."""
@@ -2640,7 +2867,7 @@ async def get_forecast_data(location: str, date) -> Dict:
     
     try:
         url = build_visual_crossing_url(location, date_str, remote=False)
-        logger.debug(f"🔗 Built URL (first 200 chars): {url[:200]}...")
+        logger.debug(f"🔗 Built URL (sanitized): {sanitize_url(url)}")
     except Exception as url_error:
         logger.error(f"❌ Error building URL for location '{location}': {url_error}")
         raise
@@ -3081,13 +3308,22 @@ async def get_temperature_data_v1(location: str, period: str, identifier: str, u
 @app.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
 async def get_record(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
+    location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
     response: Response = None
 ):
     """Get temperature record data for a specific period, location, and identifier."""
     try:
-        # Quick validation for obviously invalid locations
+        # Comprehensive SSRF validation for location
+        try:
+            location = validate_location_for_ssrf(location)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid location format. Please provide a valid location name."
+            ) from e
+        
+        # Quick validation for obviously invalid locations (redundant but provides early feedback)
         if is_location_likely_invalid(location):
             raise HTTPException(
                 status_code=400, 
