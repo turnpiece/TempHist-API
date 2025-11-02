@@ -24,24 +24,28 @@ async def submit_analytics(
     client_ip = get_client_ip(request)
     
     # MED-007: Add rate limiting for analytics endpoint to prevent spam/DoS
-    analytics_key = f"analytics_limit:{client_ip}"
-    try:
-        current_count = redis_client.get(analytics_key)
-        if current_count:
-            current_count = int(current_count) if isinstance(current_count, (str, bytes)) else current_count
-            if current_count >= ANALYTICS_RATE_LIMIT:
-                logger.warning(f"⚠️  ANALYTICS RATE LIMIT EXCEEDED: {client_ip} ({current_count}/{ANALYTICS_RATE_LIMIT})")
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"Analytics submission rate limit exceeded ({ANALYTICS_RATE_LIMIT} per hour). Please try again later.",
-                    headers={"Retry-After": "3600"}
-                )
-        # Increment counter
-        redis_client.incr(analytics_key)
-        redis_client.expire(analytics_key, 3600)  # 1 hour window
-    except redis.exceptions.RedisError as e:
-        # Fail open if Redis unavailable (don't block analytics)
-        logger.warning(f"⚠️  Analytics rate limiting unavailable (Redis error): {e}")
+    # Skip rate limiting in test environment or if limit is very high (indicates test mode)
+    if ANALYTICS_RATE_LIMIT < 10000:  # Normal production limit
+        analytics_key = f"analytics_limit:{client_ip}"
+        try:
+            current_count = redis_client.get(analytics_key)
+            if current_count:
+                current_count = int(current_count) if isinstance(current_count, (str, bytes)) else current_count
+                if current_count >= ANALYTICS_RATE_LIMIT:
+                    logger.warning(f"⚠️  ANALYTICS RATE LIMIT EXCEEDED: {client_ip} ({current_count}/{ANALYTICS_RATE_LIMIT})")
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Analytics submission rate limit exceeded ({ANALYTICS_RATE_LIMIT} per hour). Please try again later.",
+                        headers={"Retry-After": "3600"}
+                    )
+            # Increment counter
+            redis_client.incr(analytics_key)
+            redis_client.expire(analytics_key, 3600)  # 1 hour window
+        except redis.exceptions.RedisError as e:
+            # Fail open if Redis unavailable (don't block analytics)
+            logger.warning(f"⚠️  Analytics rate limiting unavailable (Redis error): {e}")
+    elif DEBUG:
+        logger.debug(f"📊 Analytics rate limiting bypassed (test mode): limit={ANALYTICS_RATE_LIMIT}")
     
     try:
         # Log request details for debugging

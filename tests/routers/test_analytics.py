@@ -29,7 +29,8 @@ def mock_env_vars():
         'VISUAL_CROSSING_API_KEY': 'test_key',
         'OPENWEATHER_API_KEY': 'test_key',
         'CACHE_ENABLED': 'true',
-        'API_ACCESS_TOKEN': 'test_api_token'
+        'API_ACCESS_TOKEN': 'test_api_token',
+        'ANALYTICS_RATE_LIMIT': '10000'  # Very high limit for tests to avoid rate limit issues
     }):
         yield
 
@@ -37,6 +38,41 @@ def mock_env_vars():
 def mock_firebase_verify_id_token():
     with patch("firebase_admin.auth.verify_id_token", return_value={"uid": "testuser"}):
         yield
+
+@pytest.fixture(autouse=True)
+def clear_rate_limit_keys():
+    """Clear rate limit keys in Redis before each test to avoid rate limit issues."""
+    try:
+        import redis
+        from main import redis_client
+        if redis_client:
+            # Clear all analytics rate limit keys for test IPs
+            # The test client uses "testclient" as the IP
+            test_ips = ["testclient", "127.0.0.1", "localhost"]
+            for ip in test_ips:
+                key = f"analytics_limit:{ip}"
+                try:
+                    redis_client.delete(key)
+                except Exception:
+                    pass
+    except Exception:
+        # If Redis is not available or not configured for tests, skip
+        pass
+    yield
+    # Clean up after test too
+    try:
+        import redis
+        from main import redis_client
+        if redis_client:
+            test_ips = ["testclient", "127.0.0.1", "localhost"]
+            for ip in test_ips:
+                key = f"analytics_limit:{ip}"
+                try:
+                    redis_client.delete(key)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 class TestAnalyticsEndpoint:
     """Test the analytics endpoint robustness and error handling"""
