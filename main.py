@@ -134,7 +134,10 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 # Prevent DEBUG mode in production
 if ENVIRONMENT == "production" and DEBUG:
-    logger.error("❌ DEBUG mode cannot be enabled in production environment")
+    # Use basic logging since logger not yet initialized
+    _logging.basicConfig(level=_logging.INFO)
+    _temp_logger = _logging.getLogger(__name__)
+    _temp_logger.error("❌ DEBUG mode cannot be enabled in production environment")
     raise ValueError("DEBUG=true is forbidden in production. Set ENVIRONMENT=production and DEBUG=false")
 # Logging verbosity control - set to "minimal" to reduce Railway logging limits
 LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "normal", "verbose"
@@ -1607,6 +1610,7 @@ async def verify_token_middleware(request: Request, call_next):
 
     # Define endpoints that actually query Visual Crossing API (cost money)
     vc_api_paths = ["/weather/", "/forecast/", "/v1/records/"]
+    is_vc_api_endpoint = any(request.url.path.startswith(path) for path in vc_api_paths)
     
     # Apply rate limiting only to Visual Crossing API endpoints
     # Skip rate limiting for: whitelisted IPs, service jobs (API_ACCESS_TOKEN)
@@ -2477,7 +2481,7 @@ async def detailed_health_check():
             overall_healthy = False
             health_status["status"] = "degraded"
     except Exception as e:
-        health_status["services"]["redis"] = {
+        health_status["checks"]["redis"] = {
             "status": "unhealthy",
             "error": str(e)
         }
@@ -2488,7 +2492,7 @@ async def detailed_health_check():
     try:
         # Attempt to verify a clearly invalid token - if it rejects properly, service is up
         auth.verify_id_token("invalid_token_test", check_revoked=False)
-        health_status["services"]["firebase"] = {
+        health_status["checks"]["firebase"] = {
             "status": "unknown",
             "message": "Firebase accepted invalid token (unexpected)"
         }
@@ -2534,7 +2538,7 @@ async def detailed_health_check():
                 if overall_healthy:
                     health_status["status"] = "degraded"
     except Exception as e:
-        health_status["services"]["visual_crossing_api"] = {
+        health_status["checks"]["visual_crossing_api"] = {
             "status": "unhealthy",
             "error": str(e)
         }
@@ -2591,7 +2595,7 @@ async def detailed_health_check():
             }
             # Don't mark as unhealthy - worker is optional
     except Exception as e:
-        health_status["services"]["worker"] = {
+        health_status["checks"]["worker"] = {
             "status": "unknown",
             "error": f"Could not check worker heartbeat: {str(e)}"
         }
