@@ -69,7 +69,6 @@ DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCA
 # Environment variables for cache warming
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-TEST_TOKEN = os.getenv("TEST_TOKEN")
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
 
 class LocationUsageTracker:
@@ -667,7 +666,7 @@ class CacheWarmer:
             # Warm forecast data
             try:
                 forecast_url = f"{BASE_URL}/forecast/{location}"
-                auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                auth_token = API_ACCESS_TOKEN
                 if not auth_token:
                     results["errors"].append("forecast: No authentication token available")
                 else:
@@ -689,7 +688,7 @@ class CacheWarmer:
                     # Main record endpoint
                     try:
                         v1_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}"
-                        auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                        auth_token = API_ACCESS_TOKEN
                         if not auth_token:
                             results["errors"].append(f"v1/records/{period}/{month_day}: No authentication token available")
                         else:
@@ -706,7 +705,7 @@ class CacheWarmer:
                     for subresource in ["average", "trend", "summary"]:
                         try:
                             sub_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}/{subresource}"
-                            auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                            auth_token = API_ACCESS_TOKEN
                             if not auth_token:
                                 results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: No authentication token available")
                             else:
@@ -724,7 +723,7 @@ class CacheWarmer:
             for date in dates[:5]:  # Limit to last 5 dates to avoid too many requests
                 try:
                     weather_url = f"{BASE_URL}/weather/{location}/{date}"
-                    auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                    auth_token = API_ACCESS_TOKEN
                     if not auth_token:
                         results["errors"].append(f"weather/{date}: No authentication token available")
                     else:
@@ -769,7 +768,7 @@ class CacheWarmer:
             # Warm preapproved locations endpoint once
             try:
                 preapproved_url = f"{BASE_URL}/v1/locations/preapproved"
-                auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                auth_token = API_ACCESS_TOKEN
                 if auth_token:
                     # Set a reasonable timeout for the request
                     timeout = aiohttp.ClientTimeout(total=10)

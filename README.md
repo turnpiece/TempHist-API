@@ -64,8 +64,7 @@ IP_BLACKLIST=192.168.1.200,10.0.0.99  # IPs blocked entirely
 FILTER_WEATHER_DATA=true  # Filter to essential temperature data only
 
 # Authentication Tokens
-TEST_TOKEN=your_test_token_here  # Development/testing token
-API_ACCESS_TOKEN=your_api_access_token_here  # API access token for automated systems
+API_ACCESS_TOKEN=your_api_token_here  # API access token for automated systems
 ```
 
 ## 🛠️ Installation
@@ -292,7 +291,7 @@ For development and testing:
 
 ```bash
 # Include test token in Authorization header
-curl -H "Authorization: Bearer $TEST_TOKEN" \
+curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
      http://localhost:8000/v1/records/daily/New%20York/01-15
 ```
 
@@ -1095,19 +1094,19 @@ curl http://localhost:8000/rate-limit-status
 curl http://localhost:8000/v1/records/daily/London/01-15
 
 # Test with authentication
-curl -H "Authorization: Bearer $TEST_TOKEN" \
+curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
      http://localhost:8000/v1/records/daily/London/01-15
 
 # Test async job processing
-curl -X POST -H "Authorization: Bearer $TEST_TOKEN" \
+curl -X POST -H "Authorization: Bearer $API_ACCESS_TOKEN" \
      http://localhost:8000/v1/records/daily/London/01-15/async
 
 # Test cache headers
-curl -v -H "Authorization: Bearer $TEST_TOKEN" \
+curl -v -H "Authorization: Bearer $API_ACCESS_TOKEN" \
      http://localhost:8000/v1/records/daily/London/01-15
 
 # Test conditional requests (304 Not Modified)
-curl -H "Authorization: Bearer $TEST_TOKEN" \
+curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
      -H "If-None-Match: your_etag_here" \
      http://localhost:8000/v1/records/daily/London/01-15
 ```
@@ -1236,7 +1235,6 @@ IP_BLACKLIST=192.168.1.200,10.0.0.99              # Block specific IPs (optional
 
 # API access
 API_ACCESS_TOKEN=your_secure_token                 # Token for automated access (optional)
-TEST_TOKEN=your_test_token                         # Token for testing endpoints (optional)
 ```
 
 **Data Processing:**

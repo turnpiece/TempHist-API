@@ -426,7 +426,6 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
    - Firebase ID token (for users)
    - API_ACCESS_TOKEN (for automated systems)
-   - TEST_TOKEN (for development)
 
 3. **Check token hasn't expired** (Firebase tokens expire after 1 hour)
 

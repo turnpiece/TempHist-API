@@ -18,7 +18,7 @@ from main import (
     LocationDiversityMonitor,
     RequestRateMonitor,
     get_client_ip,
-    TEST_TOKEN
+    API_ACCESS_TOKEN
 )
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def test_weather_endpoint(client):
     with patch('main.fetch_weather_batch', return_value={"2024-05-15": mock_weather_data}):
         response = client.get(
             "/weather/London/2024-05-15",
-            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+            headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
         )
         assert response.status_code == 200
         data = response.json()
@@ -428,7 +428,7 @@ class TestRateLimitingIntegration:
             with patch('main.get_weather_for_date', return_value={"days": [{"temp": 20.0}]}):
                 response = client.get(
                     "/weather/London/2024-05-15",
-                    headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+                    headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
                 )
                 
                 # Should call rate limiting
@@ -447,7 +447,7 @@ class TestRateLimitingIntegration:
             
             response = client.get(
                 "/weather/London/2024-05-15",
-                headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+                headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
             )
             
             # Should return 429 status
@@ -470,7 +470,7 @@ class TestRateLimitingIntegration:
             
             response = client.get(
                 "/weather/London/2024-05-15",
-                headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+                headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
             )
             
             # Should return 429 status
@@ -658,7 +658,7 @@ class TestRateLimitingManual:
             for i in range(3):
                 response = client.get(
                     "/v1/records/daily/London/05-15",
-                    headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+                    headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
                 )
                 # Should succeed initially
                 assert response.status_code in [200, 429]  # Either success or rate limited
