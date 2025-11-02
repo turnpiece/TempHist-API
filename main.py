@@ -88,11 +88,54 @@ def sanitize_url(url: str) -> str:
         # If parsing fails, return a safe placeholder
         return "[REDACTED_URL]"
 
+def sanitize_for_logging(data: str, max_length: int = 100) -> str:
+    """Sanitize user input data before logging to prevent log injection and sensitive data exposure (MED-005).
+    
+    Args:
+        data: The input string to sanitize
+        max_length: Maximum length to keep (default 100 chars)
+        
+    Returns:
+        Sanitized string safe for logging
+    """
+    if not data or not isinstance(data, str):
+        return str(data)[:max_length] if data else ""
+    
+    # Truncate to max length
+    if len(data) > max_length:
+        data = data[:max_length] + "..."
+    
+    # Remove or replace control characters that could be used for log injection
+    # Replace newlines, tabs, and other control chars with spaces
+    import re
+    data = re.sub(r'[\r\n\t\x00-\x1f\x7f-\x9f]', ' ', data)
+    
+    # Remove potential sensitive patterns
+    # Redact bearer tokens
+    data = re.sub(r'Bearer\s+\S+', 'Bearer [REDACTED]', data, flags=re.IGNORECASE)
+    # Redact API keys in URLs
+    data = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', data, flags=re.IGNORECASE)
+    data = re.sub(r'api_key=[^&\s]+', 'api_key=[REDACTED]', data, flags=re.IGNORECASE)
+    # Redact tokens
+    data = re.sub(r'token=[^&\s]+', 'token=[REDACTED]', data, flags=re.IGNORECASE)
+    
+    # Clean up multiple spaces
+    data = re.sub(r'\s+', ' ', data).strip()
+    
+    return data
+
 _temp_logger = _logging.getLogger(__name__)
 _temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {sanitize_url(REDIS_URL)}")
 
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
+# LOW-008: Validate debug mode with environment check
+ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+# Prevent DEBUG mode in production
+if ENVIRONMENT == "production" and DEBUG:
+    logger.error("❌ DEBUG mode cannot be enabled in production environment")
+    raise ValueError("DEBUG=true is forbidden in production. Set ENVIRONMENT=production and DEBUG=false")
 # Logging verbosity control - set to "minimal" to reduce Railway logging limits
 LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "normal", "verbose"
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
@@ -425,7 +468,9 @@ class LocationDiversityMonitor:
         self.ip_locations: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
         self.suspicious_ips: Set[str] = set()
         self.last_cleanup = time.time()
+        # LOW-002: Use background task for cleanup instead of on every request
         self.cleanup_interval = 300  # Clean up every 5 minutes
+        self._cleanup_task = None  # Background cleanup task
         
     def _cleanup_old_entries(self):
         """Clean up old entries to prevent memory bloat."""
@@ -510,7 +555,9 @@ class RequestRateMonitor:
         # Track request counts per IP over time windows
         self.ip_requests: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.last_cleanup = time.time()
+        # LOW-002: Use background task for cleanup instead of on every request
         self.cleanup_interval = 300  # Clean up every 5 minutes
+        self._cleanup_task = None  # Background cleanup task
         
     def _cleanup_old_entries(self):
         """Clean up old entries to prevent memory bloat."""
@@ -1078,11 +1125,39 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# MED-008/LOW-006: Standardized error response format
+class ErrorResponse(BaseModel):
+    """Standardized error response format for consistent API error handling."""
+    error: str = Field(..., description="Error type or code")
+    message: str = Field(..., description="Human-readable error message")
+    code: Optional[str] = Field(None, description="Error code for programmatic handling")
+    details: Optional[Union[List[Dict], Dict, str]] = Field(None, description="Additional error details")
+    path: Optional[str] = Field(None, description="Request path where error occurred")
+    method: Optional[str] = Field(None, description="HTTP method")
+    request_id: Optional[str] = Field(None, description="Request ID for tracing")
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(), description="Error timestamp")
+
+# Error code mappings
+ERROR_CODES = {
+    400: "BAD_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    413: "PAYLOAD_TOO_LARGE",
+    422: "VALIDATION_ERROR",
+    429: "RATE_LIMIT_EXCEEDED",
+    500: "INTERNAL_SERVER_ERROR",
+    503: "SERVICE_UNAVAILABLE",
+    504: "GATEWAY_TIMEOUT"
+}
+
 # Global exception handlers for better error handling
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle Pydantic validation errors with detailed error messages."""
+    """Handle Pydantic validation errors with standardized error format (MED-008)."""
     client_ip = get_client_ip(request)
+    request_id = getattr(request.state, 'request_id', None)
     
     # Extract detailed error information
     error_details = []
@@ -1095,23 +1170,28 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "input": error.get('input', 'N/A')
         })
     
-    logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path}")
+    logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
+    
+    error_response = ErrorResponse(
+        error="VALIDATION_ERROR",
+        message="Request data validation failed",
+        code="VALIDATION_ERROR",
+        details=error_details,
+        path=request.url.path,
+        method=request.method,
+        request_id=request_id
+    )
     
     return JSONResponse(
         status_code=422,
-        content={
-            "error": "Validation Error",
-            "message": "Request data validation failed",
-            "details": error_details,
-            "path": request.url.path,
-            "method": request.method
-        }
+        content=error_response.model_dump()
     )
 
 @app.exception_handler(ValidationError)
 async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
-    """Handle Pydantic model validation errors."""
+    """Handle Pydantic model validation errors with standardized format (MED-008)."""
     client_ip = get_client_ip(request)
+    request_id = getattr(request.state, 'request_id', None)
     
     error_details = []
     for error in exc.errors():
@@ -1123,17 +1203,82 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
             "input": error.get('input', 'N/A')
         })
     
-    logger.error(f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path}")
+    logger.error(f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
+    
+    error_response = ErrorResponse(
+        error="MODEL_VALIDATION_ERROR",
+        message="Data model validation failed",
+        code="MODEL_VALIDATION_ERROR",
+        details=error_details,
+        path=request.url.path,
+        method=request.method,
+        request_id=request_id
+    )
     
     return JSONResponse(
         status_code=422,
-        content={
-            "error": "Model Validation Error",
-            "message": "Data model validation failed",
-            "details": error_details,
-            "path": request.url.path,
-            "method": request.method
-        }
+        content=error_response.model_dump()
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTPException with standardized error format (MED-008)."""
+    request_id = getattr(request.state, 'request_id', None)
+    
+    # Handle different detail formats
+    if isinstance(exc.detail, dict):
+        # Already in structured format, use it
+        detail_data = exc.detail
+        error_message = detail_data.get("message", detail_data.get("detail", "An error occurred"))
+        error_code = detail_data.get("code", ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR"))
+        error_details = detail_data.get("details")
+    elif isinstance(exc.detail, str):
+        # Simple string detail, convert to standardized format
+        error_message = exc.detail
+        error_code = ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR")
+        error_details = None
+    else:
+        error_message = str(exc.detail) if exc.detail else "An error occurred"
+        error_code = ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR")
+        error_details = None
+    
+    error_response = ErrorResponse(
+        error=error_code,
+        message=error_message,
+        code=error_code,
+        details=error_details,
+        path=request.url.path,
+        method=request.method,
+        request_id=request_id
+    )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_response.model_dump()
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle unhandled exceptions with standardized error format (MED-008)."""
+    request_id = getattr(request.state, 'request_id', None)
+    
+    # Log full error details server-side
+    logger.error(f"❌ UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)} | Path={request.url.path} | Request-ID={request_id}", exc_info=True)
+    
+    # Return generic error to client (don't expose internal details)
+    error_response = ErrorResponse(
+        error="INTERNAL_SERVER_ERROR",
+        message="An internal server error occurred" if not DEBUG else str(exc),
+        code="INTERNAL_SERVER_ERROR",
+        details={"type": type(exc).__name__} if DEBUG else None,
+        path=request.url.path,
+        method=request.method,
+        request_id=request_id
+    )
+    
+    return JSONResponse(
+        status_code=500,
+        content=error_response.model_dump()
     )
 
 # Include the routers
@@ -1199,7 +1344,13 @@ if DEBUG:
     logger.debug("📊 ANALYTICS STORAGE INITIALIZED: 7 days retention, 50 errors per session limit")
 
 # HTTP client configuration
-HTTP_TIMEOUT = 60.0  # Increased from 30s to 60s for better reliability
+# LOW-004: Extract magic numbers to named constants
+# HTTP Request Timeouts
+HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
+HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks
+HTTP_TIMEOUT_LONG = 120.0    # Long timeout for large data requests
+
+HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
 
 # Simple global semaphore - no longer need complex event loop handling with separate services
@@ -1274,6 +1425,19 @@ def verify_firebase_token(request: Request):
     except Exception as e:
         raise HTTPException(status_code=403, detail="Invalid token")
 
+# LOW-003: Request ID middleware for distributed tracing
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Add request ID for distributed tracing (LOW-003)."""
+    import uuid
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    
+    return response
+
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     """Log all requests when DEBUG is enabled or verbosity is verbose."""
@@ -1283,7 +1447,8 @@ async def log_requests_middleware(request: Request, call_next):
         
         # Log request details (only for non-public paths to reduce noise)
         if not request.url.path in ["/", "/docs", "/openapi.json", "/redoc", "/health", "/rate-limit-status"]:
-            logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {request.headers.get('user-agent', 'Unknown')}")
+            user_agent = request.headers.get('user-agent', 'Unknown')
+            logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {sanitize_for_logging(user_agent, max_length=150)}")
         
         # Process request
         response = await call_next(request)
@@ -1301,6 +1466,15 @@ async def log_requests_middleware(request: Request, call_next):
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     """Add security headers to all responses to prevent various attacks."""
+    # Enforce HTTPS in production (MED-001)
+    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    if env == "production" and request.url.scheme != "https":
+        return JSONResponse(
+            status_code=400,
+            content={"error": "HTTPS required in production"},
+            headers={"Location": f"https://{request.url.netloc}{request.url.path}"}
+        )
+    
     response = await call_next(request)
     
     # Prevent clickjacking
@@ -1464,7 +1638,7 @@ async def verify_token_middleware(request: Request, call_next):
                     location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
                     if not location_allowed:
                         if DEBUG:
-                            logger.warning(f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {location_reason}")
+                            logger.warning(f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {sanitize_for_logging(location_reason)}")
                         return JSONResponse(
                             status_code=429,
                             content={
@@ -1475,7 +1649,7 @@ async def verify_token_middleware(request: Request, call_next):
                             headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
                         )
                     elif DEBUG:
-                        logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {location} | OK")
+                        logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {sanitize_for_logging(location)} | OK")
         elif DEBUG:
             logger.debug(f"ℹ️  NON-VC ENDPOINT: {client_ip} | {request.method} {request.url.path} | Rate limiting skipped")
     elif is_ip_whitelisted(client_ip) and DEBUG:
@@ -1702,7 +1876,7 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
     2. If no temperature data and year >= 2005, retries with remote data parameters
     3. Never uses remote data for today's data
     """
-    logger.debug(f"get_weather_for_date for {location} on {date_str}")
+    logger.debug(f"get_weather_for_date for {sanitize_for_logging(location)} on {date_str}")
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
         cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
@@ -1823,10 +1997,14 @@ async def get_weather_for_date(location: str, date_str: str) -> dict:
         logger.error(f"[DEBUG] Full traceback: {traceback.format_exc()}")
         return {"error": str(e)}
 
-@app.get("/weather/{location}/{date}")
+@app.get("/weather/{location:path}/{date}")
 def get_weather(location: str, date: str, response: Response = None):
-    """Get weather data for a specific location and date."""
-    logger.info(f"[DEBUG] Weather endpoint called with location={location}, date={date}")
+    """Get weather data for a specific location and date.
+    
+    Note: Location is validated by validate_location_for_ssrf() in build_visual_crossing_url() 
+    which enforces max_length=200 and prevents SSRF attacks.
+    """
+    logger.info(f"[DEBUG] Weather endpoint called with location={sanitize_for_logging(location)}, date={date}")
     
     # Parse the date for cache headers
     try:
@@ -2267,101 +2445,175 @@ async def health_check():
 
 @app.get("/health/detailed")
 async def detailed_health_check():
-    """Comprehensive health check endpoint for debugging and monitoring."""
+    """Comprehensive health check endpoint for debugging and monitoring (LOW-007: Enhanced dependencies check)."""
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
-        "services": {}
+        "checks": {}  # LOW-007: Changed from "services" to "checks" for consistency
     }
     
     overall_healthy = True
     
-    # Check Redis connection
+    # Check Redis connection (LOW-007: Enhanced)
     try:
-        set_cache_value("health_check", timedelta(minutes=1), "test_value", redis_client)
-        test_value = get_cache_value("health_check", redis_client, "health", "test", get_cache_stats())
+        redis_client.ping()
+        # Test read/write
+        test_key = "health_check:test"
+        redis_client.setex(test_key, 60, "test_value")
+        test_value = redis_client.get(test_key)
+        redis_client.delete(test_key)
         
-        # Handle both string and bytes responses (depending on Redis client configuration)
-        if test_value:
-            if isinstance(test_value, bytes):
-                test_value_str = test_value.decode('utf-8')
-            else:
-                test_value_str = str(test_value)
-            
-            if test_value_str == "test_value":
-                health_status["services"]["redis"] = {
-                    "status": "healthy",
-                    "message": "Connection successful"
-                }
-            else:
-                health_status["services"]["redis"] = {
-                    "status": "unhealthy",
-                    "message": f"Cache test failed - expected 'test_value', got '{test_value_str}'"
-                }
-                overall_healthy = False
+        if test_value == "test_value":
+            health_status["checks"]["redis"] = {
+                "status": "healthy",
+                "message": "Connection and read/write successful"
+            }
         else:
-            health_status["services"]["redis"] = {
-                "status": "unhealthy",
-                "message": "Cache test failed - no value returned"
+            health_status["checks"]["redis"] = {
+                "status": "degraded",
+                "message": "Connection successful but read/write test failed"
             }
             overall_healthy = False
+            health_status["status"] = "degraded"
     except Exception as e:
         health_status["services"]["redis"] = {
             "status": "unhealthy",
-            "message": f"Connection error: {str(e)}"
+            "error": str(e)
         }
         overall_healthy = False
+        health_status["status"] = "unhealthy"
     
-    # Check API keys
-    api_keys_healthy = True
+    # Check Firebase auth service (LOW-007)
+    try:
+        # Attempt to verify a clearly invalid token - if it rejects properly, service is up
+        auth.verify_id_token("invalid_token_test", check_revoked=False)
+        health_status["services"]["firebase"] = {
+            "status": "unknown",
+            "message": "Firebase accepted invalid token (unexpected)"
+        }
+    except Exception as e:
+        error_str = str(e).lower()
+        if "invalid" in error_str or "token" in error_str or "expired" in error_str:
+            # Expected rejection of invalid token means service is healthy
+            health_status["checks"]["firebase"] = {
+                "status": "healthy",
+                "message": "Service responding correctly"
+            }
+        else:
+            health_status["checks"]["firebase"] = {
+                "status": "degraded",
+                "error": f"Unexpected error: {str(e)}"
+            }
+            if overall_healthy:
+                health_status["status"] = "degraded"
+    
+    # Check external API (Visual Crossing) availability (LOW-007)
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Just check if the base URL is reachable (don't use API key in health check)
+            resp = await client.get(
+                "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/",
+                timeout=5.0
+            )
+            if resp.status_code < 500:
+                health_status["checks"]["visual_crossing_api"] = {
+                    "status": "healthy",
+                    "status_code": resp.status_code,
+                    "message": "API reachable" if API_KEY else "API reachable but key not configured"
+                }
+                if not API_KEY:
+                    health_status["status"] = "degraded" if overall_healthy else health_status["status"]
+            else:
+                health_status["checks"]["visual_crossing_api"] = {
+                    "status": "degraded",
+                    "status_code": resp.status_code,
+                    "message": f"API returned status {resp.status_code}"
+                }
+                if overall_healthy:
+                    health_status["status"] = "degraded"
+    except Exception as e:
+        health_status["services"]["visual_crossing_api"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        if overall_healthy:
+            health_status["status"] = "degraded"
+    
+    # Check API keys configuration
     if not API_KEY:
-        health_status["services"]["visual_crossing_api"] = {
-            "status": "unhealthy",
-            "message": "API key not configured"
-        }
-        api_keys_healthy = False
-    else:
-        health_status["services"]["visual_crossing_api"] = {
-            "status": "healthy",
-            "message": "API key configured"
-        }
-    
+        # Already reported in visual_crossing_api check above
+        pass
     if not OPENWEATHER_API_KEY:
-        health_status["services"]["openweather_api"] = {
-            "status": "unhealthy",
+        health_status["checks"]["openweather_api"] = {
+            "status": "degraded",
             "message": "API key not configured"
         }
-        api_keys_healthy = False
+        if overall_healthy:
+            health_status["status"] = "degraded"
     else:
-        health_status["services"]["openweather_api"] = {
+        health_status["checks"]["openweather_api"] = {
             "status": "healthy",
             "message": "API key configured"
         }
     
-    if not api_keys_healthy:
-        overall_healthy = False
+    # Check worker service health (LOW-007)
+    try:
+        heartbeat_key = "worker:heartbeat"
+        heartbeat = redis_client.get(heartbeat_key)
+        if heartbeat:
+            # Try to parse timestamp if it's there
+            try:
+                heartbeat_time = float(heartbeat)
+                age_seconds = time.time() - heartbeat_time
+                if age_seconds < 300:  # Less than 5 minutes old
+                    health_status["checks"]["worker"] = {
+                        "status": "healthy",
+                        "last_heartbeat_seconds_ago": round(age_seconds, 2)
+                    }
+                else:
+                    health_status["checks"]["worker"] = {
+                        "status": "degraded",
+                        "message": f"Worker heartbeat is {round(age_seconds/60, 1)} minutes old (may be idle)"
+                    }
+                    # Don't mark overall as unhealthy - worker is optional
+            except (ValueError, TypeError):
+                # Heartbeat exists but not in expected format
+                health_status["checks"]["worker"] = {
+                    "status": "healthy",
+                    "message": "Worker heartbeat present"
+                }
+        else:
+            health_status["checks"]["worker"] = {
+                "status": "unknown",
+                "message": "No worker heartbeat found (worker may not be running)"
+            }
+            # Don't mark as unhealthy - worker is optional
+    except Exception as e:
+        health_status["services"]["worker"] = {
+            "status": "unknown",
+            "error": f"Could not check worker heartbeat: {str(e)}"
+        }
     
     # Check cache statistics if available
     try:
         cache_stats_instance = get_cache_stats()
         if cache_stats_instance and hasattr(cache_stats_instance, 'get_cache_health'):
             cache_health = cache_stats_instance.get_cache_health()
-            health_status["services"]["cache"] = cache_health
+            health_status["checks"]["cache"] = cache_health
             # Only consider cache "unhealthy" status as a failure, not "degraded"
             if cache_health.get("status") == "unhealthy":
                 overall_healthy = False
     except Exception as e:
-        health_status["services"]["cache"] = {
+        health_status["checks"]["cache"] = {
             "status": "unknown",
             "message": f"Cache stats unavailable: {str(e)}"
         }
     
-    # Set overall status
-    health_status["status"] = "healthy" if overall_healthy else "unhealthy"
-    
+    # LOW-007: Status already updated during checks
     # Return appropriate HTTP status code
-    status_code = 200 if overall_healthy else 503
+    status_code = 200 if health_status["status"] == "healthy" else 503
     
     return JSONResponse(
         content=health_status,
@@ -2878,13 +3130,19 @@ def validate_month_day(month_day: str):
     return month, day
 
 
-def is_valid_location(location: str) -> bool:
-    """Check if a location is valid by testing the API."""
+async def is_valid_location(location: str) -> bool:
+    """Check if a location is valid by testing the API (async version)."""
+    import httpx
     today = datetime.now().strftime("%Y-%m-%d")
     url = build_visual_crossing_url(location, today, remote=False)
-    response = requests.get(url)
-    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-        return True
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            response = await client.get(url)
+            if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
+                return True
+    except Exception:
+        # If request fails, assume location is invalid
+        pass
     return False
 
 class InvalidLocationCache:
@@ -3723,7 +3981,7 @@ async def get_record(
 @app.get("/v1/records/{period}/{location}/{identifier}/average", response_model=SubResourceResponse)
 async def get_record_average(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
+    location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
     response: Response = None
 ):
@@ -3805,7 +4063,7 @@ async def get_record_average(
 @app.get("/v1/records/{period}/{location}/{identifier}/trend", response_model=SubResourceResponse)
 async def get_record_trend(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
+    location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
     response: Response = None
 ):
@@ -3887,7 +4145,7 @@ async def get_record_trend(
 @app.get("/v1/records/{period}/{location}/{identifier}/summary", response_model=SubResourceResponse)
 async def get_record_summary(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
+    location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
     response: Response = None
 ):
@@ -3969,7 +4227,7 @@ async def get_record_summary(
 @app.get("/v1/records/{period}/{location}/{identifier}/updated", response_model=UpdatedResponse)
 async def get_record_updated(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
+    location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier")
 ):
     """
@@ -4093,8 +4351,27 @@ def protected_route(user=Depends(verify_firebase_token)):
 # Analytics Endpoints
 @app.post("/analytics", response_model=AnalyticsResponse)
 async def submit_analytics(request: Request):
-    """Submit client analytics data for monitoring and error tracking."""
+    """Submit client analytics data for monitoring and error tracking (MED-007: Rate limited)."""
     client_ip = get_client_ip(request)
+    
+    # MED-007: Add rate limiting for analytics endpoint to prevent spam/DoS
+    ANALYTICS_RATE_LIMIT = int(os.getenv("ANALYTICS_RATE_LIMIT", "100"))  # 100 requests per hour per IP
+    analytics_key = f"analytics_limit:{client_ip}"
+    try:
+        current_count = redis_client.get(analytics_key)
+        if current_count and int(current_count) >= ANALYTICS_RATE_LIMIT:
+            logger.warning(f"⚠️  ANALYTICS RATE LIMIT EXCEEDED: {client_ip} ({current_count}/{ANALYTICS_RATE_LIMIT})")
+            raise HTTPException(
+                status_code=429,
+                detail=f"Analytics submission rate limit exceeded ({ANALYTICS_RATE_LIMIT} per hour). Please try again later.",
+                headers={"Retry-After": "3600"}
+            )
+        # Increment counter
+        redis_client.incr(analytics_key)
+        redis_client.expire(analytics_key, 3600)  # 1 hour window
+    except redis.exceptions.RedisError as e:
+        # Fail open if Redis unavailable (don't block analytics)
+        logger.warning(f"⚠️  Analytics rate limiting unavailable (Redis error): {e}")
     
     try:
         # Log request details for debugging
@@ -4337,7 +4614,7 @@ async def debug_jobs_endpoint():
 @app.post("/v1/records/{period}/{location}/{identifier}/async")
 async def create_record_job(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
+    location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
     response: Response = None
 ):

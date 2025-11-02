@@ -535,6 +535,22 @@ def retry_with_backoff(func, max_retries=3, base_delay=1):
 
 ## 📡 API Endpoints
 
+### API Versioning (LOW-001)
+
+**Current Version**: v1
+
+The API uses URL-based versioning:
+- **v1 endpoints** (`/v1/records/*`): Current stable API version
+- **Legacy endpoints** (`/weather/*`, `/forecast/*`): Deprecated, maintained for backward compatibility
+
+**Versioning Policy**:
+- New features and breaking changes will be introduced in new version numbers (v2, v3, etc.)
+- Previous versions will be maintained for at least 6 months after a new version is released
+- Deprecation warnings will be sent via response headers (`Deprecation`, `Sunset`, `Link`)
+- Legacy endpoints will eventually be removed - migrate to v1 API as soon as possible
+
+**Migration Guide**: See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for details on migrating from legacy endpoints.
+
 ### V1 API (Recommended)
 
 The new v1 API provides a unified structure for accessing temperature records across different time periods.

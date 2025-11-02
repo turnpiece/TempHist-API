@@ -26,11 +26,28 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-# Cache configuration
-CACHE_TTL_DEFAULT = 86400  # 24 hours
-CACHE_TTL_SHORT = 3600    # 1 hour  
-CACHE_TTL_LONG = 604800   # 7 days
-CACHE_TTL_JOB = 7200      # 2 hours for job results
+# Cache configuration with validation
+def validate_ttl(ttl: int, name: str, default: int) -> int:
+    """Validate cache TTL value with min/max bounds."""
+    MIN_TTL = 60  # 1 minute minimum
+    MAX_TTL = 6048000  # 70 days maximum (reasonable limit)
+    
+    if not isinstance(ttl, int):
+        logger.warning(f"{name} TTL is not integer, using default {default}s")
+        return default
+    if ttl < MIN_TTL:
+        logger.warning(f"{name} TTL {ttl}s too low (min {MIN_TTL}s), using {MIN_TTL}s")
+        return MIN_TTL
+    if ttl > MAX_TTL:
+        logger.warning(f"{name} TTL {ttl}s too high (max {MAX_TTL}s), using {MAX_TTL}s")
+        return MAX_TTL
+    return ttl
+
+# Validate TTL values (MED-012)
+CACHE_TTL_DEFAULT = validate_ttl(int(os.getenv("CACHE_TTL_DEFAULT", "86400")), "CACHE_TTL_DEFAULT", 86400)  # 24 hours
+CACHE_TTL_SHORT = validate_ttl(int(os.getenv("CACHE_TTL_SHORT", "3600")), "CACHE_TTL_SHORT", 3600)  # 1 hour  
+CACHE_TTL_LONG = validate_ttl(int(os.getenv("CACHE_TTL_LONG", "604800")), "CACHE_TTL_LONG", 604800)  # 7 days
+CACHE_TTL_JOB = validate_ttl(int(os.getenv("CACHE_TTL_JOB", "7200")), "CACHE_TTL_JOB", 7200)  # 2 hours for job results
 
 # Coordinate precision for cache key normalization
 COORD_PRECISION = 4  # 4 decimal places (~11m precision)
@@ -266,10 +283,11 @@ class ETagGenerator:
     
     @staticmethod
     def generate_etag(data: Any) -> str:
-        """Generate ETag from response data."""
+        """Generate ETag from response data using SHA256 (128-bit security)."""
         # Ensure deterministic JSON serialization
         json_str = json.dumps(data, sort_keys=True, separators=(',', ':'))
-        return f'"{hashlib.md5(json_str.encode()).hexdigest()}"'
+        # Use SHA256 with 32 characters (128-bit security) instead of broken MD5
+        return f'"{hashlib.sha256(json_str.encode()).hexdigest()[:32]}"'
     
     @staticmethod
     def parse_etag(etag: str) -> Optional[str]:
@@ -1158,16 +1176,21 @@ class CacheInvalidator:
                 "error": str(e)
             }
     
-    def invalidate_by_pattern(self, pattern: str, dry_run: bool = False) -> Dict:
-        """Invalidate cache keys matching a pattern."""
+    def invalidate_by_pattern(self, pattern: str, dry_run: bool = False, max_keys: int = 10000) -> Dict:
+        """Invalidate cache keys matching a pattern (MED-010: Add DoS protection)."""
         if not CACHE_INVALIDATION_ENABLED:
             return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+        
+        # MED-010: Limit pattern matching to prevent DoS
+        if max_keys > 100000:
+            logger.warning(f"Cache invalidation max_keys ({max_keys}) is very high, capping at 100000")
+            max_keys = 100000
         
         try:
             # Use SCAN instead of KEYS to avoid blocking Redis (O(N) blocking operation)
             matching_keys = []
             cursor = 0
-            max_keys = 100000  # Safety limit to prevent runaway scans
+            scan_max_keys = max_keys  # Use parameter limit for safety
             
             try:
                 while cursor != 0 or len(matching_keys) == 0:  # Start iteration
@@ -1178,10 +1201,14 @@ class CacheInvalidator:
                     )
                     matching_keys.extend(keys)
                     
-                    # Safety limit to prevent infinite loops or excessive memory usage
-                    if len(matching_keys) > max_keys:
-                        logger.warning(f"Pattern matches >{max_keys} keys, stopping scan at {len(matching_keys)} keys")
-                        break
+                    # Safety limit to prevent infinite loops or excessive memory usage (MED-010)
+                    if len(matching_keys) > scan_max_keys:
+                        logger.warning(f"Pattern matches >{scan_max_keys} keys, stopping scan at {len(matching_keys)} keys")
+                        return {
+                            "status": "error",
+                            "pattern": pattern,
+                            "error": f"Pattern matches too many keys (>{scan_max_keys}). Use a more specific pattern or increase max_keys parameter."
+                        }
                     
                     # Prevent infinite loop (shouldn't happen, but safety check)
                     if cursor == 0:
@@ -1574,7 +1601,7 @@ class JobManager:
         
         return job
     
-    def update_job_status(self, job_id: str, status: str, result: Any = None, error: str = None):
+    def update_job_status(self, job_id: str, status: str, result: Any = None, error: str = None, error_details: Dict = None):
         """Update job status and optionally store result."""
         job_key = f"{self.job_prefix}{job_id}"
         job_data = self.redis.get(job_key)
@@ -1588,6 +1615,9 @@ class JobManager:
         
         if error:
             job["error"] = error
+        
+        if error_details:
+            job["error_details"] = error_details
         
         self.redis.setex(job_key, self.job_ttl, json.dumps(job))
         

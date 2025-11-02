@@ -77,10 +77,12 @@ class TestAnalyticsEndpoint:
         assert response.status_code == 422
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
-        assert "details" in data["detail"]
+        # Updated to match standardized error response format (MED-008)
+        assert "error" in data
+        assert "message" in data
+        assert "code" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "details" in data
     
     def test_analytics_invalid_data_types(self, client):
         """Test analytics endpoint with invalid data types"""
@@ -102,9 +104,11 @@ class TestAnalyticsEndpoint:
         assert response.status_code == 422
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
+        # Updated to match standardized error response format (MED-008)
+        assert "error" in data
+        assert "message" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "Validation failed" in data["message"]
     
     def test_analytics_invalid_json(self, client):
         """Test analytics endpoint with invalid JSON"""
@@ -116,7 +120,11 @@ class TestAnalyticsEndpoint:
         assert response.status_code == 400
         
         data = response.json()
-        assert "Invalid JSON format" in data["detail"]
+        # Updated to match standardized error response format (MED-008)
+        assert "error" in data
+        assert "message" in data
+        assert data["code"] == "BAD_REQUEST"
+        assert "Invalid JSON format" in data["message"]
     
     def test_analytics_wrong_content_type(self, client):
         """Test analytics endpoint with wrong content type"""
@@ -205,9 +213,11 @@ class TestAnalyticsEndpoint:
         assert response.status_code == 422
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
+        # Updated to match standardized error response format (MED-008)
+        assert "error" in data
+        assert "message" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "Validation failed" in data["message"]
     
     def test_analytics_invalid_error_details(self, client):
         """Test analytics endpoint with invalid error details structure"""
@@ -235,9 +245,11 @@ class TestAnalyticsEndpoint:
         assert response.status_code == 422
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
+        # Updated to match standardized error response format (MED-008)
+        assert "error" in data
+        assert "message" in data
+        assert data["code"] == "VALIDATION_ERROR"
+        assert "Validation failed" in data["message"]
     
     def test_analytics_optional_fields(self, client):
         """Test analytics endpoint with only required fields (optional fields omitted)"""

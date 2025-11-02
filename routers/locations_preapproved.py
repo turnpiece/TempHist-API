@@ -88,8 +88,8 @@ def validate_limit(limit: int) -> bool:
     return 1 <= limit <= MAX_LIMIT
 
 def generate_etag(data: str) -> str:
-    """Generate ETag from data content."""
-    return f'"{hashlib.sha256(data.encode()).hexdigest()[:16]}"'
+    """Generate ETag from data content using SHA256 (32 chars for 128-bit security)."""
+    return f'"{hashlib.sha256(data.encode()).hexdigest()[:32]}"'
 
 def get_cache_key(country_code: Optional[str] = None, tier: Optional[str] = None) -> str:
     """Generate cache key for filtered data."""

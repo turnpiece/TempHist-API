@@ -74,16 +74,16 @@ class JobWorker:
             # Use the same cache storage function as the main endpoints
             set_cache_value(cache_key, cache_duration, json.dumps(data), self.redis)
             
-            # Generate ETag using the same method as the main endpoints
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+            # Generate ETag using SHA256 (same as main endpoints)
+            etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
             
             logger.info(f"✅ Cached {data_type} for {cache_key}")
             return etag
             
         except Exception as cache_error:
             logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
-            # Generate a simple ETag even if cache fails
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+            # Generate a simple ETag even if cache fails (use SHA256, not MD5)
+            etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
             return etag
     
     async def process_jobs(self):
@@ -201,10 +201,26 @@ class JobWorker:
             self.redis.lrem(self.job_queue_key, 1, job_id)
             
         except Exception as e:
-            logger.error(f"❌ Error processing job {job_id}: {e}")
+            # MED-006: Improved error handling with detailed logging and error storage
             import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
-            job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(e))
+            error_traceback = traceback.format_exc()
+            error_details = {
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": error_traceback,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            logger.error(f"❌ Error processing job {job_id}: {type(e).__name__}: {str(e)}")
+            logger.error(f"❌ Full traceback:\n{error_traceback}")
+            
+            # Store detailed error in job status
+            job_manager.update_job_status(
+                job_id, 
+                JobStatus.ERROR, 
+                error=str(e),
+                error_details=error_details  # Store full details for diagnostics
+            )
             # Remove failed job from queue
             self.redis.lrem(self.job_queue_key, 1, job_id)
     
