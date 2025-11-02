@@ -52,6 +52,12 @@ MAX_LOCATIONS_PER_HOUR=10  # Defaults to 10
 MAX_REQUESTS_PER_HOUR=100  # Defaults to 100
 RATE_LIMIT_WINDOW_HOURS=1  # Defaults to 1
 
+# Service Token Rate Limiting (for API_ACCESS_TOKEN)
+# High limits for cache warming, but protects against abuse if token is compromised
+SERVICE_TOKEN_REQUESTS_PER_HOUR=5000  # Defaults to 5000 requests/hour
+SERVICE_TOKEN_LOCATIONS_PER_HOUR=500  # Defaults to 500 unique locations/hour
+SERVICE_TOKEN_WINDOW_HOURS=1  # Defaults to 1 hour sliding window
+
 # CORS Configuration
 CORS_ORIGINS=https://yourdomain.com,https://staging.yourdomain.com  # Comma-separated list of allowed origins
 CORS_ORIGIN_REGEX=^https://.*\.yourdomain\.com$  # Regex pattern for allowed origins

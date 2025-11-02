@@ -229,6 +229,154 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
+# Service Token Rate Limiting Configuration
+# High limits for legitimate cache warming, but protection against abuse
+# Configurable via environment variables with sensible defaults
+SERVICE_TOKEN_REQUESTS_PER_HOUR = int(os.getenv("SERVICE_TOKEN_REQUESTS_PER_HOUR", "5000"))
+SERVICE_TOKEN_LOCATIONS_PER_HOUR = int(os.getenv("SERVICE_TOKEN_LOCATIONS_PER_HOUR", "500"))
+SERVICE_TOKEN_WINDOW_HOURS = int(os.getenv("SERVICE_TOKEN_WINDOW_HOURS", "1"))
+
+# Validate limits are reasonable
+if SERVICE_TOKEN_REQUESTS_PER_HOUR < 100:
+    logger.warning(f"SERVICE_TOKEN_REQUESTS_PER_HOUR is very low ({SERVICE_TOKEN_REQUESTS_PER_HOUR}). Consider increasing for cache warming.")
+elif SERVICE_TOKEN_REQUESTS_PER_HOUR > 100000:
+    logger.warning(f"SERVICE_TOKEN_REQUESTS_PER_HOUR is very high ({SERVICE_TOKEN_REQUESTS_PER_HOUR}). This may allow excessive costs.")
+
+if SERVICE_TOKEN_LOCATIONS_PER_HOUR < 10:
+    logger.warning(f"SERVICE_TOKEN_LOCATIONS_PER_HOUR is very low ({SERVICE_TOKEN_LOCATIONS_PER_HOUR}). Consider increasing for cache warming.")
+elif SERVICE_TOKEN_LOCATIONS_PER_HOUR > 10000:
+    logger.warning(f"SERVICE_TOKEN_LOCATIONS_PER_HOUR is very high ({SERVICE_TOKEN_LOCATIONS_PER_HOUR}). This may allow excessive costs.")
+
+if SERVICE_TOKEN_WINDOW_HOURS < 1:
+    logger.warning(f"SERVICE_TOKEN_WINDOW_HOURS is less than 1 ({SERVICE_TOKEN_WINDOW_HOURS}). Using minimum of 1 hour.")
+    SERVICE_TOKEN_WINDOW_HOURS = 1
+elif SERVICE_TOKEN_WINDOW_HOURS > 24:
+    logger.warning(f"SERVICE_TOKEN_WINDOW_HOURS is very high ({SERVICE_TOKEN_WINDOW_HOURS}). Consider using 1-24 hours.")
+
+SERVICE_TOKEN_RATE_LIMITS = {
+    "requests_per_hour": SERVICE_TOKEN_REQUESTS_PER_HOUR,
+    "locations_per_hour": SERVICE_TOKEN_LOCATIONS_PER_HOUR,
+    "window_hours": SERVICE_TOKEN_WINDOW_HOURS,
+}
+
+class ServiceTokenRateLimiter:
+    """Redis-based rate limiter for service tokens to prevent abuse while allowing legitimate cache warming.
+    
+    Uses Redis for distributed rate limiting across multiple worker instances.
+    """
+    
+    def __init__(self, redis_client: redis.Redis, 
+                 requests_per_hour: int = SERVICE_TOKEN_RATE_LIMITS["requests_per_hour"],
+                 locations_per_hour: int = SERVICE_TOKEN_RATE_LIMITS["locations_per_hour"],
+                 window_hours: int = SERVICE_TOKEN_RATE_LIMITS["window_hours"]):
+        self.redis = redis_client
+        self.requests_per_hour = requests_per_hour
+        self.locations_per_hour = locations_per_hour
+        self.window_seconds = window_hours * 3600
+        self.requests_key_prefix = "service_rate:requests:"
+        self.locations_key_prefix = "service_rate:locations:"
+    
+    def check_request_rate(self, client_ip: str) -> tuple[bool, str]:
+        """Check if service token request rate is within limits.
+        
+        Returns:
+            tuple: (is_allowed, reason)
+        """
+        try:
+            key = f"{self.requests_key_prefix}{client_ip}"
+            now = time.time()
+            window_start = now - self.window_seconds
+            
+            # Use Redis sorted set for sliding window
+            # Remove old entries
+            self.redis.zremrangebyscore(key, 0, window_start)
+            
+            # Count requests in window
+            count = self.redis.zcard(key)
+            
+            if count >= self.requests_per_hour:
+                return False, f"Service token rate limit exceeded: {count}/{self.requests_per_hour} requests per hour"
+            
+            # Add current request with current timestamp
+            self.redis.zadd(key, {str(now): now})
+            self.redis.expire(key, self.window_seconds)
+            
+            return True, "OK"
+        except Exception as e:
+            logger.error(f"Error checking service token request rate: {e}")
+            # Fail open - allow request if Redis fails (to prevent DoS from Redis issues)
+            return True, "OK"
+    
+    def check_location_diversity(self, client_ip: str, location: str) -> tuple[bool, str]:
+        """Check if service token location diversity is within limits.
+        
+        Returns:
+            tuple: (is_allowed, reason)
+        """
+        try:
+            key = f"{self.locations_key_prefix}{client_ip}"
+            now = time.time()
+            window_start = now - self.window_seconds
+            
+            # Use Redis sorted set for sliding window
+            # Remove old entries
+            self.redis.zremrangebyscore(key, 0, window_start)
+            
+            # Check if location already in window
+            location_exists = self.redis.zscore(key, location) is not None
+            
+            if not location_exists:
+                # Count unique locations in window
+                count = self.redis.zcard(key)
+                
+                if count >= self.locations_per_hour:
+                    return False, f"Service token location limit exceeded: {count}/{self.locations_per_hour} unique locations per hour"
+            
+            # Add/update location with current timestamp
+            self.redis.zadd(key, {location: now})
+            self.redis.expire(key, self.window_seconds)
+            
+            return True, "OK"
+        except Exception as e:
+            logger.error(f"Error checking service token location diversity: {e}")
+            # Fail open - allow request if Redis fails
+            return True, "OK"
+    
+    def get_stats(self, client_ip: str) -> Dict:
+        """Get service token rate limiting stats."""
+        try:
+            requests_key = f"{self.requests_key_prefix}{client_ip}"
+            locations_key = f"{self.locations_key_prefix}{client_ip}"
+            now = time.time()
+            window_start = now - self.window_seconds
+            
+            # Count requests
+            self.redis.zremrangebyscore(requests_key, 0, window_start)
+            request_count = self.redis.zcard(requests_key)
+            
+            # Count locations
+            self.redis.zremrangebyscore(locations_key, 0, window_start)
+            location_count = self.redis.zcard(locations_key)
+            
+            return {
+                "requests_count": request_count,
+                "requests_limit": self.requests_per_hour,
+                "locations_count": location_count,
+                "locations_limit": self.locations_per_hour,
+                "window_hours": self.window_seconds / 3600,
+                "remaining_requests": max(0, self.requests_per_hour - request_count),
+                "remaining_locations": max(0, self.locations_per_hour - location_count)
+            }
+        except Exception as e:
+            logger.error(f"Error getting service token stats: {e}")
+            return {
+                "error": str(e),
+                "requests_count": 0,
+                "requests_limit": self.requests_per_hour,
+                "locations_count": 0,
+                "locations_limit": self.locations_per_hour
+            }
+
 # Rate Limiting Classes
 class LocationDiversityMonitor:
     """Monitor and limit location diversity per IP address to prevent API abuse."""
@@ -403,6 +551,15 @@ DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCA
 if RATE_LIMIT_ENABLED:
     location_monitor = LocationDiversityMonitor(MAX_LOCATIONS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
     request_monitor = RequestRateMonitor(MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
+else:
+    location_monitor = None
+    request_monitor = None
+
+# Initialize service token rate limiter (Redis-based, always enabled for security)
+# Note: redis_client is initialized later, so we'll create this in the lifespan handler
+service_token_rate_limiter: Optional[ServiceTokenRateLimiter] = None
+
+if RATE_LIMIT_ENABLED:
     if DEBUG:
         logger.info(f"🛡️  RATE LIMITING INITIALIZED: {MAX_LOCATIONS_PER_HOUR} locations/hour, {MAX_REQUESTS_PER_HOUR} requests/hour, {RATE_LIMIT_WINDOW_HOURS}h window")
         if IP_WHITELIST:
@@ -816,7 +973,18 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
+    global service_token_rate_limiter
     # Startup
+    # Initialize service token rate limiter (Redis-based, always enabled for security)
+    try:
+        service_token_rate_limiter = ServiceTokenRateLimiter(redis_client)
+        if DEBUG:
+            logger.info(f"🛡️  SERVICE TOKEN RATE LIMITING: {SERVICE_TOKEN_RATE_LIMITS['requests_per_hour']} requests/hour, {SERVICE_TOKEN_RATE_LIMITS['locations_per_hour']} locations/hour")
+    except Exception as e:
+        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Failed to initialize - {e}")
+        # Create None limiter if Redis fails - will fail open in middleware
+        service_token_rate_limiter = None
+    
     # Initialize cache system first
     try:
         initialize_cache(redis_client)
@@ -1151,9 +1319,6 @@ async def verify_token_middleware(request: Request, call_next):
     # Apply rate limiting only to Visual Crossing API endpoints
     # Skip rate limiting for: whitelisted IPs, service jobs (API_ACCESS_TOKEN)
     if RATE_LIMIT_ENABLED and location_monitor and request_monitor and not is_ip_whitelisted(client_ip) and not is_service_job:
-        # Check if this endpoint queries Visual Crossing API
-        is_vc_api_endpoint = any(request.url.path.startswith(path) for path in vc_api_paths)
-        
         if is_vc_api_endpoint:
             # Check request rate first
             rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
@@ -2097,7 +2262,7 @@ async def test_redis():
 
 @app.get("/rate-limit-status")
 async def get_rate_limit_status(request: Request):
-    """Get rate limiting status for the current client IP."""
+    """Get rate limiting status for the current client IP, including service token rate limits if applicable."""
     if not RATE_LIMIT_ENABLED:
         return {"status": "disabled", "message": "Rate limiting is not enabled"}
     
@@ -2115,26 +2280,46 @@ async def get_rate_limit_status(request: Request):
     is_whitelisted = is_ip_whitelisted(client_ip)
     is_blacklisted = is_ip_blacklisted(client_ip)
     
-    # Skip stats if whitelisted or service job
-    location_stats = location_monitor.get_stats(client_ip) if location_monitor and not is_whitelisted and not is_service_job else {}
-    request_stats = request_monitor.get_stats(client_ip) if request_monitor and not is_whitelisted and not is_service_job else {}
-    
-    return {
-        "client_ip": client_ip,
-        "ip_status": {
-            "whitelisted": is_whitelisted,
-            "blacklisted": is_blacklisted,
-            "service_job": is_service_job,
-            "rate_limited": not is_whitelisted and not is_blacklisted and not is_service_job
-        },
-        "location_monitor": location_stats,
-        "request_monitor": request_stats,
-        "rate_limits": {
-            "max_locations_per_hour": MAX_LOCATIONS_PER_HOUR,
-            "max_requests_per_hour": MAX_REQUESTS_PER_HOUR,
-            "window_hours": RATE_LIMIT_WINDOW_HOURS
+    # Get stats based on whether this is a service job or regular user
+    if is_service_job and service_token_rate_limiter:
+        # Service token rate limits (high limits, but still protected)
+        service_stats = service_token_rate_limiter.get_stats(client_ip)
+        return {
+            "client_ip": client_ip,
+            "ip_status": {
+                "whitelisted": is_whitelisted,
+                "blacklisted": is_blacklisted,
+                "service_job": True,
+                "rate_limited": True  # Service tokens are rate limited (high limits)
+            },
+            "service_token_rate_limits": service_stats,
+            "rate_limits": {
+                "requests_per_hour": SERVICE_TOKEN_RATE_LIMITS["requests_per_hour"],
+                "locations_per_hour": SERVICE_TOKEN_RATE_LIMITS["locations_per_hour"],
+                "window_hours": SERVICE_TOKEN_RATE_LIMITS["window_hours"]
+            }
         }
-    }
+    else:
+        # Regular user rate limits (standard limits)
+        location_stats = location_monitor.get_stats(client_ip) if location_monitor and not is_whitelisted else {}
+        request_stats = request_monitor.get_stats(client_ip) if request_monitor and not is_whitelisted else {}
+        
+        return {
+            "client_ip": client_ip,
+            "ip_status": {
+                "whitelisted": is_whitelisted,
+                "blacklisted": is_blacklisted,
+                "service_job": False,
+                "rate_limited": not is_whitelisted and not is_blacklisted
+            },
+            "location_monitor": location_stats,
+            "request_monitor": request_stats,
+            "rate_limits": {
+                "max_locations_per_hour": MAX_LOCATIONS_PER_HOUR,
+                "max_requests_per_hour": MAX_REQUESTS_PER_HOUR,
+                "window_hours": RATE_LIMIT_WINDOW_HOURS
+            }
+        }
 
 @app.get("/rate-limit-stats")
 async def get_rate_limit_stats():

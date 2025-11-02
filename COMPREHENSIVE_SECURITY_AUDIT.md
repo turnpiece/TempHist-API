@@ -1,4 +1,5 @@
 # Comprehensive Security Audit Report - TempHist API
+
 **Merged Analysis of Multiple Security Audits**
 
 **Date:** 2025-01-28  
@@ -13,13 +14,14 @@
 This comprehensive merged audit identified **32 unique security vulnerabilities and code quality issues** across the codebase:
 
 - **Critical**: 3 issues (1 fixed ✅, 2 remaining)
-- **High**: 11 issues
+- **High**: 11 issues (1 fixed ✅, 10 remaining)
 - **Medium**: 12 issues
 - **Low**: 6 issues
 
 ### Comparison of Audit Coverage
 
 **Claude's Unique Findings:**
+
 - ✅ Critical dependency vulnerabilities with specific CVEs
 - ✅ Redis connection authentication validation
 - ✅ GDPR compliance (IP address logging as PII)
@@ -29,6 +31,7 @@ This comprehensive merged audit identified **32 unique security vulnerabilities 
 - ✅ Detailed exception handling analysis (141 instances)
 
 **Cursor's Unique Findings:**
+
 - ✅ Redis KEYS command usage (performance/DoS)
 - ✅ CSV parameter validation gaps
 - ✅ Missing authentication on stats endpoints
@@ -36,6 +39,7 @@ This comprehensive merged audit identified **32 unique security vulnerabilities 
 - ✅ More detailed SSRF analysis on location input
 
 **Both Reports Covered (Improved):**
+
 - Test token bypass (✅ FIXED)
 - CSRF protection gaps
 - Input validation issues
@@ -67,7 +71,8 @@ This comprehensive merged audit identified **32 unique security vulnerabilities 
 **Status**: ✅ **RESOLVED** - 2025-01-28  
 **CWE**: CWE-798 (Use of Hard-coded Credentials)
 
-**Resolution**: 
+**Resolution**:
+
 - All `TEST_TOKEN` functionality completely removed from codebase
 - System now uses only `API_ACCESS_TOKEN` for automated systems
 - No authentication bypass possible
@@ -81,10 +86,11 @@ This comprehensive merged audit identified **32 unique security vulnerabilities 
 **CWE**: CWE-1035 (Using Components with Known Vulnerabilities)  
 **Status**: ⚠️ **PARTIALLY ADDRESSED** - Versions updated, verify CVEs resolved
 
-**Description**: 
+**Description**:
 Multiple dependencies had known security vulnerabilities. Current versions in requirements.txt appear updated:
 
 **Current Versions:**
+
 - fastapi==0.120.4 ✅ (was 0.104.1, CVE-2024-24762 required ≥0.109.1)
 - gunicorn==23.0.0 ✅ (was 21.2.0, CVE-2024-1135, CVE-2024-6827 required ≥22.0.0)
 - aiohttp==3.13.2 ✅ (was 3.9.3, CVEs required ≥3.12.14)
@@ -92,22 +98,20 @@ Multiple dependencies had known security vulnerabilities. Current versions in re
 - starlette (auto-updated with FastAPI) ✅
 
 **Original Vulnerabilities**:
+
 1. **FastAPI 0.104.1** → CVE-2024-24762 (ReDoS vulnerability)
    - Impact: Denial of Service through malicious Content-Type headers
-   
 2. **Gunicorn 21.2.0** → CVE-2024-1135, CVE-2024-6827
    - Impact: HTTP Request Smuggling, cache poisoning, SSRF, XSS
-   
 3. **aiohttp 3.9.3** → CVE-2024-27306, CVE-2024-30251, CVE-2024-52304, CVE-2025-53643
    - Impact: XSS, Denial of Service, Request Smuggling
-   
 4. **requests 2.31.0** → CVE-2024-35195, CVE-2024-47081
    - Impact: Certificate verification bypass, .netrc credential leakage
-   
 5. **starlette** → CVE-2024-47874, CVE-2025-54121, CVE-2025-62727
    - Impact: DoS through malicious form uploads, CPU exhaustion
 
 **Recommendation**:
+
 ```bash
 # Verify no remaining vulnerabilities
 pip install pip-audit
@@ -141,12 +145,14 @@ base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_
 ```
 
 **Vulnerability**:
+
 - API keys exposed in logs
 - Redis credentials exposed if URL contains password
 - Log aggregation systems may capture sensitive data
 - Compliance violations (PCI-DSS, GDPR)
 
 **Fix**:
+
 ```python
 from urllib.parse import urlparse, urlunparse
 
@@ -168,6 +174,7 @@ _temp_logger.info(f"🔍 DEBUG: REDIS_URL = {sanitize_url(REDIS_URL)}")
 ```
 
 **Recommendation**:
+
 - Sanitize all URLs before logging
 - Never log API keys or credentials
 - Use header-based authentication where API supports it
@@ -193,50 +200,53 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
 ```
 
 **Vulnerability**:
+
 - Path injection possible if location contains special characters
 - **SSRF risk** - location can be crafted to point to internal services
 - No length validation on location string
 - No validation against internal IP ranges
 
 **Fix**:
+
 ```python
 def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
     import re
     import ipaddress
-    
+
     # Validate length
     if len(location) > 200:
         raise ValueError("Location string too long")
-    
+
     # Whitelist allowed characters
     if not re.match(r'^[a-zA-Z0-9\s,\-\.]+$', location):
         raise ValueError("Invalid characters in location")
-    
+
     # Validate date format
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
         raise ValueError("Invalid date format")
-    
+
     # Prevent SSRF: block special characters that could be used for URL manipulation
     dangerous_patterns = ['//', '@', ':', '?', '#', 'localhost', '127.0.0.1', '0.0.0.0']
     location_lower = location.lower()
     for pattern in dangerous_patterns:
         if pattern in location_lower:
             raise ValueError("Invalid location format - potential SSRF attempt")
-    
+
     # Block internal IP ranges (if location could resolve to IP)
     # Note: This is a basic check - consider DNS resolution validation
-    
+
     cleaned_location = clean_location_string(location)
     encoded_location = quote(cleaned_location, safe='')
-    
+
     # Final validation: ensure encoded location doesn't contain dangerous patterns
     if any(char in encoded_location for char in ['//', '@', ':', '?', '#']):
         raise ValueError("Invalid location format after encoding")
-    
+
     return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}"
 ```
 
 **Recommendation**:
+
 - Implement strict input validation whitelist
 - Add maximum length limits (200 characters)
 - Prevent SSRF by blocking:
@@ -260,6 +270,7 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
 **Issue**: POST/DELETE endpoints that modify state lack CSRF token validation.
 
 **Affected Endpoints**:
+
 - `POST /analytics`
 - `POST /cache-warm`
 - `POST /cache-warm/job`
@@ -270,6 +281,7 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
 **Vulnerability**: Cross-Site Request Forgery attacks can be executed against authenticated users.
 
 **Fix**:
+
 ```python
 from fastapi import Header
 from fastapi.security import HTTPBearer
@@ -283,16 +295,16 @@ async def verify_csrf_token(
     """Validate request origin for state-changing operations."""
     if request.method in ["GET", "HEAD", "OPTIONS"]:
         return True  # Safe methods don't need CSRF protection
-    
+
     allowed_origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
     allowed_origins = [o.strip() for o in allowed_origins if o.strip()]
-    
+
     # Validate origin or referer
     request_origin = origin or (referer.split("/")[:3] if referer else None)
-    
+
     if not request_origin or request_origin not in allowed_origins:
         raise HTTPException(status_code=403, detail="Invalid origin")
-    
+
     return True
 
 # Apply to state-changing endpoints
@@ -300,7 +312,8 @@ async def verify_csrf_token(
 @app.post("/cache-warm", dependencies=[Depends(verify_csrf_token)])
 ```
 
-**Recommendation**: 
+**Recommendation**:
+
 - For REST APIs, use Origin/Referer validation
 - For web applications, implement CSRF tokens
 - Apply to all POST/PUT/PATCH/DELETE operations
@@ -318,6 +331,7 @@ async def verify_csrf_token(
 **Issue**: Detailed error messages expose internal implementation details.
 
 **Examples**:
+
 ```python
 # Line 1057 - Exposes Firebase error details
 raise HTTPException(status_code=403, content={"detail": f"Invalid Firebase token: {str(e)}"})
@@ -327,11 +341,13 @@ raise ValueError(f"VC historysummary {resp.status}: {text[:180]}")
 ```
 
 **Vulnerability**:
+
 - Firebase token errors expose token format details
 - API errors expose internal structure
 - Stack traces may leak sensitive information
 
 **Fix**:
+
 ```python
 # Generic error messages in production
 except Exception as e:
@@ -343,6 +359,7 @@ except Exception as e:
 ```
 
 **Recommendation**:
+
 - Log detailed errors server-side only (with exc_info=True)
 - Return generic error messages to clients
 - Use DEBUG flag to control error verbosity
@@ -367,35 +384,38 @@ class LocationDiversityMonitor:
 ```
 
 **Vulnerability**:
+
 - Rate limits can be bypassed by distributed attacks
 - Limits reset on server restart
 - Not shared across multiple server instances
 - Service tokens bypass rate limiting entirely
 
 **Fix**:
+
 ```python
 class LocationDiversityMonitor:
     def __init__(self, max_locations: int, window_hours: int, redis_client: redis.Redis):
         self.redis = redis_client
         self.max_locations = max_locations
         self.window_seconds = window_hours * 3600
-    
+
     def check_location_diversity(self, ip: str, location: str) -> tuple[bool, str]:
         key = f"rate_limit:locations:{ip}"
         # Use Redis sorted set with TTL
         now = time.time()
         self.redis.zremrangebyscore(key, 0, now - self.window_seconds)
         count = self.redis.zcard(key)
-        
+
         if count >= self.max_locations:
             return False, f"Maximum {self.max_locations} unique locations per {self.window_seconds//3600} hours"
-        
+
         self.redis.zadd(key, {location: now})
         self.redis.expire(key, self.window_seconds)
         return True, "OK"
 ```
 
 **Additional Fix for Service Token Bypass**:
+
 ```python
 # Implement tiered rate limiting for service tokens
 SERVICE_RATE_LIMITS = {
@@ -413,6 +433,7 @@ if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
 ```
 
 **Recommendation**:
+
 - Implement Redis-based rate limiting for distributed systems
 - Use sliding window algorithm
 - Apply rate limits to service tokens (higher limits, not complete bypass)
@@ -431,11 +452,12 @@ if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
 **Issue**: The codebase uses bare `except Exception as e` handlers extensively:
 
 - main.py: 52 instances
-- cache_utils.py: 35 instances  
+- cache_utils.py: 35 instances
 - routers/records_agg.py: 7 instances
 - Other files: 47 instances
 
 **Vulnerability**:
+
 - Security exceptions silently caught
 - Difficult to debug production issues
 - May hide authentication/authorization failures
@@ -443,6 +465,7 @@ if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
 - Critical system errors masked
 
 **Fix**:
+
 ```python
 # Bad - catches everything
 try:
@@ -467,6 +490,7 @@ except KeyError as e:
 ```
 
 **Recommendation**:
+
 - Replace broad exception handlers with specific exception types
 - Let critical system exceptions propagate
 - Log exceptions with context before re-raising
@@ -489,12 +513,14 @@ redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 ```
 
 **Vulnerability**:
+
 - No validation that Redis requires password
 - Potential connection to wrong Redis instance
 - No SSL/TLS enforcement for Redis connections
 - Credentials may be transmitted in plaintext
 
 **Fix**:
+
 ```python
 import ssl
 from urllib.parse import urlparse
@@ -503,11 +529,11 @@ def create_redis_client(url: str):
     """Create Redis client with security validation."""
     parsed = urlparse(url)
     env = os.getenv("ENVIRONMENT", "development")
-    
+
     # Enforce password in production
     if env == "production" and not parsed.password:
         raise ValueError("Redis password required in production")
-    
+
     # Enforce SSL in production
     ssl_context = None
     if parsed.scheme == "rediss":
@@ -515,7 +541,7 @@ def create_redis_client(url: str):
     elif env == "production":
         logger.warning("⚠️  Redis not using SSL (rediss://) in production!")
         # Consider making this an error in production
-    
+
     return redis.from_url(
         url,
         decode_responses=True,
@@ -527,6 +553,7 @@ redis_client = create_redis_client(REDIS_URL)
 ```
 
 **Recommendation**:
+
 - Validate Redis connection requirements in production
 - Enforce SSL/TLS for production Redis connections (use `rediss://`)
 - Use connection pooling with proper configuration
@@ -557,6 +584,7 @@ def is_location_likely_invalid(location: str) -> bool:
 ```
 
 **Vulnerability**:
+
 - Potential for log injection attacks
 - Cache poisoning with malicious location strings
 - May pass through to external APIs causing errors
@@ -564,6 +592,7 @@ def is_location_likely_invalid(location: str) -> bool:
 - No character whitelist
 
 **Fix**:
+
 ```python
 import re
 from pydantic import validator
@@ -573,35 +602,36 @@ def validate_location(location: str) -> str:
     # Length check
     if not location or len(location) > 200:
         raise HTTPException(400, "Invalid location length (max 200 characters)")
-    
+
     # Whitelist allowed characters
     if not re.match(r'^[a-zA-Z0-9\s,.\-\']+$', location):
         raise HTTPException(400, "Location contains invalid characters")
-    
+
     # Prevent path traversal attempts
     if '..' in location or '/' in location or '\\' in location:
         raise HTTPException(400, "Invalid location format")
-    
+
     # Check for control characters
     if any(ord(c) < 32 for c in location):
         raise HTTPException(400, "Location contains control characters")
-    
+
     # Prevent null bytes
     if '\x00' in location:
         raise HTTPException(400, "Location contains null bytes")
-    
+
     return location.strip()
 
 # Use Pydantic for validation
 class LocationRequest(BaseModel):
     location: str
-    
+
     @validator('location')
     def validate_location_field(cls, v):
         return validate_location(v)
 ```
 
 **Recommendation**:
+
 - Implement comprehensive input validation
 - Use Pydantic validators for path parameters
 - Whitelist allowed characters
@@ -618,6 +648,7 @@ class LocationRequest(BaseModel):
 **Found by**: Both audits
 
 **Issue**: Application doesn't set critical security headers:
+
 - No Content-Security-Policy
 - No X-Frame-Options
 - No Strict-Transport-Security (HSTS)
@@ -625,6 +656,7 @@ class LocationRequest(BaseModel):
 - No Referrer-Policy
 
 **Vulnerability**:
+
 - Vulnerable to clickjacking attacks
 - No CSP protection against XSS
 - Browsers may not enforce HTTPS
@@ -632,21 +664,22 @@ class LocationRequest(BaseModel):
 - Information leakage via Referer header
 
 **Fix**:
+
 ```python
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     """Add security headers to all responses."""
     response = await call_next(request)
-    
+
     # Prevent clickjacking
     response.headers["X-Frame-Options"] = "DENY"
-    
+
     # Prevent MIME sniffing
     response.headers["X-Content-Type-Options"] = "nosniff"
-    
+
     # XSS protection (legacy browsers)
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    
+
     # Content Security Policy
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
@@ -657,25 +690,26 @@ async def add_security_headers(request: Request, call_next):
         "connect-src 'self' https://weather.visualcrossing.com; "
         "frame-ancestors 'none';"
     )
-    
+
     # HSTS (only if using HTTPS)
     if request.url.scheme == "https":
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains; preload"
         )
-    
+
     # Referrer policy
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    
+
     # Permissions policy
     response.headers["Permissions-Policy"] = (
         "geolocation=(), microphone=(), camera=()"
     )
-    
+
     return response
 ```
 
 **Recommendation**:
+
 - Add security headers middleware
 - Configure CSP based on actual requirements
 - Test headers with securityheaders.com
@@ -699,22 +733,24 @@ CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip()
 ```
 
 **Vulnerability**:
+
 - Misconfigured CORS_ORIGIN_REGEX could allow all origins
 - No validation of allowed origins
 - Potential for credential-bearing cross-origin requests
 - May expose sensitive data to unauthorized domains
 
 **Fix**:
+
 ```python
 def validate_cors_config():
     """Validate CORS configuration."""
     origins = os.getenv("CORS_ORIGINS", "").strip()
     regex = os.getenv("CORS_ORIGIN_REGEX", "").strip()
-    
+
     # Warn about permissive configurations
     if not origins and not regex:
         logger.warning("⚠️  No CORS origins configured - API may be inaccessible")
-    
+
     if regex:
         # Test regex is valid and not too permissive
         import re
@@ -727,17 +763,18 @@ def validate_cors_config():
                     raise ValueError("Overly permissive CORS regex not allowed in production")
         except re.error as e:
             raise ValueError(f"Invalid CORS_ORIGIN_REGEX: {e}")
-    
+
     if origins == "*":
         logger.error("❌ CORS_ORIGINS set to '*' - this is insecure!")
         raise ValueError("Wildcard CORS not allowed")
-    
+
     return origins, regex
 
 CORS_ORIGINS, CORS_ORIGIN_REGEX = validate_cors_config()
 ```
 
 **Recommendation**:
+
 - Validate CORS configuration at startup
 - Reject wildcard origins
 - Warn about permissive regex patterns
@@ -745,36 +782,59 @@ CORS_ORIGINS, CORS_ORIGIN_REGEX = validate_cors_config()
 
 ---
 
-### HIGH-009: Rate Limiting Bypass via Service Tokens
+### HIGH-009: Rate Limiting Bypass via Service Tokens ✅ FIXED
 
-**File**: `main.py:952-956`  
-**Lines**: 952-956  
+**File**: `main.py:240-538, 1264-1295`  
+**Lines**: 240-538 (ServiceTokenRateLimiter class), 1264-1295 (middleware implementation)  
 **Severity**: High  
 **CWE**: CWE-307 (Improper Restriction of Excessive Authentication Attempts)  
-**Found by**: Claude
+**Found by**: Claude  
+**Status**: ✅ **RESOLVED** - 2025-01-28
 
-**Issue**: `API_ACCESS_TOKEN` bypasses rate limiting entirely:
+**Issue**: ~~`API_ACCESS_TOKEN` bypasses rate limiting entirely~~ ✅ **FIXED**
+
+**Resolution**:
+Implemented Redis-based tiered rate limiting for service tokens with high but protective limits:
+
+**Implementation**:
+
+- Created `ServiceTokenRateLimiter` class (lines 240-356)
+  - Redis-based for distributed rate limiting across workers
+  - Sliding window algorithm using Redis sorted sets
+  - Limits: 5000 requests/hour, 500 locations/hour
+  - Fails open if Redis unavailable (prevents DoS from Redis issues)
+- Integrated into middleware (lines 1264-1295)
+  - Service tokens now subject to rate limits (high limits, but protected)
+  - Separate tracking from regular user rate limits
+  - Returns 429 with clear error messages when limits exceeded
+- Added monitoring endpoint support
+  - `/rate-limit-status` now shows service token rate limit stats
+  - Tracks usage and remaining quota
+
+**Configuration**:
 
 ```python
-if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
-    is_service_job = True
-    # Rate limiting bypassed
+SERVICE_TOKEN_RATE_LIMITS = {
+    "requests_per_hour": 5000,      # High limit for legitimate cache warming
+    "locations_per_hour": 500,       # Enough for warming popular locations
+    "window_hours": 1,               # 1 hour sliding window
+}
 ```
 
-**Vulnerability**:
-- Service tokens can be used for DoS attacks
-- No rate limiting on automated systems
-- Single compromised token = unlimited access
-- No distinction between different service callers
-- No monitoring of service token usage
+**Security Benefits**:
 
-**Fix**: See HIGH-003 above for tiered rate limiting implementation.
+- ✅ Prevents abuse if token is compromised
+- ✅ Protects against runaway jobs/bugs
+- ✅ Prevents excessive Visual Crossing API costs
+- ✅ Allows legitimate cache warming (high limits)
+- ✅ Distributed rate limiting (works across multiple workers)
 
 **Recommendation**:
-- Implement tiered rate limiting for service tokens
-- Monitor and alert on service token usage
-- Use JWT tokens with claims for different service tiers
-- Log all service token access for audit trail
+
+- ✅ Completed: Tiered rate limiting implemented
+- ✅ Completed: Monitoring via `/rate-limit-status` endpoint
+- Consider: Adjust limits based on actual cache warming patterns
+- Consider: Add alerting when service token rate limits approached (e.g., 80% of limit)
 
 ---
 
@@ -793,29 +853,31 @@ matching_keys = self.redis_client.keys(pattern)
 ```
 
 **Vulnerability**:
+
 - `KEYS` command is blocking and O(N) complexity
 - Can cause Redis to become unresponsive
 - Not suitable for production environments
 - Can cause DoS if called with broad patterns
 
 **Fix**:
+
 ```python
 # Use SCAN instead of KEYS
 def invalidate_by_pattern(self, pattern: str, dry_run: bool = False) -> Dict:
     matching_keys = []
     cursor = 0
-    
+
     try:
         while True:
             cursor, keys = self.redis_client.scan(
-                cursor, 
-                match=pattern, 
+                cursor,
+                match=pattern,
                 count=100  # Process in batches
             )
             matching_keys.extend(keys)
             if cursor == 0:
                 break
-            
+
             # Prevent infinite loops
             if len(matching_keys) > 100000:  # Safety limit
                 logger.warning(f"Pattern matches >100k keys, stopping scan")
@@ -823,7 +885,7 @@ def invalidate_by_pattern(self, pattern: str, dry_run: bool = False) -> Dict:
     except Exception as e:
         logger.error(f"Redis SCAN error: {e}")
         raise
-    
+
     # Process matching_keys...
     return {
         "status": "success",
@@ -834,6 +896,7 @@ def invalidate_by_pattern(self, pattern: str, dry_run: bool = False) -> Dict:
 ```
 
 **Recommendation**:
+
 - Replace all `KEYS` commands with `SCAN`
 - Use cursor-based iteration
 - Set appropriate COUNT parameter (100-1000)
@@ -861,12 +924,14 @@ def _parse_csv(s: str | None) -> Set[str]:
 ```
 
 **Vulnerability**:
+
 - No length validation on CSV string
 - No validation that parsed values are in allowed set
 - Potential for DoS with very long CSV strings
 - No limit on number of items
 
 **Fix**:
+
 ```python
 ALLOWED_SECTIONS = {"day", "week", "month", "year"}
 MAX_CSV_LENGTH = 100
@@ -875,30 +940,30 @@ MAX_CSV_ITEMS = 20
 def _parse_csv(s: str | None, allowed: Set[str], max_length: int = MAX_CSV_LENGTH) -> Set[str]:
     if not s:
         return set()
-    
+
     if len(s) > max_length:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"CSV parameter too long (max {max_length} chars)"
         )
-    
+
     parsed = {p.strip() for p in s.split(",") if p.strip()}
-    
+
     # Limit number of items
     if len(parsed) > MAX_CSV_ITEMS:
         raise HTTPException(
             status_code=400,
             detail=f"Too many items in CSV (max {MAX_CSV_ITEMS})"
         )
-    
+
     # Validate against whitelist
     invalid = parsed - allowed
     if invalid:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Invalid values: {', '.join(sorted(invalid))}. Allowed: {', '.join(sorted(allowed))}"
         )
-    
+
     return parsed
 
 # Usage
@@ -907,6 +972,7 @@ exc = _parse_csv(exclude, ALLOWED_SECTIONS) if exclude else set()
 ```
 
 **Recommendation**:
+
 - Add maximum length validation
 - Validate against whitelist of allowed values
 - Limit number of items in CSV
@@ -925,16 +991,18 @@ exc = _parse_csv(exclude, ALLOWED_SECTIONS) if exclude else set()
 **Issue**: Several endpoints are marked as public that may expose sensitive information.
 
 **Vulnerability**:
+
 - `/rate-limit-status` exposes rate limiting configuration
 - `/rate-limit-stats` may expose usage patterns
 - `/cache-stats/*` endpoints expose internal metrics
 - `/usage-stats/*` endpoints expose usage data
 
 **Fix**:
+
 ```python
 # Make these endpoints require authentication
 public_paths = [
-    "/", "/docs", "/openapi.json", "/redoc", 
+    "/", "/docs", "/openapi.json", "/redoc",
     "/health", "/v1/records/rolling-bundle/test-cors",
     "/v1/jobs/diagnostics/worker-status"
 ]
@@ -950,6 +1018,7 @@ async def get_cache_stats(user=Depends(verify_firebase_token)):
 ```
 
 **Recommendation**:
+
 - Review all "public" endpoints
 - Require authentication for any endpoint exposing system metrics
 - Consider admin-only access for statistics
@@ -973,6 +1042,7 @@ logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_i
 ```
 
 **Vulnerability**:
+
 - GDPR/CCPA compliance issues (IP is PII)
 - No user consent for IP logging
 - Long retention in analytics (7 days)
@@ -980,6 +1050,7 @@ logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_i
 - IP addresses can be used to identify users
 
 **Fix**:
+
 ```python
 import hashlib
 from datetime import datetime
@@ -1007,6 +1078,7 @@ analytics_record = {
 ```
 
 **Recommendation**:
+
 - Anonymize IP addresses before logging/storage
 - Use hashed IP with daily salt for analytics
 - Keep raw IP only for security purposes (rate limiting)
@@ -1050,6 +1122,7 @@ etag = hashlib.sha256(key_parts.encode("utf-8")).hexdigest()[:16]  # Too short
 ```
 
 **Fix**:
+
 ```python
 # Use SHA256 with at least 32 characters (128-bit security)
 etag = hashlib.sha256(json_str.encode()).hexdigest()[:32]
@@ -1060,6 +1133,7 @@ response.headers["ETag"] = f'W/"{etag}"'
 ```
 
 **Recommendation**:
+
 - Remove MD5 usage (cryptographically broken)
 - Use SHA256 with minimum 32 characters
 - Consider full hash for better collision resistance
@@ -1077,6 +1151,7 @@ response.headers["ETag"] = f'W/"{etag}"'
 **Issue**: Some external API calls lack explicit timeouts, risking resource exhaustion.
 
 **Fix**: See individual locations - ensure all external calls have timeouts:
+
 ```python
 timeout = aiohttp.ClientTimeout(
     total=60,      # Total request timeout
@@ -1207,40 +1282,48 @@ timeout = aiohttp.ClientTimeout(
 ## Low Severity Issues
 
 ### LOW-001: Missing API Versioning Documentation
+
 **Found by**: Cursor
 
 ### LOW-002: Inefficient Rate Limiting Cleanup
+
 **Found by**: Cursor
 
 ### LOW-003: Missing Request ID for Tracing
+
 **Found by**: Cursor
 
 ### LOW-004: Hardcoded Magic Numbers
+
 **Found by**: Cursor
 
 ### LOW-005: Large Main File (4000+ lines)
+
 **Found by**: Claude
 
 ### LOW-006: Inconsistent Error Response Format
+
 **Found by**: Claude
 
 ### LOW-007: Missing Health Check Dependencies
+
 **Found by**: Claude
 
 ### LOW-008: Debug Mode Enabled via Environment Variable
+
 **Found by**: Claude
 
 ---
 
 ## Summary Table
 
-| Severity | Count | Status | Description |
-|----------|-------|--------|-------------|
-| Critical | 4 | 1 fixed, 3 remaining | Dependency CVEs, credential logging, SSRF |
-| High | 13 | 0 fixed | CSRF, exception handling, validation, headers, CORS, Redis, rate limits |
-| Medium | 12 | 0 fixed | Timeouts, privacy, caching, debug mode, Firebase secrets |
-| Low | 8 | 0 fixed | Code quality, documentation, structure |
-| **Total** | **37** | **1 fixed** | **Comprehensive security audit** |
+| Severity  | Count  | Status                   | Description                                                             |
+| --------- | ------ | ------------------------ | ----------------------------------------------------------------------- |
+| Critical  | 4      | 1 fixed ✅, 3 remaining  | Dependency CVEs, credential logging, SSRF                               |
+| High      | 13     | 2 fixed ✅, 11 remaining | CSRF, exception handling, validation, headers, CORS, Redis, rate limits |
+| Medium    | 12     | 0 fixed                  | Timeouts, privacy, caching, debug mode, Firebase secrets                |
+| Low       | 8      | 0 fixed                  | Code quality, documentation, structure                                  |
+| **Total** | **37** | **2 fixed** ✅           | **Comprehensive security audit**                                        |
 
 ---
 
@@ -1249,10 +1332,11 @@ timeout = aiohttp.ClientTimeout(
 ### Immediate Actions (This Week) ⚠️
 
 1. ✅ ~~Remove TEST_TOKEN authentication bypass~~ **COMPLETED**
-2. **Sanitize sensitive data logging** (CRI-003)
-3. **Fix SSRF vulnerability** in location input (CRI-004)
-4. **Verify dependency updates** resolve all CVEs
-5. **Implement security headers** middleware (HIGH-007)
+2. ✅ ~~Implement tiered rate limiting for service tokens~~ **COMPLETED** (HIGH-009)
+3. **Sanitize sensitive data logging** (CRI-003)
+4. **Fix SSRF vulnerability** in location input (CRI-004)
+5. **Verify dependency updates** resolve all CVEs
+6. **Implement security headers** middleware (HIGH-007)
 
 ### Short-term Actions (This Month)
 
@@ -1299,6 +1383,7 @@ timeout = aiohttp.ClientTimeout(
 ## Audit Comparison Notes
 
 **What Claude Found That Cursor Missed:**
+
 1. ✅ Specific CVE numbers for dependencies (critical)
 2. Redis connection authentication validation
 3. GDPR compliance issues (IP logging)
@@ -1309,6 +1394,7 @@ timeout = aiohttp.ClientTimeout(
 8. IP address anonymization requirements
 
 **What Cursor Found That Claude Missed:**
+
 1. Redis KEYS command usage (critical performance/DoS issue)
 2. CSV parameter validation gaps
 3. Missing authentication on stats endpoints
@@ -1316,6 +1402,7 @@ timeout = aiohttp.ClientTimeout(
 5. More detailed SSRF analysis
 
 **What Both Found (Different Perspectives):**
+
 - Test token bypass (✅ now fixed)
 - CSRF protection gaps
 - Input validation issues
@@ -1328,4 +1415,3 @@ timeout = aiohttp.ClientTimeout(
 **End of Comprehensive Merged Report**
 
 **Next Steps**: Address remaining 3 Critical and 13 High severity issues before next production deployment.
-
