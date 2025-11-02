@@ -1,852 +1,1342 @@
-# Security & Code Quality Audit Report
+# Security Audit Report - TempHist API
 
-## TempHist API - Comprehensive Security Analysis
-
-**Date**: 2025-01-28  
-**Auditor**: Security Analysis Tool  
-**Scope**: Complete codebase security and quality review
+**Date:** 2025-11-02
+**Auditor:** Claude Code Security Analysis
+**Version Audited:** 1.0.3
 
 ---
 
 ## Executive Summary
 
-This audit identified **25 security vulnerabilities and code quality issues** across the codebase, categorized by severity:
+This security audit identified **25 security and code quality issues** across the TempHist API codebase:
 
-- **Critical**: 3 issues
-- **High**: 7 issues
-- **Medium**: 10 issues
-- **Low**: 5 issues
+- **3 Critical** severity issues requiring immediate attention
+- **8 High** severity issues requiring prompt remediation
+- **9 Medium** severity issues that should be addressed
+- **5 Low** severity issues for improvement
 
-### Key Findings
-
-1. **Authentication vulnerabilities** with hardcoded test tokens and insufficient token validation
-2. **Input validation gaps** allowing potential injection attacks
-3. **Information disclosure** through error messages and logging
-4. **Dependency vulnerabilities** in outdated packages
-5. **Missing CSRF protection** for state-changing operations
-6. **Performance bottlenecks** in caching and rate limiting
-7. **Code duplication** across multiple modules
+The most critical findings include outdated dependencies with known CVEs, authentication bypass mechanisms, and insufficient input validation.
 
 ---
 
 ## Critical Severity Issues
 
-### CRI-001: Hardcoded Test Token Bypass in Production Code
+### 1. Critical Dependency Vulnerabilities
 
-**File**: `main.py`  
-**Line**: 1039-1042  
-**Severity**: Critical
+**File:** requirements.txt
+**Severity:** CRITICAL
+**CWE:** CWE-1035 (Using Components with Known Vulnerabilities)
 
-**Issue**: Test token bypass exists in production middleware without proper environment checks.
+**Description:**
+Multiple dependencies have known security vulnerabilities:
+
+1. **FastAPI 0.104.1** → CVE-2024-24762 (ReDoS vulnerability)
+
+   - Impact: Denial of Service through malicious Content-Type headers
+   - Fix: Upgrade to ≥0.109.1
+
+2. **Gunicorn 21.2.0** → CVE-2024-1135, CVE-2024-6827
+
+   - Impact: HTTP Request Smuggling, cache poisoning, SSRF, XSS
+   - Fix: Upgrade to ≥22.0.0
+
+3. **aiohttp 3.9.3** → CVE-2024-27306, CVE-2024-30251, CVE-2024-52304, CVE-2025-53643
+
+   - Impact: XSS, Denial of Service, Request Smuggling
+   - Fix: Upgrade to ≥3.12.14
+
+4. **requests 2.31.0** → CVE-2024-35195, CVE-2024-47081
+
+   - Impact: Certificate verification bypass, .netrc credential leakage
+   - Fix: Upgrade to ≥2.32.4
+
+5. **starlette 0.27.0** → CVE-2024-47874, CVE-2025-54121, CVE-2025-62727
+   - Impact: DoS through malicious form uploads, CPU exhaustion
+   - Fix: Upgrade to ≥0.49.1
+
+**Recommendation:**
+
+```bash
+# Update requirements.txt:
+fastapi>=0.109.1
+gunicorn>=22.0.0
+aiohttp>=3.12.14
+requests>=2.32.4
+# Note: Starlette will be updated automatically with FastAPI
+```
+
+---
+
+### 2. Hardcoded Test Token Authentication Bypass
+
+**File:** main.py:1039-1042
+**Line:** 1039
+**Severity:** CRITICAL
+**CWE:** CWE-798 (Use of Hard-coded Credentials)
+
+**Description:**
+The application uses a `TEST_TOKEN` environment variable that bypasses Firebase authentication entirely:
 
 ```python
-# Special bypass for testing
 if id_token == TEST_TOKEN:
     if DEBUG:
         logger.debug(f"[DEBUG] Middleware: Using test token bypass")
     request.state.user = {"uid": "testuser"}
 ```
 
-**Vulnerability**: If `TEST_TOKEN` is set in production, attackers can bypass Firebase authentication entirely.
+**Impact:**
 
-**Fix**:
+- Anyone with knowledge of the TEST_TOKEN can bypass authentication
+- No audit trail for test token usage in production
+- Token likely stored in version control or configuration files
+
+**Recommendation:**
+
+1. Remove TEST_TOKEN bypass from production code
+2. Use proper test environments with separate authentication
+3. Implement service accounts with proper audit logging for automated systems
+4. Add monitoring/alerting for API_ACCESS_TOKEN usage
+
+**Code Fix:**
 
 ```python
-# Only allow test token in development
-if DEBUG and id_token == TEST_TOKEN:
-    logger.debug(f"[DEBUG] Middleware: Using test token bypass")
-    request.state.user = {"uid": "testuser"}
+# Remove TEST_TOKEN entirely and use proper service authentication
+# Keep only API_ACCESS_TOKEN for documented, monitored service jobs
+if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
+    logger.warning(f"🔧 SERVICE ACCESS: {client_ip} | {request.url.path}")
+    request.state.user = {"uid": "service", "system": True}
+    # Send alert/metric for monitoring
 else:
-    # Proceed with Firebase verification
+    # Always require Firebase token validation
+    decoded_token = auth.verify_id_token(id_token)
+    request.state.user = decoded_token
 ```
-
-**Recommendation**: Add environment check to ensure test token is only valid when `DEBUG=true` and in non-production environments.
 
 ---
 
-### CRI-002: API Key Exposure in URL Parameters and Logs
+### 3. Sensitive Information Logging
 
-**File**: `main.py`, `routers/records_agg.py`  
-**Line**: 422, 441  
-**Severity**: Critical
+**File:** main.py:59, main.py:422
+**Lines:** 59, 422
+**Severity:** CRITICAL
+**CWE:** CWE-532 (Insertion of Sensitive Information into Log File)
 
-**Issue**: API keys are embedded in URL query parameters and may be logged.
+**Description:**
+API keys and sensitive URLs are logged:
 
 ```python
+# Line 59 - Redis URL may contain credentials
+_temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {REDIS_URL}")
+
+# Line 422 - API key in URL construction
 base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
 ```
 
-**Vulnerability**:
+**Impact:**
 
-- API keys in URLs may appear in server logs, browser history, referrer headers
-- Logging might expose keys in error messages
+- API keys exposed in logs
+- Redis credentials exposed if URL contains password
+- Log aggregation systems may capture sensitive data
+- Compliance violations (PCI-DSS, GDPR)
 
-**Fix**:
-
-```python
-# Use headers instead of query params when possible
-params = {
-    "unitGroup": VISUAL_CROSSING_UNIT_GROUP,
-    "include": VISUAL_CROSSING_INCLUDE_PARAMS
-}
-headers = {"X-API-Key": API_KEY}  # If API supports headers
-# Otherwise, ensure URLs are never logged
-```
-
-**Recommendation**:
-
-- Sanitize API keys from all log messages
-- Use environment variables that are never logged
-- Consider using header-based authentication where API supports it
-
----
-
-### CRI-003: Unsafe Location Input in URL Construction
-
-**File**: `main.py`, `routers/records_agg.py`  
-**Line**: 410-426, 435  
-**Severity**: Critical
-
-**Issue**: Location parameter is URL-encoded but not fully validated before use in external API calls.
+**Recommendation:**
 
 ```python
-def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
-    cleaned_location = clean_location_string(location)
-    encoded_location = quote(cleaned_location, safe='')
-    return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}"
+# Sanitize REDIS_URL before logging
+def sanitize_url(url: str) -> str:
+    """Remove credentials from URL for logging."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    if parsed.password:
+        netloc = f"{parsed.username}:***@{parsed.hostname}"
+        if parsed.port:
+            netloc += f":{parsed.port}"
+        parsed = parsed._replace(netloc=netloc)
+    return urlunparse(parsed)
+
+_temp_logger.info(f"🔍 DEBUG: REDIS_URL = {sanitize_url(REDIS_URL)}")
+
+# Never log API keys
+# Remove line 422 logging or sanitize it
 ```
-
-**Vulnerability**:
-
-- Path injection possible if location contains special characters
-- SSRF risk if location can be crafted to point to internal services
-- No length validation on location string
-
-**Fix**:
-
-```python
-def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
-    # Validate length
-    if len(location) > 200:  # Reasonable limit
-        raise ValueError("Location string too long")
-
-    # Whitelist allowed characters (letters, numbers, spaces, commas, hyphens)
-    import re
-    if not re.match(r'^[a-zA-Z0-9\s,\-\.]+$', location):
-        raise ValueError("Invalid characters in location")
-
-    # Validate date format
-    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
-        raise ValueError("Invalid date format")
-
-    cleaned_location = clean_location_string(location)
-    encoded_location = quote(cleaned_location, safe='')
-
-    # Additional validation: prevent SSRF
-    if any(char in encoded_location for char in ['//', '@', ':', '?', '#']):
-        raise ValueError("Invalid location format")
-
-    return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}"
-```
-
-**Recommendation**:
-
-- Implement strict input validation whitelist
-- Add maximum length limits
-- Prevent SSRF by blocking internal IP ranges and special characters
 
 ---
 
 ## High Severity Issues
 
-### HIGH-001: Missing CSRF Protection
+### 4. Missing CSRF Protection
 
-**File**: `main.py`  
-**Line**: 3549, 2035, 2098  
-**Severity**: High
+**File:** main.py (entire application)
+**Severity:** HIGH
+**CWE:** CWE-352 (Cross-Site Request Forgery)
 
-**Issue**: POST endpoints that modify state lack CSRF token validation.
+**Description:**
+The API has no CSRF protection for state-changing operations. Endpoints like `/cache-warm`, `/cache/invalidate/*`, `/cache/clear`, and `/analytics` accept POST/DELETE requests without CSRF tokens.
 
-**Affected Endpoints**:
+**Impact:**
 
-- `POST /analytics`
-- `POST /cache-warm`
-- `POST /cache-warm/job`
-- `POST /v1/records/{period}/{location}/{identifier}/async`
+- Malicious websites can trigger cache invalidation
+- Unauthorized cache warming operations
+- Analytics data pollution
+- Resource exhaustion attacks
 
-**Vulnerability**: Cross-Site Request Forgery attacks can be executed against authenticated users.
-
-**Fix**:
+**Recommendation:**
 
 ```python
-from fastapi_csrf_protect import CsrfProtect
+from fastapi import Header
+from secrets import token_urlsafe
 
-@app.post("/analytics", response_model=AnalyticsResponse)
-async def submit_analytics(
-    request: Request,
-    analytics_data: AnalyticsData,
-    csrf_protect: CsrfProtect = Depends()
+# Add CSRF token validation
+async def verify_csrf_token(
+    x_csrf_token: str = Header(None),
+    request: Request = None
 ):
-    await csrf_protect.validate_csrf(request)
-    # ... rest of handler
-```
+    # For API-only apps, validate Origin/Referer
+    origin = request.headers.get("origin")
+    referer = request.headers.get("referer")
 
-**Recommendation**: Implement CSRF tokens for all state-changing operations, especially POST/PUT/DELETE requests.
+    allowed_origins = ["https://yourdomain.com"]
 
----
-
-### HIGH-002: Information Disclosure in Error Messages
-
-**File**: `main.py`, `routers/records_agg.py`  
-**Line**: 842, 182, 449  
-**Severity**: High
-
-**Issue**: Detailed error messages expose internal implementation details.
-
-```python
-except Exception as e:
-    raise HTTPException(status_code=403, detail="Invalid token")
-    # Should not expose: detail=f"Invalid Firebase token: {str(e)}"
-```
-
-**Examples**:
-
-- Firebase token errors expose token format details
-- API errors expose internal structure
-- Stack traces in error responses
-
-**Fix**:
-
-```python
-# Generic error messages in production
-except Exception as e:
-    logger.error(f"Firebase token verification failed: {e}", exc_info=True)
-    if DEBUG:
-        raise HTTPException(status_code=403, detail=f"Invalid token: {str(e)}")
-    else:
-        raise HTTPException(status_code=403, detail="Authentication failed")
-```
-
-**Recommendation**:
-
-- Log detailed errors server-side only
-- Return generic error messages to clients
-- Use DEBUG flag to control error verbosity
-
----
-
-### HIGH-003: Weak Rate Limiting Implementation
-
-**File**: `main.py`  
-**Line**: 200-288  
-**Severity**: High
-
-**Issue**: Rate limiting uses in-memory storage, making it ineffective across multiple instances.
-
-```python
-class LocationDiversityMonitor:
-    def __init__(self, max_locations: int, window_hours: int):
-        self.ip_locations: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
-```
-
-**Vulnerability**:
-
-- Rate limits can be bypassed by distributed attacks
-- Limits reset on server restart
-- Not shared across multiple server instances
-
-**Fix**:
-
-```python
-class LocationDiversityMonitor:
-    def __init__(self, max_locations: int, window_hours: int, redis_client: redis.Redis):
-        self.redis = redis_client
-        self.max_locations = max_locations
-        self.window_seconds = window_hours * 3600
-
-    def check_location_diversity(self, ip: str, location: str) -> tuple[bool, str]:
-        key = f"rate_limit:locations:{ip}"
-        # Use Redis sorted set with TTL
-        now = time.time()
-        self.redis.zremrangebyscore(key, 0, now - self.window_seconds)
-        count = self.redis.zcard(key)
-
-        if count >= self.max_locations:
-            return False, f"Maximum {self.max_locations} unique locations per {self.window_seconds//3600} hours"
-
-        self.redis.zadd(key, {location: now})
-        self.redis.expire(key, self.window_seconds)
-        return True, "OK"
-```
-
-**Recommendation**:
-
-- Implement Redis-based rate limiting for distributed systems
-- Use sliding window algorithm
-- Store rate limit data with appropriate TTL
-
----
-
-### HIGH-004: Insufficient Input Validation on CSV Parameters
-
-**File**: `routers/records_agg.py`  
-**Line**: 537-538, 583-584  
-**Severity**: High
-
-**Issue**: CSV parsing for include/exclude parameters lacks proper validation.
-
-```python
-include: str | None = Query(None, description="CSV of sections to include"),
-exclude: str | None = Query(None, description="CSV of sections to exclude"),
-
-def _parse_csv(s: str | None) -> Set[str]:
-    return {p.strip() for p in s.split(",")} if s else set()
-```
-
-**Vulnerability**:
-
-- No length validation on CSV string
-- No validation that parsed values are in allowed set
-- Potential for DoS with very long CSV strings
-
-**Fix**:
-
-```python
-def _parse_csv(s: str | None, allowed: Set[str], max_length: int = 100) -> Set[str]:
-    if not s:
-        return set()
-
-    if len(s) > max_length:
-        raise HTTPException(status_code=400, detail=f"CSV parameter too long (max {max_length} chars)")
-
-    parsed = {p.strip() for p in s.split(",") if p.strip()}
-    invalid = parsed - allowed
-
-    if invalid:
-        raise HTTPException(status_code=400, detail=f"Invalid values: {', '.join(invalid)}")
-
-    return parsed
-```
-
-**Recommendation**:
-
-- Add maximum length validation
-- Validate against whitelist of allowed values
-- Limit number of items in CSV
-
----
-
-### HIGH-005: Missing Authentication on Some Endpoints
-
-**File**: `main.py`  
-**Line**: 941-945  
-**Severity**: High
-
-**Issue**: Several endpoints are marked as public that may expose sensitive information.
-
-**Vulnerability**:
-
-- `/rate-limit-status` exposes rate limiting configuration
-- `/rate-limit-stats` may expose usage patterns
-- `/cache-stats/*` endpoints expose internal metrics
-
-**Fix**:
-
-```python
-# Make these endpoints require authentication
-public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/health", "/v1/records/rolling-bundle/test-cors"]
-
-# Add authentication to stats endpoints
-@app.get("/rate-limit-stats")
-async def get_rate_limit_stats(user=Depends(verify_firebase_token)):
-    # ... handler
-```
-
-**Recommendation**:
-
-- Review all "public" endpoints
-- Require authentication for any endpoint exposing system metrics
-- Consider admin-only access for statistics
-
----
-
-### HIGH-006: Redis KEYS Command Usage
-
-**File**: `cache_utils.py`  
-**Line**: 1170, 1305, 1377  
-**Severity**: High
-
-**Issue**: Redis `KEYS` command is used which can block the server on large datasets.
-
-```python
-matching_keys = self.redis_client.keys(pattern)
-```
-
-**Vulnerability**:
-
-- `KEYS` command is blocking and O(N) complexity
-- Can cause Redis to become unresponsive
-- Not suitable for production environments
-
-**Fix**:
-
-```python
-# Use SCAN instead of KEYS
-def invalidate_by_pattern(self, pattern: str, dry_run: bool = False) -> Dict:
-    matching_keys = []
-    cursor = 0
-
-    while True:
-        cursor, keys = self.redis_client.scan(cursor, match=pattern, count=100)
-        matching_keys.extend(keys)
-        if cursor == 0:
-            break
-
-    # Process matching_keys...
-```
-
-**Recommendation**:
-
-- Replace all `KEYS` commands with `SCAN`
-- Use cursor-based iteration
-- Set appropriate COUNT parameter
-
----
-
-### HIGH-007: Insecure Direct Object References (IDOR)
-
-**File**: `main.py`, `routers/records_agg.py`  
-**Line**: Multiple locations  
-**Severity**: High
-
-**Issue**: No access control checks on resources - users can access any location data.
-
-**Vulnerability**: While this API appears designed for public access, there's no validation that:
-
-- Users shouldn't access certain locations (if business logic requires)
-- Rate limits apply consistently
-- Resource exhaustion attacks are prevented
-
-**Fix**: Add resource access validation if business rules require it:
-
-```python
-def validate_location_access(location: str, user: dict) -> bool:
-    # Implement business logic for location access
-    # For example, premium locations only for premium users
-    if location in PREMIUM_LOCATIONS and not user.get("premium"):
-        return False
+    if origin not in allowed_origins and not referer.startswith(tuple(allowed_origins)):
+        raise HTTPException(403, "Invalid origin")
     return True
+
+# Apply to state-changing endpoints
+@app.post("/cache-warm", dependencies=[Depends(verify_csrf_token)])
+async def trigger_cache_warming():
+    # ...
 ```
-
-**Recommendation**:
-
-- Review business requirements for access control
-- Add validation if specific locations should be restricted
-- Implement proper authorization checks
 
 ---
 
-## Medium Severity Issues
+### 5. Overly Broad Exception Handling
 
-### MED-001: Missing HTTPS Enforcement
+**File:** Multiple files (141 instances)
+**Severity:** HIGH
+**CWE:** CWE-396 (Declaration of Catch-All Exception Handler)
 
-**File**: `main.py`  
-**Line**: 1070-1080  
-**Severity**: Medium
+**Description:**
+The codebase uses bare `except Exception as e` handlers extensively, catching all exceptions including critical system errors:
 
-**Issue**: No explicit HTTPS enforcement or HSTS headers.
+**Examples:**
 
-**Fix**:
+- main.py: 51 instances
+- cache_utils.py: 35 instances
+- routers/records_agg.py: 7 instances
+
+**Impact:**
+
+- Security exceptions silently caught
+- Difficult to debug production issues
+- May hide authentication/authorization failures
+- Resource leaks from unhandled errors
+
+**Recommendation:**
+
+```python
+# Bad - catches everything
+try:
+    data = await fetch_data()
+except Exception as e:
+    logger.error(f"Error: {e}")
+    return {"error": "failed"}
+
+# Good - catch specific exceptions
+try:
+    data = await fetch_data()
+except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+    logger.error(f"Network error fetching data: {e}")
+    raise HTTPException(503, "Service temporarily unavailable")
+except ValueError as e:
+    logger.error(f"Invalid data format: {e}")
+    raise HTTPException(400, "Invalid response from upstream")
+# Let critical exceptions propagate
+```
+
+---
+
+### 6. Redis Connection Without Authentication Validation
+
+**File:** main.py:750
+**Line:** 750
+**Severity:** HIGH
+**CWE:** CWE-306 (Missing Authentication for Critical Function)
+
+**Description:**
+Redis connection established without validating if authentication is required:
+
+```python
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+```
+
+**Impact:**
+
+- No validation that Redis requires password
+- Potential connection to wrong Redis instance
+- No SSL/TLS enforcement for Redis connections
+- Credentials may be transmitted in plaintext
+
+**Recommendation:**
+
+```python
+import ssl
+
+# Validate Redis connection and enforce security
+def create_redis_client(url: str):
+    """Create Redis client with security validation."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+
+    # Enforce password in production
+    if not parsed.password and os.getenv("ENVIRONMENT") == "production":
+        raise ValueError("Redis password required in production")
+
+    # Enforce SSL in production
+    ssl_context = None
+    if parsed.scheme == "rediss":
+        ssl_context = ssl.create_default_context()
+    elif os.getenv("ENVIRONMENT") == "production":
+        logger.warning("⚠️  Redis not using SSL in production!")
+
+    return redis.from_url(
+        url,
+        decode_responses=True,
+        ssl_cert_reqs=ssl.CERT_REQUIRED if ssl_context else None,
+        ssl_ca_certs=None if ssl_context else None
+    )
+
+redis_client = create_redis_client(REDIS_URL)
+```
+
+---
+
+### 7. Insufficient Input Validation on Location Parameter
+
+**File:** main.py:2461-2482, routers/records_agg.py
+**Lines:** 2461-2482
+**Severity:** HIGH
+**CWE:** CWE-20 (Improper Input Validation)
+
+**Description:**
+Location parameter validation is minimal and doesn't prevent injection attacks:
+
+```python
+def is_location_likely_invalid(location: str) -> bool:
+    # Only checks for common JS errors, not security issues
+    invalid_patterns = [
+        "[object Object]",
+        "undefined",
+        "null"
+    ]
+    return any(pattern.lower() in location_lower for pattern in invalid_patterns)
+```
+
+**Impact:**
+
+- Potential for log injection attacks
+- Cache poisoning with malicious location strings
+- May pass through to external APIs causing errors
+- No length limits enforced
+
+**Recommendation:**
+
+```python
+import re
+from pydantic import validator
+
+def validate_location(location: str) -> str:
+    """Comprehensive location validation."""
+    # Length check
+    if not location or len(location) > 200:
+        raise HTTPException(400, "Invalid location length")
+
+    # Whitelist allowed characters
+    if not re.match(r'^[a-zA-Z0-9\s,.\-\']+$', location):
+        raise HTTPException(400, "Location contains invalid characters")
+
+    # Prevent path traversal attempts
+    if '..' in location or '/' in location or '\\' in location:
+        raise HTTPException(400, "Invalid location format")
+
+    # Check for control characters
+    if any(ord(c) < 32 for c in location):
+        raise HTTPException(400, "Location contains control characters")
+
+    return location.strip()
+
+# Use Pydantic for validation
+class LocationRequest(BaseModel):
+    location: str
+
+    @validator('location')
+    def validate_location_field(cls, v):
+        return validate_location(v)
+```
+
+---
+
+### 8. Missing Security Headers
+
+**File:** main.py (application configuration)
+**Severity:** HIGH
+**CWE:** CWE-1021 (Improper Restriction of Rendered UI Layers)
+
+**Description:**
+Application doesn't set critical security headers:
+
+- No Content-Security-Policy
+- No X-Frame-Options
+- No Strict-Transport-Security (HSTS)
+- No X-Content-Type-Options
+
+**Impact:**
+
+- Vulnerable to clickjacking attacks
+- No CSP protection against XSS
+- Browsers may not enforce HTTPS
+- MIME-type sniffing vulnerabilities
+
+**Recommendation:**
 
 ```python
 @app.middleware("http")
-async def security_headers_middleware(request: Request, call_next):
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses."""
     response = await call_next(request)
 
-    # Force HTTPS in production
-    if not DEBUG and request.url.scheme != "https":
-        return JSONResponse(
-            status_code=400,
-            content={"error": "HTTPS required"}
+    # Prevent clickjacking
+    response.headers["X-Frame-Options"] = "DENY"
+
+    # Prevent MIME sniffing
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+    # XSS protection (legacy browsers)
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+
+    # Content Security Policy
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+
+    # HSTS (only if using HTTPS)
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains; preload"
         )
 
-    # Add security headers
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
+    # Referrer policy
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+    # Permissions policy
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), microphone=(), camera=()"
+    )
 
     return response
 ```
 
 ---
 
-### MED-002: Weak ETag Generation
+### 9. Potential CORS Misconfiguration
 
-**File**: `cache_utils.py`, `routers/locations_preapproved.py`  
-**Line**: 273, 92  
-**Severity**: Medium
+**File:** main.py:71-72, 1088-1110
+**Lines:** 71-72
+**Severity:** HIGH
+**CWE:** CWE-942 (Overly Permissive CORS Policy)
 
-**Issue**: MD5 used for ETag generation (MD5 is cryptographically broken).
+**Description:**
+CORS configuration loaded from environment variables without validation:
 
 ```python
-return f'"{hashlib.md5(json_str.encode()).hexdigest()}"'
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "").strip()
+CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip()
 ```
 
-**Fix**:
+**Impact:**
+
+- Misconfigured CORS_ORIGIN_REGEX could allow all origins
+- No validation of allowed origins
+- Potential for credential-bearing cross-origin requests
+- May expose sensitive data to unauthorized domains
+
+**Recommendation:**
 
 ```python
-# Use SHA256 for ETags
-return f'"{hashlib.sha256(json_str.encode()).hexdigest()[:16]}"'
-```
+def validate_cors_config():
+    """Validate CORS configuration."""
+    origins = os.getenv("CORS_ORIGINS", "").strip()
+    regex = os.getenv("CORS_ORIGIN_REGEX", "").strip()
 
----
+    # Warn about permissive configurations
+    if not origins and not regex:
+        logger.warning("⚠️  No CORS origins configured - API may be inaccessible")
 
-### MED-003: Missing Request Timeout on External APIs
+    if regex:
+        # Test regex is valid and not too permissive
+        import re
+        try:
+            pattern = re.compile(regex)
+            # Warn if regex looks too permissive
+            if regex in [".*", ".+", ".*\\.*"] or ".*" in regex:
+                logger.warning(f"⚠️  CORS regex very permissive: {regex}")
+        except re.error as e:
+            raise ValueError(f"Invalid CORS_ORIGIN_REGEX: {e}")
 
-**File**: `main.py`, `routers/records_agg.py`  
-**Line**: Multiple locations  
-**Severity**: Medium
+    if origins == "*":
+        logger.error("❌ CORS_ORIGINS set to '*' - this is insecure!")
+        raise ValueError("Wildcard CORS not allowed")
 
-**Issue**: Some external API calls lack explicit timeouts, risking resource exhaustion.
+    return origins, regex
 
-**Fix**: Ensure all external calls have timeouts:
-
-```python
-async with aiohttp.ClientSession(
-    timeout=aiohttp.ClientTimeout(total=60, connect=10)
-) as session:
-    # ... API calls
-```
-
----
-
-### MED-004: Code Duplication in Cache Key Generation
-
-**File**: `main.py`, `cache_utils.py`, `routers/records_agg.py`  
-**Severity**: Medium
-
-**Issue**: Cache key generation logic is duplicated across multiple files.
-
-**Recommendation**: Centralize cache key generation in `cache_utils.py` and reuse everywhere.
-
----
-
-### MED-005: Missing Input Sanitization in Logging
-
-**File**: `main.py`  
-**Line**: Multiple locations  
-**Severity**: Medium
-
-**Issue**: User inputs are logged without sanitization, potentially exposing sensitive data.
-
-**Fix**:
-
-```python
-def sanitize_for_logging(data: str, max_length: int = 100) -> str:
-    """Sanitize data before logging."""
-    if len(data) > max_length:
-        data = data[:max_length] + "..."
-    # Remove potential sensitive patterns
-    data = re.sub(r'Bearer\s+\S+', 'Bearer [REDACTED]', data)
-    data = re.sub(r'key=[^&]+', 'key=[REDACTED]', data)
-    return data
+CORS_ORIGINS, CORS_ORIGIN_REGEX = validate_cors_config()
 ```
 
 ---
 
-### MED-006: Insufficient Error Handling in Async Jobs
+### 10. Rate Limiting Bypass via Service Tokens
 
-**File**: `job_worker.py`, `cache_utils.py`  
-**Line**: 203-209  
-**Severity**: Medium
+**File:** main.py:952-956, 1039-1048
+**Lines:** 952-956, 1039-1048
+**Severity:** HIGH
+**CWE:** CWE-307 (Improper Restriction of Excessive Authentication Attempts)
 
-**Issue**: Job processing errors may not be properly logged or handled.
-
-**Fix**: Improve error handling:
+**Description:**
+Both `TEST_TOKEN` and `API_ACCESS_TOKEN` bypass rate limiting entirely:
 
 ```python
-except Exception as e:
-    logger.error(f"Error processing job {job_id}: {e}", exc_info=True)
-    # Store detailed error for diagnostics
-    job_manager.update_job_status(
-        job_id,
-        JobStatus.ERROR,
-        error=str(e),
-        error_details=traceback.format_exc()  # Store in separate field
-    )
+if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
+    is_service_job = True
+    # Rate limiting bypassed
+```
+
+**Impact:**
+
+- Service tokens can be used for DoS attacks
+- No rate limiting on automated systems
+- Single compromised token = unlimited access
+- No distinction between different service callers
+
+**Recommendation:**
+
+```python
+# Implement tiered rate limiting for service tokens
+SERVICE_RATE_LIMITS = {
+    "default": {"requests_per_hour": 10000, "locations_per_hour": 1000},
+    "cache_warmer": {"requests_per_hour": 50000, "locations_per_hour": 5000}
+}
+
+def get_service_tier(token: str) -> str:
+    """Get service tier from token (could use JWT claims)."""
+    # Implement token-to-tier mapping
+    # Could use JWT with 'tier' claim
+    return "default"
+
+# Apply service-specific rate limits
+if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
+    tier = get_service_tier(token)
+    limits = SERVICE_RATE_LIMITS.get(tier, SERVICE_RATE_LIMITS["default"])
+    # Apply tier-specific rate limiting
+    if not check_service_rate_limit(client_ip, limits):
+        raise HTTPException(429, "Service rate limit exceeded")
 ```
 
 ---
 
-### MED-007: Missing Content Security Policy Headers
+### 11. Client IP Logging Privacy Concern
 
-**File**: `main.py`  
-**Severity**: Medium
+**File:** main.py:479, 853, 861, etc.
+**Severity:** HIGH
+**CWE:** CWE-359 (Exposure of Private Personal Information)
 
-**Issue**: No CSP headers to prevent XSS attacks.
-
-**Fix**: Add CSP headers in security middleware (see MED-001).
-
----
-
-### MED-008: Inconsistent Error Response Format
-
-**File**: `main.py`, `routers/records_agg.py`  
-**Severity**: Medium
-
-**Issue**: Error responses use inconsistent formats across endpoints.
-
-**Recommendation**: Standardize error response format:
+**Description:**
+Client IP addresses are extensively logged throughout the application:
 
 ```python
-class ErrorResponse(BaseModel):
-    error: str
-    message: str
-    code: str
-    details: Optional[Dict] = None
+"client_ip": client_ip,  # Line 479 - stored in analytics
+logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip}")  # Line 853
+```
+
+**Impact:**
+
+- GDPR/CCPA compliance issues (IP is PII)
+- No user consent for IP logging
+- Long retention in analytics (7 days)
+- Logs may be aggregated/exported
+
+**Recommendation:**
+
+```python
+import hashlib
+
+def anonymize_ip(ip: str) -> str:
+    """Anonymize IP address for logging/storage."""
+    # Hash IP with daily salt for privacy
+    salt = datetime.now().strftime("%Y-%m-%d")
+    return hashlib.sha256(f"{ip}{salt}".encode()).hexdigest()[:16]
+
+# Use anonymized IP for non-security logging
+anonymized_ip = anonymize_ip(client_ip)
+logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {anonymized_ip}")
+
+# Store anonymized IP in analytics
+analytics_record = {
+    "client_ip_hash": anonymize_ip(client_ip),  # Not raw IP
+    # ... other fields
+}
+
+# Keep raw IP only for rate limiting (in-memory, short TTL)
+# Add privacy policy disclosure for IP collection
 ```
 
 ---
 
-### MED-009: Missing Input Length Limits
+## Medium Severity Issues
 
-**File**: `main.py`, `routers/records_agg.py`  
-**Line**: 3091  
-**Severity**: Medium
+### 12. No Request Body Size Limit for All Endpoints
 
-**Issue**: Location parameter has no maximum length validation.
+**File:** main.py:869-909
+**Lines:** 891
+**Severity:** MEDIUM
+**CWE:** CWE-770 (Allocation of Resources Without Limits)
 
-**Fix**:
+**Description:**
+Request size validation only applies to POST/PUT/PATCH, and only checks Content-Length header:
 
 ```python
-location: str = Path(..., description="Location name", max_length=200)
+max_size = 1024 * 1024  # 1MB default limit
+if content_length != "unknown":
+    # Only validates if Content-Length header present
+```
+
+**Impact:**
+
+- Attackers can omit Content-Length header
+- GET requests with bodies not validated
+- Chunked encoding bypasses size check
+- Memory exhaustion possible
+
+**Recommendation:**
+
+```python
+from starlette.requests import Request
+from starlette.datastructures import UploadFile
+
+# Configure Starlette/FastAPI max body size
+app = FastAPI(
+    # ...
+    # Limit request body size globally
+)
+
+# Add body size validator middleware
+@app.middleware("http")
+async def limit_request_body_size(request: Request, call_next):
+    """Enforce request body size limit."""
+    max_size = 1024 * 1024  # 1MB
+
+    if request.method in ["POST", "PUT", "PATCH"]:
+        # Read body with size limit
+        body_size = 0
+        async for chunk in request.stream():
+            body_size += len(chunk)
+            if body_size > max_size:
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": "Request body too large"}
+                )
+
+    return await call_next(request)
 ```
 
 ---
 
-### MED-010: Potential Denial of Service in Cache Invalidation
+### 13. Firebase Service Account from Environment Variable
 
-**File**: `cache_utils.py`  
-**Line**: 1162-1211  
-**Severity**: Medium
+**File:** main.py:783-797
+**Lines:** 783-797
+**Severity:** MEDIUM
+**CWE:** CWE-522 (Insufficiently Protected Credentials)
 
-**Issue**: Cache invalidation by pattern can be resource-intensive and cause DoS.
-
-**Fix**: Add rate limiting and size limits:
+**Description:**
+Firebase service account JSON loaded from environment variable:
 
 ```python
-def invalidate_by_pattern(self, pattern: str, dry_run: bool = False, max_keys: int = 10000) -> Dict:
-    # Limit number of keys to prevent DoS
-    # ... existing code with max_keys check
-    if len(matching_keys) > max_keys:
-        raise HTTPException(status_code=400, detail=f"Pattern matches too many keys (>{max_keys})")
+firebase_creds_json = os.getenv("FIREBASE_SERVICE_ACCOUNT") or os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+firebase_creds = json.loads(firebase_creds_json)
+```
+
+**Impact:**
+
+- Entire private key in environment variable
+- May be exposed in process listings
+- Logged in deployment systems
+- Difficult to rotate credentials
+
+**Recommendation:**
+
+```python
+# Use secret management service
+import boto3  # AWS Secrets Manager
+# Or Google Secret Manager, HashiCorp Vault, etc.
+
+def load_firebase_credentials():
+    """Load Firebase credentials from secure secret store."""
+    env = os.getenv("ENVIRONMENT", "development")
+
+    if env == "production":
+        # Use secret manager in production
+        secret_name = os.getenv("FIREBASE_SECRET_NAME")
+        if not secret_name:
+            raise ValueError("FIREBASE_SECRET_NAME required in production")
+
+        # Example with AWS Secrets Manager
+        client = boto3.client('secretsmanager')
+        response = client.get_secret_value(SecretId=secret_name)
+        creds = json.loads(response['SecretString'])
+    else:
+        # File-based for development
+        with open("firebase-service-account.json") as f:
+            creds = json.load(f)
+
+    return credentials.Certificate(creds)
+
+cred = load_firebase_credentials()
+firebase_admin.initialize_app(cred)
+```
+
+---
+
+### 14. Synchronous Operations in Async Context
+
+**File:** main.py:2384-2404
+**Lines:** 2384
+**Severity:** MEDIUM
+**CWE:** CWE-834 (Excessive Iteration)
+
+**Description:**
+Using synchronous `requests.get()` in async context blocks the event loop:
+
+```python
+response = requests.get(url)  # Blocks event loop!
+```
+
+**Impact:**
+
+- Blocks event loop during HTTP requests
+- Reduces application throughput
+- Potential cascading delays
+- Poor user experience
+
+**Recommendation:**
+
+```python
+# Use async HTTP client
+async def fetch_data(url: str):
+    """Async HTTP request."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        return response.json()
+
+# Or use run_in_threadpool for legacy sync code
+from starlette.concurrency import run_in_threadpool
+
+async def legacy_fetch(url: str):
+    """Wrap sync call in thread pool."""
+    return await run_in_threadpool(requests.get, url)
+```
+
+---
+
+### 15. No Rate Limiting on Analytics Endpoint
+
+**File:** main.py:3547-3674
+**Lines:** 3547
+**Severity:** MEDIUM
+**CWE:** CWE-770 (Allocation of Resources Without Limits)
+
+**Description:**
+Analytics endpoint `/analytics` is in public_paths list and has no rate limiting:
+
+```python
+# Line 941 - analytics in public paths
+public_paths = [..., "/analytics", ...]
+```
+
+**Impact:**
+
+- Analytics data pollution
+- Storage exhaustion (Redis)
+- Processing overhead
+- No protection against spam
+
+**Recommendation:**
+
+```python
+# Remove analytics from public_paths
+# Add dedicated rate limit for analytics
+ANALYTICS_RATE_LIMIT = 100  # per hour
+
+@app.middleware("http")
+async def analytics_rate_limit(request: Request, call_next):
+    """Rate limit analytics submissions."""
+    if request.url.path.startswith("/analytics") and request.method == "POST":
+        client_ip = get_client_ip(request)
+
+        # Check analytics-specific rate limit
+        key = f"analytics_limit:{client_ip}"
+        count = redis_client.get(key) or 0
+
+        if int(count) >= ANALYTICS_RATE_LIMIT:
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Analytics rate limit exceeded"}
+            )
+
+        redis_client.incr(key)
+        redis_client.expire(key, 3600)
+
+    return await call_next(request)
+```
+
+---
+
+### 16. Weak ETag Generation
+
+**File:** main.py:454, routers/locations_preapproved.py:91
+**Lines:** 454, 91
+**Severity:** MEDIUM
+**CWE:** CWE-326 (Inadequate Encryption Strength)
+
+**Description:**
+ETag uses SHA256 but only first 16 characters:
+
+```python
+etag = hashlib.sha256(key_parts.encode("utf-8")).hexdigest()[:16]
+```
+
+**Impact:**
+
+- Increased collision probability
+- Cache confusion possible
+- Weak cache validation
+
+**Recommendation:**
+
+```python
+# Use full hash or at least 32 characters
+etag = hashlib.sha256(key_parts.encode("utf-8")).hexdigest()  # Full 64 chars
+# Or minimum 32 chars for 128-bit security
+etag = hashlib.sha256(key_parts.encode("utf-8")).hexdigest()[:32]
+
+response.headers["ETag"] = f'W/"{etag}"'
+```
+
+---
+
+### 17. Missing Timeout on External HTTP Requests
+
+**File:** routers/records_agg.py:123, 342
+**Lines:** 123, 342
+**Severity:** MEDIUM
+**CWE:** CWE-400 (Uncontrolled Resource Consumption)
+
+**Description:**
+HTTP client has timeout but some requests may hang:
+
+```python
+_client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+```
+
+**Impact:**
+
+- Requests may hang indefinitely on connection issues
+- Resource exhaustion
+- Cascading failures
+
+**Recommendation:**
+
+```python
+# Use comprehensive timeout configuration
+timeout = aiohttp.ClientTimeout(
+    total=30,      # Total request timeout
+    connect=5,     # Connection timeout
+    sock_read=10,  # Socket read timeout
+    sock_connect=5 # Socket connection timeout
+)
+
+_client = aiohttp.ClientSession(timeout=timeout)
+
+# Also add retry logic with exponential backoff
+from aiohttp_retry import RetryClient, ExponentialRetry
+
+retry_options = ExponentialRetry(
+    attempts=3,
+    start_timeout=0.5,
+    max_timeout=3.0,
+    factor=2.0
+)
+
+_client = RetryClient(
+    client_session=aiohttp.ClientSession(timeout=timeout),
+    retry_options=retry_options
+)
+```
+
+---
+
+### 18. Cache Key Collision Risk
+
+**File:** cache_utils.py, main.py:3118
+**Lines:** 3118
+**Severity:** MEDIUM
+**CWE:** CWE-404 (Improper Resource Shutdown)
+
+**Description:**
+Cache key generation may have collisions due to insufficient separation:
+
+```python
+cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
+```
+
+**Impact:**
+
+- Different requests may get wrong cached data
+- Data leakage between similar locations
+- Inconsistent responses
+
+**Recommendation:**
+
+```python
+import hashlib
+
+def generate_cache_key(components: dict) -> str:
+    """Generate collision-resistant cache key."""
+    # Sort and hash components
+    sorted_items = sorted(components.items())
+    key_string = "|".join(f"{k}={v}" for k, v in sorted_items)
+
+    # Use hash to ensure consistent length and no collision
+    key_hash = hashlib.sha256(key_string.encode()).hexdigest()
+
+    # Use prefix + hash for debugging
+    prefix = components.get("type", "cache")
+    return f"{prefix}:{key_hash}"
+
+# Usage
+cache_key = generate_cache_key({
+    "type": "records",
+    "period": period,
+    "location": normalized_location,
+    "identifier": identifier,
+    "unit": "celsius",
+    "version": "v1",
+    "sections": "values,average,trend,summary"
+})
+```
+
+---
+
+### 19. No Validation of Redis Key TTL
+
+**File:** cache_utils.py, routers/locations_preapproved.py:28
+**Lines:** 28
+**Severity:** MEDIUM
+**CWE:** CWE-1333 (Inefficient Regular Expression Complexity)
+
+**Description:**
+Cache TTL values are hardcoded without validation:
+
+```python
+CACHE_TTL = 86400  # 24 hours - no validation
+```
+
+**Impact:**
+
+- TTL misconfiguration could cause cache exhaustion
+- Very large TTL = memory issues
+- No bounds checking
+
+**Recommendation:**
+
+```python
+# Validate TTL values
+MIN_TTL = 60  # 1 minute
+MAX_TTL = 604800  # 7 days
+
+def validate_ttl(ttl: int, name: str) -> int:
+    """Validate cache TTL value."""
+    if not isinstance(ttl, int):
+        raise ValueError(f"{name} must be integer")
+    if ttl < MIN_TTL:
+        logger.warning(f"{name} TTL {ttl}s too low, using {MIN_TTL}s")
+        return MIN_TTL
+    if ttl > MAX_TTL:
+        logger.warning(f"{name} TTL {ttl}s too high, using {MAX_TTL}s")
+        return MAX_TTL
+    return ttl
+
+CACHE_TTL = validate_ttl(
+    int(os.getenv("CACHE_TTL", "86400")),
+    "CACHE_TTL"
+)
+```
+
+---
+
+### 20. Debug Mode Enabled via Environment Variable
+
+**File:** main.py:62
+**Line:** 62
+**Severity:** MEDIUM
+**CWE:** CWE-489 (Active Debug Code)
+
+**Description:**
+Debug mode controlled only by environment variable:
+
+```python
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+```
+
+**Impact:**
+
+- Verbose logging in production
+- Sensitive data in logs
+- Performance degradation
+- Security information disclosure
+
+**Recommendation:**
+
+```python
+# Enforce debug mode restrictions
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+# Never allow DEBUG in production
+if ENVIRONMENT == "production" and DEBUG:
+    logger.error("❌ DEBUG mode not allowed in production")
+    raise ValueError("DEBUG=true forbidden in production environment")
+
+# Add application-level debug endpoint protection
+@app.get("/debug/jobs")
+async def debug_jobs_endpoint():
+    if not DEBUG or ENVIRONMENT == "production":
+        raise HTTPException(404, "Not found")
+    # ... debug logic
 ```
 
 ---
 
 ## Low Severity Issues
 
-### LOW-001: Outdated Dependencies
+### 21. Code Duplication in Error Handling
 
-**File**: `requirements.txt`  
-**Severity**: Low
+**File:** Multiple files
+**Severity:** LOW
+**Category:** Code Quality
 
-**Issue**: Several packages may have known vulnerabilities.
+**Description:**
+Extensive code duplication in error handling patterns across the codebase. 141 instances of identical exception handling.
 
-**Fix**: Run security audit:
+**Impact:**
 
-```bash
-pip install safety
-safety check
-```
+- Harder to maintain
+- Inconsistent error messages
+- Difficult to add logging/monitoring
 
-**Recommendation**: Regularly update dependencies and monitor for security advisories.
-
----
-
-### LOW-002: Missing API Versioning Documentation
-
-**File**: README.md  
-**Severity**: Low
-
-**Issue**: API versioning strategy is not clearly documented.
-
-**Recommendation**: Document versioning policy and deprecation strategy.
-
----
-
-### LOW-003: Inefficient Rate Limiting Cleanup
-
-**File**: `main.py`  
-**Line**: 222-233  
-**Severity**: Low
-
-**Issue**: Rate limiting cleanup runs on every request, can be optimized.
-
-**Fix**: Run cleanup in background task periodically.
-
----
-
-### LOW-004: Missing Request ID for Tracing
-
-**File**: `main.py`  
-**Severity**: Low
-
-**Issue**: No request ID for distributed tracing.
-
-**Fix**: Add request ID middleware:
+**Recommendation:**
 
 ```python
-import uuid
+# Create reusable error handlers
+def handle_api_error(e: Exception, context: str) -> HTTPException:
+    """Standardized API error handler."""
+    logger.error(f"API error in {context}: {e}", exc_info=True)
 
+    if isinstance(e, aiohttp.ClientError):
+        return HTTPException(503, "External service unavailable")
+    elif isinstance(e, asyncio.TimeoutError):
+        return HTTPException(504, "Request timeout")
+    elif isinstance(e, ValueError):
+        return HTTPException(400, f"Invalid input: {str(e)}")
+    else:
+        return HTTPException(500, "Internal server error")
+
+# Usage
+try:
+    data = await fetch_external_data()
+except Exception as e:
+    raise handle_api_error(e, "fetch_external_data")
+```
+
+---
+
+### 22. Missing API Versioning Strategy
+
+**File:** main.py (v1 endpoints mixed with legacy)
+**Severity:** LOW
+**Category:** Code Quality
+
+**Description:**
+Mix of versioned (`/v1/records`) and unversioned (`/weather`, `/forecast`) endpoints:
+
+**Impact:**
+
+- Difficult to deprecate old endpoints
+- Breaking changes affect all clients
+- No migration path
+
+**Recommendation:**
+
+```python
+# Deprecate legacy endpoints with warnings
+@app.get("/weather/{location}/{date}")
+async def get_weather_legacy(location: str, date: str, response: Response):
+    """DEPRECATED: Use /v1/records/daily instead."""
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Mon, 01 Jun 2026 00:00:00 GMT"
+    response.headers["Link"] = '</v1/records/daily>; rel="successor-version"'
+
+    logger.warning(f"Legacy endpoint used: /weather/{location}/{date}")
+    # Redirect to new endpoint or return with deprecation notice
+
+# Add API version header to all responses
 @app.middleware("http")
-async def request_id_middleware(request: Request, call_next):
-    request_id = str(uuid.uuid4())
-    request.state.request_id = request_id
+async def add_api_version_header(request: Request, call_next):
     response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
+    response.headers["API-Version"] = "1.0.3"
     return response
 ```
 
 ---
 
-### LOW-005: Hardcoded Magic Numbers
+### 23. Large Main File (4067 lines)
 
-**File**: Multiple files  
-**Severity**: Low
+**File:** main.py
+**Severity:** LOW
+**Category:** Code Quality
 
-**Issue**: Magic numbers throughout code should be constants.
+**Description:**
+Main application file is 4067 lines - very difficult to maintain.
 
-**Recommendation**: Extract magic numbers to named constants at module level.
+**Impact:**
 
----
+- Hard to navigate
+- Difficult code reviews
+- Higher bug potential
+- Poor separation of concerns
 
-## Performance Bottlenecks
-
-### PERF-001: Synchronous Redis Operations in Async Context
-
-**File**: `cache_utils.py`, `routers/locations_preapproved.py`  
-**Line**: Multiple locations
-
-**Issue**: Using synchronous `redis.Redis` client instead of async client.
-
-**Fix**: Use `aioredis` or `redis.asyncio`:
+**Recommendation:**
 
 ```python
-import redis.asyncio as aioredis
-
-redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+# Split into logical modules:
+# - main.py: Application setup, middleware (< 500 lines)
+# - routers/weather.py: Weather endpoints
+# - routers/cache.py: Cache management endpoints
+# - routers/analytics.py: Analytics endpoints
+# - services/auth.py: Authentication logic
+# - services/rate_limit.py: Rate limiting
+# - services/validation.py: Input validation
+# - models/: Pydantic models
 ```
 
 ---
 
-### PERF-002: Missing Connection Pooling
+### 24. Inconsistent Error Response Format
 
-**File**: `routers/records_agg.py`  
-**Line**: 118-132
+**File:** Multiple files
+**Severity:** LOW
+**Category:** Code Quality
 
-**Issue**: HTTP client sessions may not be properly pooled.
+**Description:**
+Error responses have inconsistent formats:
 
-**Recommendation**: Ensure proper connection pooling and reuse.
+```python
+{"detail": "error message"}  # HTTPException
+{"error": "error message"}   # Custom responses
+{"message": "error message"} # Some endpoints
+```
 
----
+**Impact:**
 
-## Code Quality Issues
+- Difficult for clients to parse errors
+- Inconsistent API experience
+- Harder to document
 
-### QUAL-001: Code Duplication
+**Recommendation:**
 
-**Files**: Multiple  
-**Severity**: Medium
+```python
+# Standardize error response format
+class ErrorResponse(BaseModel):
+    error: str
+    message: str
+    code: str
+    details: Optional[dict] = None
+    timestamp: datetime = Field(default_factory=datetime.now)
 
-**Issues**:
-
-- Cache key generation duplicated
-- Error handling patterns repeated
-- Validation logic scattered
-
-**Recommendation**: Create shared utility modules for common operations.
-
----
-
-### QUAL-002: Missing Type Hints
-
-**File**: Multiple files  
-**Severity**: Low
-
-**Issue**: Some functions lack complete type hints.
-
-**Recommendation**: Add comprehensive type hints for better maintainability.
-
----
-
-### QUAL-003: Inconsistent Logging
-
-**File**: Multiple files  
-**Severity**: Low
-
-**Issue**: Logging levels and formats inconsistent.
-
-**Recommendation**: Standardize logging format and levels.
+# Custom exception handler
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(
+            error=exc.status_code,
+            message=exc.detail,
+            code=ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR"),
+            timestamp=datetime.now()
+        ).model_dump()
+    )
+```
 
 ---
 
-## Recommendations Summary
+### 25. Missing Health Check Dependencies
 
-### Immediate Actions (Critical & High)
+**File:** main.py:1787-1876
+**Lines:** 1787-1876
+**Severity:** LOW
+**Category:** Code Quality
 
-1. Remove or secure test token bypass
-2. Move API keys out of URL parameters
-3. Add strict input validation for location parameter
-4. Implement CSRF protection
-5. Move rate limiting to Redis
-6. Replace Redis KEYS with SCAN
+**Description:**
+Detailed health check doesn't verify all critical dependencies:
 
-### Short Term (Medium)
+```python
+# Missing checks:
+# - Firebase auth service connectivity
+# - External API (Visual Crossing) availability
+# - Worker service health
+```
 
-1. Add security headers (HSTS, CSP, etc.)
-2. Sanitize error messages
-3. Add request timeouts everywhere
-4. Implement HTTPS enforcement
-5. Centralize cache key generation
+**Impact:**
 
-### Long Term (Low & Quality)
+- False healthy status
+- Cascading failures not detected
+- Poor observability
 
-1. Update dependencies regularly
-2. Improve code organization
-3. Add comprehensive tests
-4. Implement request tracing
-5. Document API versioning strategy
+**Recommendation:**
+
+```python
+@app.get("/health/detailed")
+async def detailed_health_check():
+    """Comprehensive health check."""
+    health = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "checks": {}
+    }
+
+    # Check Redis
+    try:
+        redis_client.ping()
+        health["checks"]["redis"] = {"status": "healthy"}
+    except Exception as e:
+        health["checks"]["redis"] = {"status": "unhealthy", "error": str(e)}
+        health["status"] = "degraded"
+
+    # Check Firebase
+    try:
+        # Attempt token verification with test token
+        auth.verify_id_token("test", check_revoked=False)
+    except Exception as e:
+        if "invalid" in str(e).lower():
+            health["checks"]["firebase"] = {"status": "healthy"}
+        else:
+            health["checks"]["firebase"] = {"status": "unhealthy", "error": str(e)}
+            health["status"] = "degraded"
+
+    # Check external API
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/",
+                timeout=5.0
+            )
+            health["checks"]["visual_crossing_api"] = {
+                "status": "healthy" if resp.status_code < 500 else "degraded"
+            }
+    except Exception as e:
+        health["checks"]["visual_crossing_api"] = {"status": "unhealthy", "error": str(e)}
+        health["status"] = "degraded"
+
+    # Check worker service
+    try:
+        heartbeat = redis_client.get("worker:heartbeat")
+        if heartbeat:
+            health["checks"]["worker"] = {"status": "healthy"}
+        else:
+            health["checks"]["worker"] = {"status": "unhealthy", "error": "No heartbeat"}
+            health["status"] = "degraded"
+    except Exception as e:
+        health["checks"]["worker"] = {"status": "unknown", "error": str(e)}
+
+    status_code = 200 if health["status"] == "healthy" else 503
+    return JSONResponse(content=health, status_code=status_code)
+```
+
+---
+
+## Summary Table
+
+| Severity  | Count  | Description                                                      |
+| --------- | ------ | ---------------------------------------------------------------- |
+| Critical  | 3      | Outdated dependencies, authentication bypass, credential logging |
+| High      | 8      | CSRF, exception handling, validation, security headers, CORS     |
+| Medium    | 9      | Rate limits, privacy, timeouts, caching, debug mode              |
+| Low       | 5      | Code quality, duplication, health checks                         |
+| **Total** | **25** | **Issues identified**                                            |
+
+---
+
+## Priority Recommendations
+
+### Immediate Actions (This Week)
+
+1. **Update all dependencies** to patched versions
+2. **Remove TEST_TOKEN** authentication bypass
+3. **Remove or sanitize** sensitive data logging
+4. **Add CSRF protection** to state-changing endpoints
+5. **Implement security headers** middleware
+
+### Short-term Actions (This Month)
+
+1. Replace broad exception handlers with specific ones
+2. Add comprehensive input validation for location parameters
+3. Implement proper secret management for Firebase credentials
+4. Add rate limiting to analytics endpoint
+5. Fix synchronous operations in async context
+
+### Long-term Improvements (This Quarter)
+
+1. Refactor main.py into smaller modules
+2. Implement standardized error response format
+3. Add comprehensive monitoring and alerting
+4. Conduct penetration testing
+5. Create security documentation and runbooks
 
 ---
 
 ## Testing Recommendations
 
-1. **Penetration Testing**: Conduct professional penetration testing
-2. **Dependency Scanning**: Integrate automated dependency scanning in CI/CD
-3. **Security Linting**: Use tools like `bandit` for Python security linting
-4. **Load Testing**: Test rate limiting and DoS protections
-5. **Input Fuzzing**: Test all input parameters with malicious inputs
+1. **Dependency Scanning**: Integrate `pip-audit` or `safety` into CI/CD
+2. **SAST**: Use Bandit or Semgrep for static analysis
+3. **Penetration Testing**: Test authentication bypass, rate limiting, input validation
+4. **Load Testing**: Verify DoS protections work under load
+5. **Security Headers**: Test with securityheaders.com
+6. **CORS**: Test cross-origin requests from various domains
 
 ---
 
 ## Compliance Considerations
 
-- **OWASP Top 10**: Address injection, authentication, and sensitive data exposure
-- **CWE**: Address common weaknesses identified
-- **PCI DSS**: If handling payment data, ensure compliance
-- **GDPR**: Review data retention and logging practices
+- **GDPR**: IP address logging requires privacy policy and consent
+- **PCI-DSS**: If processing payments, additional controls needed
+- **SOC 2**: Logging, access controls, and encryption gaps identified
+- **OWASP Top 10**: Addressed broken authentication, security misconfiguration, insufficient logging
 
 ---
 
-## Conclusion
-
-This codebase has several security vulnerabilities that need immediate attention, particularly around authentication bypass, API key exposure, and input validation. The good news is that most issues have straightforward fixes. Prioritize addressing Critical and High severity issues first, then work through Medium severity items.
-
-**Estimated Effort**:
-
-- Critical/High: 2-3 days
-- Medium: 1 week
-- Low/Quality: Ongoing
-
-**Priority**: Address all Critical and High severity issues before next production deployment.
+**End of Report**
