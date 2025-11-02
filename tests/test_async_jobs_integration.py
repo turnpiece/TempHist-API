@@ -6,7 +6,6 @@ This script helps debug async job issues by testing the complete flow.
 
 import requests
 import time
-import json
 import os
 from typing import Dict, Any
 

@@ -1,7 +1,5 @@
 """Statistics and rate limiting status endpoints."""
 from fastapi import APIRouter, Request, Depends
-from fastapi.responses import JSONResponse
-from typing import Optional
 from config import (
     RATE_LIMIT_ENABLED, API_ACCESS_TOKEN, MAX_LOCATIONS_PER_HOUR,
     MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS, USAGE_TRACKING_ENABLED

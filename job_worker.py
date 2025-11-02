@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from cache_utils import get_job_manager, get_cache, JobStatus
-from routers.records_agg import rolling_bundle as rolling_bundle_func
 
 logger = logging.getLogger(__name__)
 

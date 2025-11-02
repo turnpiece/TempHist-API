@@ -10,18 +10,17 @@ Tests cover:
 - Performance and metrics
 """
 
-import asyncio
 import json
 import pytest
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch, AsyncMock
 
 from cache_utils import (
     CacheKeyBuilder, ETagGenerator, CacheHeaders, SingleFlightLock,
     EnhancedCache, JobManager, JobStatus, initialize_cache
 )
-from job_worker import JobWorker, initialize_worker
+from job_worker import JobWorker
 
 class TestCacheKeyBuilder:
     """Test cache key building and normalization."""

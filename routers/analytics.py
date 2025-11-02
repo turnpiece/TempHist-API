@@ -3,14 +3,12 @@ import json
 import logging
 import redis
 from datetime import datetime
-from fastapi import APIRouter, Request, Query, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request, Query, HTTPException, Depends
 from models import AnalyticsData, AnalyticsResponse
 from utils.ip_utils import get_client_ip
 from config import ANALYTICS_RATE_LIMIT, DEBUG
 from routers.dependencies import get_redis_client, get_analytics_storage
 from analytics_storage import AnalyticsStorage
-from fastapi import Depends
 
 logger = logging.getLogger(__name__)
 

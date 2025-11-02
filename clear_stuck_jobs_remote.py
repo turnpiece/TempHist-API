@@ -5,7 +5,6 @@ Use this when you don't have direct server access.
 """
 
 import os
-import requests
 from dotenv import load_dotenv
 
 load_dotenv()

@@ -14,13 +14,6 @@ from routers.dependencies import get_redis_client
 router = APIRouter()
 
 
-def create_redis_client():
-    """Get or create Redis client."""
-    # This should be initialized in main.py and passed or imported
-    # For now, return None and handle in main
-    return None
-
-
 @router.get("/health")
 async def health_check():
     """Simple health check endpoint for Render load balancers."""

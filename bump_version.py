@@ -7,7 +7,6 @@ Similar to 'npm version patch' but for Python projects.
 import re
 import sys
 import subprocess
-from pathlib import Path
 
 def get_current_version():
     """Get current version from version.py"""

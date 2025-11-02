@@ -1,6 +1,12 @@
 """Root endpoint and API information."""
-from fastapi import APIRouter
+import redis
+from datetime import timedelta
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from version import __version__
+from config import CACHE_CONTROL_HEADER
+from cache_utils import set_cache_value, get_cache_value, get_cache_stats
+from routers.dependencies import get_redis_client
 
 router = APIRouter()
 
@@ -92,3 +98,33 @@ async def test_cors():
 async def test_cors_rolling():
     """Test endpoint for CORS with rolling-bundle path"""
     return {"message": "CORS is working for rolling-bundle", "path": "/test-cors-rolling"}
+
+
+@router.get("/test-redis")
+async def test_redis(redis_client: redis.Redis = Depends(get_redis_client)):
+    """Test Redis connection."""
+    try:
+        # Try to set a test value
+        set_cache_value("test_key", timedelta(minutes=5), "test_value", redis_client)
+        # Try to get the test value
+        test_value = get_cache_value("test_key", redis_client, "test", "test", get_cache_stats())
+        if test_value:
+            # Handle both bytes and string responses
+            test_str = test_value.decode('utf-8') if isinstance(test_value, bytes) else test_value
+            if test_str == "test_value":
+                return JSONResponse(
+                    content={"status": "success", "message": "Redis connection is working"},
+                    headers={"Cache-Control": CACHE_CONTROL_HEADER}
+                )
+        return JSONResponse(
+            content={"status": "error", "message": "Redis connection test failed"},
+            headers={"Cache-Control": CACHE_CONTROL_HEADER}
+        )
+    except Exception as e:
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": f"Redis connection error: {str(e)}"
+            },
+            headers={"Cache-Control": CACHE_CONTROL_HEADER}
+        )

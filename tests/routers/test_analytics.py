@@ -10,9 +10,8 @@ Tests cover:
 
 import pytest
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
 
 from main import app as main_app
 

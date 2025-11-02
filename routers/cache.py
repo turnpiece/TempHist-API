@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Path, Query, Depends
+from fastapi import APIRouter, Query, Depends
 from cache_utils import (
     get_cache_stats, get_cache_warmer, get_cache_invalidator,
     get_job_manager, CACHE_WARMING_ENABLED, CACHE_STATS_ENABLED,

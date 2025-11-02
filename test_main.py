@@ -2,17 +2,12 @@ import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime
 from unittest.mock import patch, MagicMock, AsyncMock
-import json
-import os
 import time
-import asyncio
-import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from main import (
     calculate_historical_average, 
     calculate_trend_slope, 
-    CACHE_ENABLED, 
     get_temperature_series,
     app as main_app,
     LocationDiversityMonitor,

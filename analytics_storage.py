@@ -3,7 +3,7 @@ import json
 import time
 import logging
 from datetime import datetime
-from typing import List, Dict
+from typing import List
 from fastapi import HTTPException
 from models import AnalyticsData
 import redis

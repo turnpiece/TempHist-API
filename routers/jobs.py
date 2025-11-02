@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def get_diagnostics_recommendations(worker_alive, heartbeat_age, queue_length, jobs_by_status, stuck_count):
+def get_diagnostics_recommendations(worker_alive, heartbeat_age, jobs_by_status, stuck_count):
     """Generate diagnostic recommendations based on worker and job status."""
     recommendations = []
     
@@ -275,7 +275,6 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
             "recommendations": get_diagnostics_recommendations(
                 worker_alive, 
                 heartbeat_age, 
-                queue_length, 
                 jobs_by_status,
                 len(stuck_jobs)
             ),

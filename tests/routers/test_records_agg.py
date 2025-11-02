@@ -9,10 +9,8 @@ Tests cover:
 """
 
 import pytest
-import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
 
 from main import app as main_app, API_ACCESS_TOKEN
 
@@ -62,9 +60,12 @@ class TestV1RecordsEndpoints:
     ])
     def test_v1_records_endpoint(self, client, period, location, identifier, expected_status):
         """Test the v1 records endpoint with various inputs"""
-        with patch('main.get_temperature_data_v1') as mock_get_data, \
-             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
-             patch('main.is_location_likely_invalid', return_value=False):
+        with patch('routers.v1_records.get_temperature_data_v1', new_callable=AsyncMock) as mock_get_data, \
+             patch('routers.v1_records.is_location_likely_invalid', return_value=False), \
+             patch('routers.dependencies.get_invalid_location_cache') as mock_get_cache:
+            mock_cache = MagicMock()
+            mock_cache.is_invalid_location.return_value = False
+            mock_get_cache.return_value = mock_cache
             if expected_status == 200:
                 mock_get_data.return_value = {
                     "period": period,
@@ -103,9 +104,12 @@ class TestV1RecordsEndpoints:
     ])
     def test_v1_subresource_endpoints(self, client, period, location, identifier, subresource):
         """Test the v1 subresource endpoints"""
-        with patch('main.get_temperature_data_v1') as mock_get_data, \
-             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
-             patch('main.is_location_likely_invalid', return_value=False):
+        with patch('routers.v1_records.get_temperature_data_v1', new_callable=AsyncMock) as mock_get_data, \
+             patch('routers.v1_records.is_location_likely_invalid', return_value=False), \
+             patch('routers.dependencies.get_invalid_location_cache') as mock_get_cache:
+            mock_cache = MagicMock()
+            mock_cache.is_invalid_location.return_value = False
+            mock_get_cache.return_value = mock_cache
             mock_data = {
                 "period": period,
                 "location": location,

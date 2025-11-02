@@ -13,12 +13,11 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
 import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 # Configure logging
