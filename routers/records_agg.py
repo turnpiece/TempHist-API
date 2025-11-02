@@ -142,6 +142,26 @@ def _years_range() -> tuple[int, int]:
     y = datetime.now().year
     return (y - 50, y)
 
+def _convert_unit_group_for_vc(unit_group: str) -> str:
+    """Convert API unit_group format (celsius/fahrenheit) to Visual Crossing format (metric/us).
+    
+    Args:
+        unit_group: Unit group in API format ('celsius' or 'fahrenheit')
+        
+    Returns:
+        Visual Crossing unit group ('metric' for celsius, 'us' for fahrenheit)
+    """
+    if unit_group.lower() == "celsius":
+        return "metric"
+    elif unit_group.lower() == "fahrenheit":
+        return "us"
+    elif unit_group.lower() in ("metric", "us", "uk"):
+        # Already in VC format, return as-is
+        return unit_group.lower()
+    else:
+        # Default to metric if unknown
+        return "metric"
+
 async def fetch_historysummary(
     location: str,
     min_year: Optional[int] = None,
@@ -171,7 +191,7 @@ async def fetch_historysummary(
         "breakBy": break_by,              # years | self | none
         "dailySummaries": "true" if daily_summaries else "false",
         "contentType": "json",
-        "unitGroup": unit_group,
+        "unitGroup": _convert_unit_group_for_vc(unit_group),
         "locations": location,
         "maxStations": 8,
         "maxDistance": 120000,
@@ -469,7 +489,7 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
     encoded_location = quote(location, safe='')
     url = f"{VC_BASE_URL}/timeline/{encoded_location}/{start.isoformat()}/{end.isoformat()}"
     params = {
-        "unitGroup": unit_group,
+        "unitGroup": _convert_unit_group_for_vc(unit_group),
         "include": "days",
         "elements": "datetime,temp",  # keep payload small
         "contentType": "json",
