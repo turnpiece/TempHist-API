@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "temphist-api"
-version = "1.0.3"
+version = "1.0.4"
 description = "Temperature History API with comprehensive caching and monitoring"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -46,3 +46,10 @@ dev = [
 where = ["."]
 include = ["*"]
 exclude = ["tests*", "railway*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

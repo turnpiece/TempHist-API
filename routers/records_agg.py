@@ -8,7 +8,8 @@ from constants import VC_BASE_URL
 from dateutil.relativedelta import relativedelta
 
 router = APIRouter()
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+# Strip whitespace/newlines from API key to prevent authentication issues
+API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
 @router.api_route("/v1/records/rolling-bundle/test-cors", methods=["GET", "OPTIONS"])
@@ -120,7 +121,14 @@ _sem = asyncio.Semaphore(2)
 async def _client_session() -> aiohttp.ClientSession:
     global _client
     if _client is None or _client.closed:
-        _client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        # Increased timeout for large date ranges, with connection and read timeouts
+        _client = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(
+                total=120,  # 2 minutes total timeout for large requests
+                connect=30,  # 30 seconds to establish connection
+                sock_read=90  # 90 seconds to read response data
+            )
+        )
     return _client
 
 async def _close_client_session():
@@ -158,7 +166,9 @@ async def fetch_historysummary(
         "contentType": "json",
         "unitGroup": unit_group,
         "locations": location,
-            "key": API_KEY,
+        "maxStations": 8,
+        "maxDistance": 120000,
+        "key": API_KEY,
     }
     if params_extra:
         params.update(params_extra)
@@ -339,7 +349,14 @@ async def _get_rolling_http_client() -> aiohttp.ClientSession:
     """Get or create the rolling bundle HTTP client."""
     global _http
     if _http is None or _http.closed:
-        _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
+        # Increased timeout for rolling bundle requests
+        _http = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(
+                total=120,  # 2 minutes total timeout
+                connect=30,  # 30 seconds to establish connection
+                sock_read=90  # 90 seconds to read response data
+            )
+        )
     return _http
 
 async def _close_rolling_http_client():

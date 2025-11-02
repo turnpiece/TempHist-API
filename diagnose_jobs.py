@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Diagnostic tool for async job processing.
 Use this to troubleshoot job timeouts and background worker issues.
@@ -9,7 +10,6 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Any
 
 # Load environment
 from dotenv import load_dotenv
@@ -57,6 +57,9 @@ def diagnose_job_system():
     print("🔍 JOBS IN QUEUE")
     print("=" * 60)
     
+    # Initialize jobs_by_status early to avoid UnboundLocalError
+    jobs_by_status = {"pending": [], "processing": [], "ready": [], "error": []}
+    
     try:
         # Get jobs from queue instead of scanning all keys (KEYS command may not be available)
         job_ids = []
@@ -83,7 +86,6 @@ def diagnose_job_system():
         
         if job_keys:
             print(f"\n📝 Job details:")
-            jobs_by_status = {"pending": [], "processing": [], "ready": [], "error": []}
             
             for job_key in sorted(job_keys, reverse=True)[:20]:  # Show latest 20
                 try:
@@ -162,7 +164,12 @@ def diagnose_job_system():
     print("=" * 60)
     
     # Provide recommendations based on findings
-    if queue_length > 0 and len(jobs_by_status["pending"]) > 0:
+    try:
+        pending_count = len(jobs_by_status.get("pending", []))
+    except (NameError, UnboundLocalError):
+        pending_count = 0
+    
+    if queue_length > 0 and pending_count > 0:
         print("⚠️  ISSUE DETECTED: Jobs stuck in PENDING state")
         print("\n   Possible causes:")
         print("   1. Background worker is not running")
@@ -177,7 +184,14 @@ def diagnose_job_system():
         print("   3. Restart the API server to restart the worker")
         print("   4. Check if worker thread is alive (see logs)")
     
-    if len(jobs_by_status["processing"]) > 0:
+    try:
+        processing_count = len(jobs_by_status.get("processing", []))
+        error_count = len(jobs_by_status.get("error", []))
+    except (NameError, UnboundLocalError):
+        processing_count = 0
+        error_count = 0
+    
+    if processing_count > 0:
         print("⚠️  ISSUE DETECTED: Jobs stuck in PROCESSING state")
         print("\n   Possible causes:")
         print("   1. Worker crashed while processing")
@@ -188,7 +202,7 @@ def diagnose_job_system():
         print("   2. Manually mark stuck jobs as error:")
         print("      python diagnose_jobs.py --cleanup-stuck")
     
-    if len(jobs_by_status["error"]) > 0:
+    if error_count > 0:
         print("⚠️  Jobs with errors detected")
         print("   Check the error messages above for details")
     
