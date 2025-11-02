@@ -8,6 +8,9 @@ from fastapi.responses import JSONResponse
 from models import AnalyticsData, AnalyticsResponse
 from utils.ip_utils import get_client_ip
 from config import ANALYTICS_RATE_LIMIT, DEBUG
+from routers.dependencies import get_redis_client, get_analytics_storage
+from analytics_storage import AnalyticsStorage
+from fastapi import Depends
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +20,8 @@ router = APIRouter()
 @router.post("/analytics", response_model=AnalyticsResponse)
 async def submit_analytics(
     request: Request,
-    redis_client: redis.Redis,
-    analytics_storage
+    redis_client: redis.Redis = Depends(get_redis_client),
+    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
 ):
     """Submit client analytics data for monitoring and error tracking (MED-007: Rate limited)."""
     client_ip = get_client_ip(request)
@@ -173,7 +176,9 @@ async def submit_analytics(
 
 
 @router.get("/analytics/summary")
-async def get_analytics_summary(analytics_storage):
+async def get_analytics_summary(
+    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
+):
     """Get analytics summary statistics."""
     try:
         summary = analytics_storage.get_analytics_summary()
@@ -190,7 +195,7 @@ async def get_analytics_summary(analytics_storage):
 @router.get("/analytics/recent")
 async def get_recent_analytics(
     limit: int = Query(100, ge=1, le=1000),
-    analytics_storage=None
+    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
 ):
     """Get recent analytics records."""
     try:
@@ -209,7 +214,7 @@ async def get_recent_analytics(
 @router.get("/analytics/session/{session_id}")
 async def get_analytics_by_session(
     session_id: str,
-    analytics_storage=None
+    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
 ):
     """Get analytics records for a specific session."""
     try:

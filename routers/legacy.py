@@ -1,6 +1,7 @@
 """Legacy endpoints (410 Gone)."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from utils.firebase import verify_firebase_token
 
 router = APIRouter()
 
@@ -84,6 +85,4 @@ async def removed_summary_endpoint():
 @router.get("/protected-endpoint")
 def protected_route(user=Depends(verify_firebase_token)):
     """Protected endpoint that requires Firebase authentication."""
-    from utils.firebase import verify_firebase_token
-    from fastapi import Depends
     return {"message": "You are authenticated!", "user": user}

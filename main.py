@@ -9,10 +9,8 @@ from collections import defaultdict
 import time
 
 # Third-party imports
-import aiohttp
 import firebase_admin
 import redis
-import requests
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Depends, Path, Query, Response
@@ -27,9 +25,19 @@ from typing import List, Optional, Dict, Any
 # Load environment variables before importing routers
 load_dotenv()
 
-# Import the new router
+# Import routers
 from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
 from routers.locations_preapproved import router as locations_preapproved_router, initialize_locations_data
+from routers.weather import router as weather_router
+from routers.v1_records import router as v1_records_router
+from routers.cache import router as cache_router
+from routers.jobs import router as jobs_router
+from routers.legacy import router as legacy_router
+from routers.health import router as health_router
+from routers.stats import router as stats_router
+from routers.analytics import router as analytics_router
+from routers.root import router as root_router
+from routers.dependencies import initialize_dependencies
 
 # Import enhanced caching utilities
 from cache_utils import (
@@ -1059,6 +1067,7 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
     global service_token_rate_limiter
+    
     # Startup
     # Initialize service token rate limiter (Redis-based, always enabled for security)
     try:
@@ -1069,6 +1078,30 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Failed to initialize - {e}")
         # Create None limiter if Redis fails - will fail open in middleware
         service_token_rate_limiter = None
+    
+    # Initialize router dependencies (must happen after service_token_rate_limiter is created)
+    try:
+        from utils.location_validation import InvalidLocationCache
+        from analytics_storage import AnalyticsStorage
+        
+        # Create instances needed for dependencies
+        invalid_location_cache = InvalidLocationCache(redis_client)
+        analytics_storage = AnalyticsStorage(redis_client)
+        
+        # Initialize dependencies
+        initialize_dependencies(
+            redis_client=redis_client,
+            invalid_location_cache=invalid_location_cache,
+            service_token_rate_limiter=service_token_rate_limiter,
+            location_monitor=location_monitor,
+            request_monitor=request_monitor,
+            analytics_storage=analytics_storage
+        )
+        
+        if DEBUG:
+            logger.info("✅ ROUTER DEPENDENCIES: Initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ ROUTER DEPENDENCIES: Failed to initialize - {e}")
     
     # Initialize cache system first
     try:
@@ -1284,9 +1317,18 @@ async def general_exception_handler(request: Request, exc: Exception):
         content=error_response.model_dump()
     )
 
-# Include the routers
+# Include all routers
+app.include_router(root_router)
+app.include_router(health_router)
+app.include_router(weather_router)
+app.include_router(v1_records_router)
 app.include_router(records_agg_router)
 app.include_router(locations_preapproved_router)
+app.include_router(cache_router)
+app.include_router(jobs_router)
+app.include_router(legacy_router)
+app.include_router(stats_router)
+app.include_router(analytics_router)
 
 # Initialize Redis with security validation
 def create_redis_client(url: str):
@@ -1784,281 +1826,26 @@ app.add_middleware(
     max_age=600,  # Cache preflight requests for 10 minutes
 )
 
-@app.api_route("/test-cors", methods=["GET", "OPTIONS"])
-async def test_cors():
-    """Test endpoint for CORS"""
-    return {"message": "CORS is working"}
+# Note: Endpoints have been moved to routers:
+# - /, /test-cors, /test-cors-rolling -> routers/root.py
+# - /health, /health/detailed -> routers/health.py
+# - /weather/*, /forecast/* -> routers/weather.py
+# - /v1/records/* -> routers/v1_records.py
+# - /cache-* -> routers/cache.py
+# - /v1/jobs/*, /debug/jobs -> routers/jobs.py
+# - /data/*, /average/*, /trend/*, /summary/*, /protected-endpoint -> routers/legacy.py
+# - /rate-limit-*, /usage-stats/* -> routers/stats.py
+# - /analytics/* -> routers/analytics.py
 
-@app.api_route("/test-cors-rolling", methods=["GET", "OPTIONS"])
-async def test_cors_rolling():
-    """Test endpoint for CORS with rolling-bundle path"""
-    return {"message": "CORS is working for rolling-bundle", "path": "/test-cors-rolling"}
-
-@app.api_route("/", methods=["GET", "OPTIONS"])
-async def root():
-    """Root endpoint that returns API information"""
-    return {
-        "name": "Temperature History API",
-        "version": __version__,
-        "description": "Temperature history API with v1 unified endpoints and legacy support",
-        "v1_endpoints": {
-            "records": [
-                "/v1/records/{period}/{location}/{identifier}",
-                "/v1/records/{period}/{location}/{identifier}/average",
-                "/v1/records/{period}/{location}/{identifier}/trend",
-                "/v1/records/{period}/{location}/{identifier}/summary",
-                "/v1/records/{period}/{location}/{identifier}/updated"
-            ],
-            "rolling_bundle": [
-                "/v1/records/rolling-bundle/{location}/{anchor}"
-            ],
-            "periods": ["daily", "weekly", "monthly", "yearly"],
-            "examples": [
-                "/v1/records/daily/london/01-15",
-                "/v1/records/weekly/london/01-15",
-                "/v1/records/monthly/london/01-15",
-                "/v1/records/yearly/london/01-15",
-                "/v1/records/daily/london/01-15/updated",
-                "/v1/records/rolling-bundle/london/2024-01-15"
-            ]
-        },
-        "removed_endpoints": {
-            "status": "removed",
-            "endpoints": [
-                "/data/{location}/{month_day}",
-                "/average/{location}/{month_day}",
-                "/trend/{location}/{month_day}",
-                "/summary/{location}/{month_day}"
-            ],
-            "note": "These endpoints have been removed. Please use v1 endpoints instead.",
-            "migration": "Use /v1/records/daily/{location}/{month_day} and subresources"
-        },
-        "other_endpoints": [
-            "/weather/{location}/{date}",
-            "/forecast/{location}",
-            "/rate-limit-status",
-            "/rate-limit-stats",
-            "/usage-stats",
-            "/usage-stats/{location}",
-            "/cache-warm",
-            "/cache-warm/status",
-            "/cache-warm/locations",
-            "/cache-warm/startup",
-            "/cache-warm/schedule",
-            "/cache-stats",
-            "/cache-stats/health",
-            "/cache-stats/endpoints",
-            "/cache-stats/locations",
-            "/cache-stats/hourly",
-            "/cache-stats/reset",
-            "/cache/info",
-            "/cache/invalidate/key/{cache_key}",
-            "/cache/invalidate/pattern",
-            "/cache/invalidate/endpoint/{endpoint}",
-            "/cache/invalidate/location/{location}",
-            "/cache/invalidate/date/{date}",
-            "/cache/invalidate/forecast",
-            "/cache/invalidate/today",
-            "/cache/invalidate/expired",
-            "/cache/clear"
-        ],
-        "analytics_endpoints": [
-            "/analytics",
-            "/analytics/summary", 
-            "/analytics/recent",
-            "/analytics/session/{session_id}"
-        ]
-    }
-
-# Shared async function for fetching and caching weather data for a single date
-
-async def get_weather_for_date(location: str, date_str: str) -> dict:
-    """Fetch and cache weather data for a specific date.
-    
-    Implements fallback logic for remote data:
-    1. First tries without remote data parameters
-    2. If no temperature data and year >= 2005, retries with remote data parameters
-    3. Never uses remote data for today's data
-    """
-    logger.debug(f"get_weather_for_date for {sanitize_for_logging(location)} on {date_str}")
-    cache_key = get_weather_cache_key(location, date_str)
-    if CACHE_ENABLED:
-        cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
-        if cached_data:
-            if DEBUG:
-                logger.debug(f"✅ SERVING CACHED WEATHER: {cache_key} | Location: {location} | Date: {date_str}")
-            try:
-                return json.loads(cached_data)
-            except Exception as e:
-                logger.error(f"Error decoding cached data for {cache_key}: {e}")
-
-    logger.debug(f"Cache miss: {cache_key} — fetching from API")
-    
-    # Parse the date to determine the year
-    try:
-        year, month, day = map(int, date_str.split("-")[:3])
-        is_today_date = is_today(year, month, day)
-    except Exception:
-        year = 2000  # Default fallback
-        is_today_date = False
-    
-    # First attempt: without remote data parameters
-    url = build_visual_crossing_url(location, date_str, remote=False)
-    logger.debug(f"First attempt (no remote data): {sanitize_url(url)}")
-    
-    try:
-        timeout = aiohttp.ClientTimeout(total=60)  # Increased from 30s to 60s for better reliability
-        logger.info(f"[DEBUG] Creating aiohttp session with 60-second timeout")
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            logger.info(f"[DEBUG] Session created successfully, making GET request to: {sanitize_url(url)}")
-            async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
-                logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
-                if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
-                    logger.info(f"[DEBUG] Parsing JSON response...")
-                    data = await resp.json()
-                    logger.info(f"[DEBUG] JSON parsed successfully, checking for 'days' data")
-                    days = data.get('days')
-                    if days is not None and len(days) > 0:
-                        # Check if we got valid temperature data
-                        day_data = days[0]
-                        temp = day_data.get('temp')
-                        
-                        if temp is not None:
-                            # Success! Cache and return the data
-                            if FILTER_WEATHER_DATA:
-                                # Filter to only essential temperature data
-                                filtered_days = []
-                                for day_data in days:
-                                    filtered_day = {
-                                        'datetime': day_data.get('datetime'),
-                                        'temp': day_data.get('temp'),
-                                        'tempmin': day_data.get('tempmin'),
-                                        'tempmax': day_data.get('tempmax')
-                                    }
-                                    filtered_days.append(filtered_day)
-                                to_cache = {"days": filtered_days}
-                            else:
-                                # Return full data if filtering is disabled
-                                to_cache = {"days": days}
-
-                            if DEBUG:
-                                logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
-
-                            if CACHE_ENABLED:
-                                cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
-                                set_cache_value(cache_key, cache_duration, json.dumps(to_cache), redis_client)
-                            return to_cache
-                        else:
-                            logger.debug(f"No temperature data in first attempt for {date_str}")
-                    else:
-                        logger.debug(f"No 'days' data in first attempt for {date_str}")
-                else:
-                    logger.debug(f"First attempt failed with status {resp.status}")
-                
-                # If we reach here, the first attempt didn't provide valid temperature data
-                # Check if we should try with remote data parameters
-                if not is_today_date and year >= 2005:
-                    logger.info(f"[DEBUG] First attempt failed, trying remote fallback for {date_str} (year {year})")
-                    url_with_remote = build_visual_crossing_url(location, date_str, remote=True)
-                    logger.info(f"[DEBUG] Remote fallback URL: {sanitize_url(url_with_remote)}")
-                    
-                    logger.info(f"[DEBUG] Making remote fallback request...")
-                    async with session.get(url_with_remote, headers={"Accept-Encoding": "gzip"}) as remote_resp:
-                        logger.info(f"[DEBUG] Remote response received: status={remote_resp.status}, content-type={remote_resp.headers.get('Content-Type')}")
-                        if remote_resp.status == 200 and 'application/json' in remote_resp.headers.get('Content-Type', ''):
-                            logger.info(f"[DEBUG] Parsing remote JSON response...")
-                            remote_data = await remote_resp.json()
-                            logger.info(f"[DEBUG] Remote JSON parsed successfully, checking for 'days' data")
-                            remote_days = remote_data.get('days')
-                            if remote_days is not None and len(remote_days) > 0:
-                                remote_day_data = remote_days[0]
-                                remote_temp = remote_day_data.get('temp')
-                                
-                                if remote_temp is not None:
-                                    # Success with remote data! Cache and return
-                                    logger.debug(f"Remote data fallback successful for {date_str}")
-                                    to_cache = {"days": remote_days}
-                                    if DEBUG:
-                                        logger.debug(f"🌤️ REMOTE FALLBACK RESPONSE: {location} | {date_str}")
-                                    if CACHE_ENABLED:
-                                        set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(to_cache), redis_client)
-                                    return to_cache
-                                else:
-                                    logger.debug(f"No temperature data in remote fallback for {date_str}")
-                            else:
-                                logger.debug(f"No 'days' data in remote fallback for {date_str}")
-                        else:
-                            logger.debug(f"Remote fallback failed with status {remote_resp.status}")
-                
-                # If we reach here, neither attempt provided valid temperature data
-                logger.info(f"[DEBUG] Both attempts failed, returning error response")
-                return {"error": "No temperature data available", "status": resp.status}
-                
-    except Exception as e:
-        logger.error(f"[DEBUG] Exception occurred in get_weather_for_date for {date_str}: {str(e)}")
-        logger.error(f"[DEBUG] Exception type: {type(e).__name__}")
-        import traceback
-        logger.error(f"[DEBUG] Full traceback: {traceback.format_exc()}")
-        return {"error": str(e)}
-
-@app.get("/weather/{location:path}/{date}")
-def get_weather(location: str, date: str, response: Response = None):
-    """Get weather data for a specific location and date.
-    
-    Note: Location is validated by validate_location_for_ssrf() in build_visual_crossing_url() 
-    which enforces max_length=200 and prevents SSRF attacks.
-    """
-    logger.info(f"[DEBUG] Weather endpoint called with location={sanitize_for_logging(location)}, date={date}")
-    
-    # Parse the date for cache headers
-    try:
-        req_date = dt_date.fromisoformat(date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
-    
-    cache_key = generate_cache_key("weather", location, date)
-    logger.info(f"[DEBUG] Cache key: {cache_key}")
-    
-    # Check cache first if caching is enabled
-    if CACHE_ENABLED:
-        if DEBUG:
-            logger.info(f"🔍 CACHE CHECK: {cache_key}")
-        cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
-        if cached_data:
-            if DEBUG:
-                logger.info(f"✅ SERVING CACHED DATA: {cache_key} | Location: {location} | Date: {date}")
-            result = json.loads(cached_data)
-            # Set smart cache headers for cached data too
-            set_weather_cache_headers(response, req_date=req_date, key_parts=f"{location}|{date}|metric|v1")
-            return result
-        if DEBUG:
-            logger.info(f"❌ CACHE MISS: {cache_key} — fetching from API")
-    else:
-        if DEBUG:
-            logger.info(f"⚠️  CACHING DISABLED: fetching from API")
-    
-    logger.info(f"[DEBUG] About to call get_weather_for_date...")
-    # Use the shared async function for consistency
-    # Since this is a sync endpoint, run the async function in the event loop
-    result = asyncio.run(get_weather_for_date(location, date))
-    
-    # Log the final response being returned to the client
-    if DEBUG:
-        logger.debug(f"🎯 FINAL RESPONSE TO CLIENT: {location} | {date}")
-        logger.debug(f"📄 FINAL JSON RESPONSE: {json.dumps(result, indent=2)}")
-    
-    # Set smart cache headers based on data age
-    set_weather_cache_headers(response, req_date=req_date, key_parts=f"{location}|{date}|metric|v1")
-    
-    # Only cache successful results if caching is enabled and not already cached
-    if CACHE_ENABLED and "error" not in result:
-        try:
-            year, month, day = map(int, date.split("-")[:3])
-            cache_duration = SHORT_CACHE_DURATION if is_today_or_future(year, month, day) else LONG_CACHE_DURATION
-        except Exception:
-            cache_duration = LONG_CACHE_DURATION
-        set_cache_value(cache_key, cache_duration, json.dumps(result), redis_client)
-    return result
+# Note: All endpoints have been moved to router modules:
+# - /weather/*, /forecast/* -> routers/weather.py
+# - /v1/records/* -> routers/v1_records.py  
+# - /health/* -> routers/health.py
+# - /cache/* -> routers/cache.py
+# - /v1/jobs/* -> routers/jobs.py
+# - /data/*, /average/*, /trend/*, /summary/*, /protected-endpoint -> routers/legacy.py
+# - /rate-limit-*, /usage-stats/* -> routers/stats.py
+# - /analytics/* -> routers/analytics.py
 
 def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     """

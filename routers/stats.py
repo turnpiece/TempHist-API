@@ -1,12 +1,16 @@
 """Statistics and rate limiting status endpoints."""
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
+from typing import Optional
 from config import (
     RATE_LIMIT_ENABLED, API_ACCESS_TOKEN, MAX_LOCATIONS_PER_HOUR,
     MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS, USAGE_TRACKING_ENABLED
 )
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 from cache_utils import get_usage_tracker
+from routers.dependencies import (
+    get_service_token_rate_limiter, get_location_monitor, get_request_monitor
+)
 
 router = APIRouter()
 
@@ -30,9 +34,9 @@ def verify_firebase_token(request: Request):
 @router.get("/rate-limit-status")
 async def get_rate_limit_status(
     request: Request,
-    location_monitor=None,
-    request_monitor=None,
-    service_token_rate_limiter=None
+    location_monitor=Depends(get_location_monitor),
+    request_monitor=Depends(get_request_monitor),
+    service_token_rate_limiter=Depends(get_service_token_rate_limiter)
 ):
     """Get rate limiting status for the current client IP, including service token rate limits if applicable."""
     if not RATE_LIMIT_ENABLED:
@@ -98,8 +102,8 @@ async def get_rate_limit_status(
 async def get_rate_limit_stats(
     request: Request,
     user=Depends(verify_firebase_token),
-    location_monitor=None,
-    request_monitor=None
+    location_monitor=Depends(get_location_monitor),
+    request_monitor=Depends(get_request_monitor)
 ):
     """Get overall rate limiting statistics (admin endpoint - requires authentication)."""
     if not RATE_LIMIT_ENABLED:

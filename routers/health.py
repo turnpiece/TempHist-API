@@ -1,5 +1,5 @@
 """Health check and status endpoints."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from datetime import datetime
 import time
@@ -9,6 +9,7 @@ from config import (
     DEBUG, API_KEY, OPENWEATHER_API_KEY, REDIS_URL
 )
 from cache_utils import get_cache_stats
+from routers.dependencies import get_redis_client
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ async def health_check():
 
 
 @router.get("/health/detailed")
-async def detailed_health_check(redis_client: redis.Redis):
+async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_client)):
     """Comprehensive health check endpoint for debugging and monitoring (LOW-007: Enhanced dependencies check)."""
     health_status = {
         "status": "healthy",
