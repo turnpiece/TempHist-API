@@ -715,9 +715,11 @@ def validate_location_for_ssrf(location: str) -> str:
     if any(ord(c) < 32 and c not in ['\t', '\n', '\r'] for c in location):
         raise ValueError("Location contains control characters")
     
-    # Whitelist allowed characters (letters, numbers, spaces, commas, hyphens, periods, apostrophes)
-    if not re.match(r'^[a-zA-Z0-9\s,.\-\']+$', location):
-        raise ValueError("Location contains invalid characters. Only letters, numbers, spaces, commas, hyphens, periods, and apostrophes are allowed")
+    # Allow printable characters (letters, numbers, spaces, common punctuation)
+    # This includes Unicode letters (accents, non-Latin scripts) which are common in location names
+    # Block only control characters and specific dangerous patterns
+    if not all(c.isprintable() or c in ['\t', '\n', '\r'] for c in location):
+        raise ValueError("Location contains non-printable or control characters")
     
     # Prevent path traversal attempts
     dangerous_patterns = ['..', '/', '\\', '//']
