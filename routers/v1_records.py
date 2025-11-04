@@ -4,8 +4,8 @@ import logging
 import redis
 import asyncio
 import httpx
-from datetime import datetime, timedelta, timezone
-from typing import Literal, Dict, Tuple
+from datetime import datetime, timedelta, timezone, date as dt_date
+from typing import Literal, Dict, Tuple, Optional
 from fastapi import APIRouter, HTTPException, Path, Response, Depends
 from fastapi.responses import JSONResponse
 
@@ -14,13 +14,21 @@ from models import (
     TemperatureValue, DateRange, AverageData, TrendData
 )
 from config import (
-    CACHE_ENABLED, DEBUG, LONG_CACHE_DURATION, API_KEY,
+    CACHE_ENABLED, DEBUG, LONG_CACHE_DURATION, SHORT_CACHE_DURATION, API_KEY,
     MAX_CONCURRENT_REQUESTS
 )
 from cache_utils import (
     get_cache_value, set_cache_value, generate_cache_key, get_cache_stats,
     normalize_location_for_cache, get_cache_updated_timestamp
 )
+
+def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None) -> bool:
+    """Check if a date is today in the location's timezone, or UTC if location not found.
+    
+    This is a wrapper that uses cache_utils logic but can be imported here.
+    """
+    from cache_utils import _is_today_in_location_timezone as check_today
+    return check_today(date, location)
 from utils.validation import validate_location_for_ssrf
 from utils.location_validation import (
     is_location_likely_invalid, validate_location_response, InvalidLocationCache
@@ -545,7 +553,15 @@ async def get_record(
         
         # Cache the result
         if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION  # Use long cache for historical data
+            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
+            # Check if date is "today" in the location's timezone (or UTC if location not found)
+            if period == "daily":
+                if _is_today_in_location_timezone(end_date, location):
+                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
+                else:
+                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
+            else:
+                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
             set_cache_value(cache_key, cache_duration, json.dumps(data), redis_client)
         
         # Create response with smart cache headers
@@ -630,7 +646,15 @@ async def get_record_average(
         
         # Cache the result
         if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION
+            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
+            # Check if date is "today" in the location's timezone (or UTC if location not found)
+            if period == "daily":
+                if _is_today_in_location_timezone(end_date, location):
+                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
+                else:
+                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
+            else:
+                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
             set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
         
         # Create response with smart cache headers
@@ -715,7 +739,15 @@ async def get_record_trend(
         
         # Cache the result
         if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION
+            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
+            # Check if date is "today" in the location's timezone (or UTC if location not found)
+            if period == "daily":
+                if _is_today_in_location_timezone(end_date, location):
+                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
+                else:
+                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
+            else:
+                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
             set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
         
         # Create response with smart cache headers
@@ -800,7 +832,15 @@ async def get_record_summary(
         
         # Cache the result
         if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION
+            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
+            # Check if date is "today" in the location's timezone (or UTC if location not found)
+            if period == "daily":
+                if _is_today_in_location_timezone(end_date, location):
+                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
+                else:
+                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
+            else:
+                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
             set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
         
         # Create response with smart cache headers

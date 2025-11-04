@@ -22,7 +22,19 @@ import redis
 import aiohttp
 from fastapi import Request, Response
 
+# Try to import zoneinfo (Python 3.9+) or backports.zoneinfo (Python 3.8)
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    try:
+        from backports.zoneinfo import ZoneInfo
+    except ImportError:
+        ZoneInfo = None  # Will fall back to UTC if not available
+
 logger = logging.getLogger(__name__)
+
+# Cache for preapproved locations timezone data (loaded on first use)
+_preapproved_locations_cache: Optional[List[Dict[str, Any]]] = None
 
 # Cache configuration with validation
 def validate_ttl(ttl: int, name: str, default: int) -> int:
@@ -53,6 +65,8 @@ COORD_PRECISION = 4  # 4 decimal places (~11m precision)
 # Cache header configuration
 CACHE_CONTROL_PUBLIC = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
 CACHE_CONTROL_PRIVATE = "private, max-age=300, stale-while-revalidate=3600"
+# Shorter cache for today's daily data (uses forecast which may change)
+CACHE_CONTROL_DAILY_TODAY = "public, max-age=1800, s-maxage=3600, stale-while-revalidate=7200"
 
 # Cache Warming Configuration
 CACHE_WARMING_ENABLED = os.getenv("CACHE_WARMING_ENABLED", "true").lower() == "true"
@@ -1682,6 +1696,84 @@ def get_weather_cache_key(location: str, date_str: str) -> str:
     normalized_location = normalize_location_for_cache(location)
     return f"{normalized_location}_{date_str}"
 
+def _get_location_timezone(location: str) -> Optional[str]:
+    """Get timezone for a location from preapproved locations data.
+    
+    Args:
+        location: Location name (can be in various formats)
+        
+    Returns:
+        IANA timezone string (e.g., "Europe/London") or None if not found
+    """
+    global _preapproved_locations_cache
+    
+    try:
+        # Load locations data once and cache it
+        if _preapproved_locations_cache is None:
+            # Find project root by looking for pyproject.toml
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = current_dir
+            while project_root != os.path.dirname(project_root):
+                if os.path.exists(os.path.join(project_root, "pyproject.toml")):
+                    break
+                project_root = os.path.dirname(project_root)
+            
+            data_file = os.path.join(project_root, "data", "preapproved_locations.json")
+            
+            with open(data_file, 'r', encoding='utf-8') as f:
+                _preapproved_locations_cache = json.load(f)
+        
+        # Normalize location for comparison
+        location_lower = location.lower().strip()
+        
+        # Try to match by various formats
+        for item in _preapproved_locations_cache:
+            # Match by full name format: "Name, Admin1, Country Name"
+            if 'name' in item and 'admin1' in item and 'country_name' in item:
+                full_name = f"{item['name']}, {item['admin1']}, {item['country_name']}".lower()
+                if full_name == location_lower:
+                    return item.get('timezone')
+            
+            # Match by name only
+            if item.get('name', '').lower() == location_lower:
+                return item.get('timezone')
+            
+            # Match by slug
+            if item.get('slug', '').lower() == location_lower:
+                return item.get('timezone')
+        
+        return None
+    except Exception as e:
+        if DEBUG:
+            logger.debug(f"Could not get timezone for location '{location}': {e}")
+        return None
+
+def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None) -> bool:
+    """Check if a date is today in the location's timezone, or UTC if location not found.
+    
+    Args:
+        date: Date to check
+        location: Optional location name to look up timezone
+        
+    Returns:
+        True if date is today in location's timezone (or UTC if location not found)
+    """
+    if location and ZoneInfo:
+        timezone_str = _get_location_timezone(location)
+        if timezone_str:
+            try:
+                tz = ZoneInfo(timezone_str)
+                today_in_tz = datetime.now(tz).date()
+                return date == today_in_tz
+            except Exception as e:
+                if DEBUG:
+                    logger.debug(f"Error using timezone {timezone_str} for location '{location}': {e}")
+                # Fall through to UTC fallback
+    
+    # Fallback to UTC if location not found or zoneinfo not available
+    today = datetime.now(timezone.utc).date()
+    return date == today
+
 def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
     """Generate standardized cache keys.
     
@@ -1710,11 +1802,36 @@ async def cached_endpoint_response(
     compute_func,
     ttl: int = CACHE_TTL_DEFAULT,
     cache_control: str = CACHE_CONTROL_PUBLIC,
+    period: Optional[str] = None,
+    date: Optional[dt_date] = None,
+    location: Optional[str] = None,
     *args,
     **kwargs
 ):
-    """Helper function to add caching to any endpoint."""
+    """Helper function to add caching to any endpoint.
+    
+    Args:
+        request: FastAPI request object
+        response: FastAPI response object
+        cache_key: Cache key for the data
+        compute_func: Function to compute the data if not cached
+        ttl: Cache TTL in seconds (default: CACHE_TTL_DEFAULT)
+        cache_control: Cache-Control header value (default: CACHE_CONTROL_PUBLIC)
+        period: Optional period type (e.g., "daily", "weekly", "monthly", "yearly")
+        date: Optional date object to check if it's today
+        location: Optional location name to determine timezone for "today" check
+        *args, **kwargs: Additional arguments passed to compute_func
+    """
     cache = get_cache()  # This returns EnhancedCache instance
+    
+    # If this is a daily endpoint with today's date, use shorter cache TTL
+    # since today's data uses forecast which may change
+    # Check if date is "today" in the location's timezone (or UTC if location not found)
+    if period == "daily" and date is not None:
+        if _is_today_in_location_timezone(date, location):
+            # Use shorter TTL for today's daily data
+            ttl = CACHE_TTL_SHORT  # 1 hour instead of default
+            cache_control = CACHE_CONTROL_DAILY_TODAY  # Shorter max-age
     
     try:
         # Try to get from cache or compute
