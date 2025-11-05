@@ -4,7 +4,9 @@ import logging
 import redis
 from datetime import datetime, timezone
 from typing import Literal
-from fastapi import APIRouter, HTTPException, Path, Query, Response, Depends
+from fastapi import APIRouter, HTTPException, Path, Query, Response, Depends, Request
+from fastapi.responses import JSONResponse
+from urllib.parse import quote
 from cache_utils import get_job_manager, JobStatus
 from routers.dependencies import get_redis_client
 
@@ -138,45 +140,39 @@ async def get_job_status(job_id: str):
 
 @router.post("/v1/records/rolling-bundle/{location}/{anchor}/async")
 async def create_rolling_bundle_job(
+    request: Request,
     location: str = Path(..., description="Location name"),
     anchor: str = Path(..., description="Anchor date"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius"),
-    month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
-    days_back: int = Query(7, ge=0, le=10),
-    include: str = Query(None),
-    exclude: str = Query(None),
-    response: Response = None
 ):
-    """Create an async job to compute rolling bundle data."""
+    """This endpoint has been removed. Use individual period endpoints instead."""
     try:
-        job_manager = get_job_manager()
-        
-        # Create job
-        job_id = job_manager.create_job("rolling_bundle", {
-            "location": location,
-            "anchor": anchor,
-            "unit_group": unit_group,
-            "month_mode": month_mode,
-            "days_back": days_back,
-            "include": include,
-            "exclude": exclude
-        })
-        
-        # Return 202 Accepted with job info
-        response.status_code = 202
-        response.headers["Retry-After"] = "5"
-        
-        return {
-            "job_id": job_id,
-            "status": JobStatus.PENDING,
-            "message": "Rolling bundle job created successfully",
-            "retry_after": 5,
-            "status_url": f"/v1/jobs/{job_id}"
+        # Parse anchor date to get MM-DD format
+        from datetime import datetime
+        anchor_date = datetime.strptime(anchor, "%Y-%m-%d").date()
+        mmdd = anchor_date.strftime("%m-%d")
+    except Exception:
+        mmdd = "01-15"  # Fallback
+    
+    base_url = str(request.base_url).rstrip('/')
+    encoded_location = quote(location, safe='')
+    
+    links = {
+        "daily": f"{base_url}/v1/records/daily/{encoded_location}/{mmdd}",
+        "weekly": f"{base_url}/v1/records/weekly/{encoded_location}/{mmdd}",
+        "monthly": f"{base_url}/v1/records/monthly/{encoded_location}/{mmdd}",
+        "yearly": f"{base_url}/v1/records/yearly/{encoded_location}/{mmdd}"
+    }
+    
+    return JSONResponse(
+        status_code=410,
+        content={
+            "error": "GONE",
+            "message": "The rolling-bundle async job endpoint has been removed",
+            "code": "GONE",
+            "details": "This endpoint is no longer available. Please use the individual period endpoints instead.",
+            "links": links
         }
-        
-    except Exception as e:
-        logger.error(f"Error creating rolling bundle job: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create job")
+    )
 
 
 @router.get("/v1/jobs/diagnostics/worker-status")

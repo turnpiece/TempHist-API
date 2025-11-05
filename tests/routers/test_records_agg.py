@@ -180,44 +180,6 @@ class TestV1RecordsEndpoints:
         response = client.get("/v1/records/daily/london/01-15/average")
         assert response.status_code == 401
 
-class TestRollingBundleEndpoints:
-    """Test the rolling bundle endpoints from records_agg router"""
-    
-    def test_rolling_bundle_cors_test(self, client):
-        """Test the rolling bundle CORS test endpoint"""
-        response = client.get("/v1/records/rolling-bundle/test-cors")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "message" in data
-        assert "CORS is working for rolling-bundle" in data["message"]
-    
-    def test_rolling_bundle_preload_example(self, client):
-        """Test the rolling bundle preload example endpoint"""
-        response = client.get(
-            "/v1/records/rolling-bundle/preload-example",
-            headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
-        )
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "data_structure" in data
-        assert "description" in data
-        assert "endpoint" in data
-    
-    def test_rolling_bundle_status(self, client):
-        """Test the rolling bundle status endpoint"""
-        response = client.get(
-            "/v1/records/rolling-bundle/london/2024-01-15/status",
-            headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
-        )
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "status" in data
-        assert "location" in data
-        assert "anchor" in data
-
 class TestRecordsAggIntegration:
     """Integration tests for records aggregation endpoints"""
     

@@ -53,7 +53,7 @@ def create_verify_token_middleware(
         # Note: Stats endpoints removed - they require authentication (HIGH-012)
         public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", 
                         "/rate-limit-status", "/analytics", "/health", "/health/detailed", 
-                        "/v1/records/rolling-bundle/test-cors", "/v1/jobs/diagnostics/worker-status"]
+                        "/v1/jobs/diagnostics/worker-status"]
         if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
             if DEBUG:
                 logger.debug(f"[DEBUG] Middleware: Public path, allowing through")

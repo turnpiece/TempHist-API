@@ -140,7 +140,6 @@ The API now includes a comprehensive caching system optimized for Cloudflare and
 ```bash
 # All existing endpoints now include enhanced caching
 GET /v1/records/{period}/{location}/{identifier}
-GET /v1/records/rolling-bundle/{location}/{anchor}
 ```
 
 #### Async Job Endpoints (New)
@@ -148,7 +147,6 @@ GET /v1/records/rolling-bundle/{location}/{anchor}
 ```bash
 # Create async job for heavy computations
 POST /v1/records/{period}/{location}/{identifier}/async
-POST /v1/records/rolling-bundle/{location}/{anchor}/async
 
 # Check job status and retrieve results
 GET /v1/jobs/{job_id}
@@ -171,7 +169,7 @@ The API now supports asynchronous processing for heavy computations:
 
 ```bash
 # Start async job for heavy computation
-curl -X POST "https://api.temphist.com/v1/records/rolling-bundle/london/2024-01-15/async" \
+curl -X POST "https://api.temphist.com/v1/records/daily/london/01-15/async" \
      -H "Authorization: Bearer YOUR_TOKEN"
 
 # Response: {"job_id": "job_abc123", "status": "pending", "message": "Job queued"}
@@ -462,14 +460,6 @@ class TempHistClient:
 
             time.sleep(3)  # Wait 3 seconds before polling again
 
-    def get_rolling_bundle(self, location: str, anchor: str, **params) -> Dict[str, Any]:
-        """Get rolling bundle data."""
-        response = self.session.get(
-            f"{self.base_url}/v1/records/rolling-bundle/{location}/{anchor}",
-            params=params
-        )
-        response.raise_for_status()
-        return response.json()
 ```
 
 ### Error Handling
@@ -507,7 +497,7 @@ class TempHistClient:
 GET /v1/records/daily/New%20York/01-15
 
 # For heavy computations - use async jobs
-POST /v1/records/rolling-bundle/New%20York/2024-01-15/async
+POST /v1/records/daily/New%20York/01-15/async
 
 # For repeated requests - implement ETag caching
 If-None-Match: "abc123def456"
@@ -540,10 +530,12 @@ def retry_with_backoff(func, max_retries=3, base_delay=1):
 **Current Version**: v1
 
 The API uses URL-based versioning:
+
 - **v1 endpoints** (`/v1/records/*`): Current stable API version
 - **Legacy endpoints** (`/weather/*`, `/forecast/*`): Deprecated, maintained for backward compatibility
 
 **Versioning Policy**:
+
 - New features and breaking changes will be introduced in new version numbers (v2, v3, etc.)
 - Previous versions will be maintained for at least 6 months after a new version is released
 - Deprecation warnings will be sent via response headers (`Deprecation`, `Sunset`, `Link`)
@@ -566,19 +558,10 @@ The new v1 API provides a unified structure for accessing temperature records ac
 
 #### Async Job Endpoints (New)
 
-| Endpoint                                                    | Description                  | Response       |
-| ----------------------------------------------------------- | ---------------------------- | -------------- |
-| `POST /v1/records/{period}/{location}/{identifier}/async`   | Create async job for records | `202 Accepted` |
-| `POST /v1/records/rolling-bundle/{location}/{anchor}/async` | Create async job for bundle  | `202 Accepted` |
-| `GET /v1/jobs/{job_id}`                                     | Check job status and results | Job status     |
-
-#### Rolling Bundle Endpoint
-
-| Endpoint                                             | Description                                 | Format       |
-| ---------------------------------------------------- | ------------------------------------------- | ------------ |
-| `GET /v1/records/rolling-bundle/{location}/{anchor}` | Cross-year series for multiple time periods | `YYYY-MM-DD` |
-
-Aggregates daily, weekly, monthly and yearly endpoint responses into one.
+| Endpoint                                                  | Description                  | Response       |
+| --------------------------------------------------------- | ---------------------------- | -------------- |
+| `POST /v1/records/{period}/{location}/{identifier}/async` | Create async job for records | `202 Accepted` |
+| `GET /v1/jobs/{job_id}`                                   | Check job status and results | Job status     |
 
 #### Period Types and Identifier Formats
 
@@ -621,70 +604,6 @@ The rolling bundle endpoint provides cross-year temperature series for multiple 
 
 - `location`: Location name (e.g., "london", "new_york")
 - `anchor`: Anchor date in YYYY-MM-DD format (e.g., "2024-01-15")
-- `unit_group`: Temperature unit - "celsius" (default) or "fahrenheit"
-- `month_mode`: Month calculation mode - "rolling1m" (default), "calendar", or "rolling30d"
-- `days_back`: Number of previous days to include (0-10, default: 0)
-- `include`: CSV of sections to include (valid: day, week, month, year). If present, exclude is ignored.
-- `exclude`: CSV of sections to exclude (valid: day, week, month, year). Ignored if include is present.
-
-**Example Rolling Bundle Requests:**
-
-```bash
-# Get rolling bundle for January 15th, 2024
-GET /v1/records/rolling-bundle/london/2024-01-15
-
-# With custom month mode (calendar month)
-GET /v1/records/rolling-bundle/london/2024-01-15?month_mode=calendar
-
-# With US units
-GET /v1/records/rolling-bundle/london/2024-01-15?unit_group=us
-
-# Include only weekly, monthly, and yearly data (exclude daily)
-GET /v1/records/rolling-bundle/london/2024-01-15?include=week,month,year
-
-# Exclude daily data (include everything else)
-GET /v1/records/rolling-bundle/london/2024-01-15?exclude=day
-
-# Include 3 previous days with only weekly and monthly data
-GET /v1/records/rolling-bundle/london/2024-01-15?days_back=3&include=week,month
-```
-
-**Include/Exclude Parameters:**
-
-The `include` and `exclude` parameters allow you to control which sections are returned in the response:
-
-- **Valid sections**: `day`, `week`, `month`, `year`
-- **Include parameter**: Returns only the specified sections. If present, `exclude` is ignored.
-- **Exclude parameter**: Returns all sections except the specified ones. Ignored if `include` is present.
-- **Previous days**: Controlled separately by `days_back` parameter and are not affected by include/exclude.
-- **Performance**: Only requested sections are computed, improving response times.
-
-**Examples:**
-
-- `?include=week,month,year` - Returns only weekly, monthly, and yearly data
-- `?exclude=day` - Returns everything except daily data
-- `?days_back=3&exclude=day` - Returns 3 previous days + weekly/monthly/yearly data
-
-**Month Mode Options:**
-
-- `rolling1m`: Calendar-aware 1-month window ending on anchor (default)
-- `calendar`: Full calendar month (1st to last day of anchor month)
-- `rolling30d`: Fixed 30-day rolling window ending on anchor
-
-**Benefits of Rolling Bundle:**
-
-- **Efficiency**: Single API call returns multiple time series
-- **Performance**: Uses cached daily data for fast computation
-- **Selective Loading**: Include/exclude parameters allow fetching only needed sections
-- **Consistency**: All series use the same anchor date for comparison
-- **Flexibility**: Multiple month calculation modes for different use cases
-
-**Use Cases:**
-
-- **Weather Dashboards**: Display multiple time periods simultaneously
-- **Climate Analysis**: Compare daily, weekly, monthly, and yearly trends
-- **Data Visualization**: Create comprehensive temperature charts
-- **Research**: Analyze temperature patterns across different time scales
 
 ### Removed Endpoints
 
@@ -760,76 +679,6 @@ The `include` and `exclude` parameters allow you to control which sections are r
     "missing_years": [],
     "completeness": 100.0
   }
-}
-```
-
-#### Rolling Bundle Response Format
-
-**GET `/v1/records/rolling-bundle/london/2024-01-15`** returns:
-
-```json
-{
-  "period": "rolling",
-  "location": "london",
-  "anchor": "2024-01-15",
-  "unit_group": "metric",
-  "day": {
-    "values": [
-      { "year": 1975, "temp": 7.8 },
-      { "year": 1976, "temp": 8.2 },
-      { "year": 2024, "temp": 9.1 }
-    ],
-    "count": 50
-  },
-  "day_minus_1": {
-    "values": [
-      { "year": 1975, "temp": 8.1 },
-      { "year": 1976, "temp": 7.9 },
-      { "year": 2024, "temp": 8.8 }
-    ],
-    "count": 50
-  },
-  "day_minus_2": {
-    "values": [
-      { "year": 1975, "temp": 7.7 },
-      { "year": 1976, "temp": 8.0 },
-      { "year": 2024, "temp": 8.5 }
-    ],
-    "count": 50
-  },
-  "day_minus_3": {
-    "values": [
-      { "year": 1975, "temp": 8.3 },
-      { "year": 1976, "temp": 7.8 },
-      { "year": 2024, "temp": 8.2 }
-    ],
-    "count": 50
-  },
-  "week": {
-    "values": [
-      { "year": 1975, "temp": 7.9 },
-      { "year": 1976, "temp": 8.1 },
-      { "year": 2024, "temp": 8.7 }
-    ],
-    "count": 50
-  },
-  "month": {
-    "values": [
-      { "year": 1975, "temp": 8.0 },
-      { "year": 1976, "temp": 7.8 },
-      { "year": 2024, "temp": 8.4 }
-    ],
-    "count": 50
-  },
-  "year": {
-    "values": [
-      { "year": 1975, "temp": 9.8 },
-      { "year": 1976, "temp": 10.2 },
-      { "year": 2024, "temp": 11.1 }
-    ],
-    "count": 50
-  },
-  "notes": "Month uses calendar-aware 1-month window ending on anchor (EOM-clipped)."
 }
 ```
 

@@ -26,17 +26,13 @@ async def root():
                 "/v1/records/{period}/{location}/{identifier}/summary",
                 "/v1/records/{period}/{location}/{identifier}/updated"
             ],
-            "rolling_bundle": [
-                "/v1/records/rolling-bundle/{location}/{anchor}"
-            ],
             "periods": ["daily", "weekly", "monthly", "yearly"],
             "examples": [
                 "/v1/records/daily/london/01-15",
                 "/v1/records/weekly/london/01-15",
                 "/v1/records/monthly/london/01-15",
                 "/v1/records/yearly/london/01-15",
-                "/v1/records/daily/london/01-15/updated",
-                "/v1/records/rolling-bundle/london/2024-01-15"
+                "/v1/records/daily/london/01-15/updated"
             ]
         },
         "removed_endpoints": {
@@ -96,8 +92,8 @@ async def test_cors():
 
 @router.api_route("/test-cors-rolling", methods=["GET", "OPTIONS"])
 async def test_cors_rolling():
-    """Test endpoint for CORS with rolling-bundle path"""
-    return {"message": "CORS is working for rolling-bundle", "path": "/test-cors-rolling"}
+    """Test endpoint for CORS"""
+    return {"message": "CORS is working", "path": "/test-cors-rolling"}
 
 
 @router.get("/test-redis")

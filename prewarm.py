@@ -46,8 +46,7 @@ DEFAULT_ENDPOINTS = [
     "v1/records/daily",
     "v1/records/weekly", 
     "v1/records/monthly",
-    "v1/records/yearly",
-    "v1/records/rolling-bundle"
+    "v1/records/yearly"
 ]
 
 class PrewarmStats:
@@ -183,8 +182,6 @@ class CachePrewarmer:
             return f"{self.base_url}/v1/records/monthly/{location}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/yearly":
             return f"{self.base_url}/v1/records/yearly/{location}/{date_pattern['identifier']}"
-        elif endpoint == "v1/records/rolling-bundle":
-            return f"{self.base_url}/v1/records/rolling-bundle/{location}/{date_pattern['anchor']}"
         else:
             raise ValueError(f"Unknown endpoint: {endpoint}")
     

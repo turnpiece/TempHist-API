@@ -171,9 +171,6 @@ class JobWorker:
                 if job_type == "record_computation":
                     logger.info(f"🔢 Starting record computation...")
                     result = await self.process_record_job(params, cache)
-                elif job_type == "rolling_bundle":
-                    logger.info(f"📦 Starting rolling bundle computation...")
-                    result = await self.process_rolling_bundle_job(params, cache)
                 elif job_type == "cache_warming":
                     logger.info(f"🔥 Starting cache warming...")
                     result = await self.process_cache_warming_job(params, cache)
@@ -250,41 +247,6 @@ class JobWorker:
         
         # Store in cache using the same utilities as the main endpoint
         etag = self._store_cache_data(cache_key, data)
-        
-        return {
-            "cache_key": cache_key,
-            "etag": etag,
-            "data": data,
-            "computed_at": datetime.now(timezone.utc).isoformat()
-        }
-    
-    async def process_rolling_bundle_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
-        """Process a rolling bundle job."""
-        from routers.records_agg import _rolling_bundle_impl
-        from fastapi import HTTPException
-        
-        location = params["location"]
-        anchor = params["anchor"]
-        unit_group = params.get("unit_group", "celsius")
-        month_mode = params.get("month_mode", "rolling1m")
-        days_back = params.get("days_back", 7)
-        include = params.get("include")
-        exclude = params.get("exclude")
-        
-        # Compute the data - catch HTTPException and convert to regular exception
-        try:
-            data = await _rolling_bundle_impl(
-                location, anchor, unit_group, month_mode, days_back, include, exclude
-            )
-        except HTTPException as http_err:
-            # Convert HTTPException to regular exception for job error handling
-            raise ValueError(f"{http_err.detail}") from http_err
-        
-        # Build cache key using the same format as the rolling bundle endpoint
-        cache_key = f"rolling_bundle:{location}:{anchor}:{unit_group}"
-        
-        # Store in cache using the same utilities as the rolling bundle endpoint
-        etag = self._store_cache_data(cache_key, data, "rolling bundle")
         
         return {
             "cache_key": cache_key,

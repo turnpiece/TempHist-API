@@ -37,6 +37,7 @@ from routers.stats import router as stats_router
 from routers.analytics import router as analytics_router
 from routers.root import router as root_router
 from routers.dependencies import initialize_dependencies
+from exceptions import register_exception_handlers
 
 # Import enhanced caching utilities
 from cache_utils import (
@@ -1160,168 +1161,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# MED-008/LOW-006: Standardized error response format
-class ErrorResponse(BaseModel):
-    """Standardized error response format for consistent API error handling."""
-    error: str = Field(..., description="Error type or code")
-    message: str = Field(..., description="Human-readable error message")
-    code: Optional[str] = Field(None, description="Error code for programmatic handling")
-    details: Optional[Union[List[Dict], Dict, str]] = Field(None, description="Additional error details")
-    path: Optional[str] = Field(None, description="Request path where error occurred")
-    method: Optional[str] = Field(None, description="HTTP method")
-    request_id: Optional[str] = Field(None, description="Request ID for tracing")
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(), description="Error timestamp")
-
-# Error code mappings
-ERROR_CODES = {
-    400: "BAD_REQUEST",
-    401: "UNAUTHORIZED",
-    403: "FORBIDDEN",
-    404: "NOT_FOUND",
-    409: "CONFLICT",
-    413: "PAYLOAD_TOO_LARGE",
-    422: "VALIDATION_ERROR",
-    429: "RATE_LIMIT_EXCEEDED",
-    500: "INTERNAL_SERVER_ERROR",
-    503: "SERVICE_UNAVAILABLE",
-    504: "GATEWAY_TIMEOUT"
-}
-
-# Global exception handlers for better error handling
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle Pydantic validation errors with standardized error format (MED-008)."""
-    client_ip = get_client_ip(request)
-    request_id = getattr(request.state, 'request_id', None)
-    
-    # Extract detailed error information
-    error_details = []
-    for error in exc.errors():
-        field = " -> ".join(str(loc) for loc in error['loc'])
-        error_details.append({
-            "field": field,
-            "message": error['msg'],
-            "type": error['type'],
-            "input": error.get('input', 'N/A')
-        })
-    
-    logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
-    
-    error_response = ErrorResponse(
-        error="VALIDATION_ERROR",
-        message="Request data validation failed",
-        code="VALIDATION_ERROR",
-        details=error_details,
-        path=request.url.path,
-        method=request.method,
-        request_id=request_id
-    )
-    
-    return JSONResponse(
-        status_code=422,
-        content=error_response.model_dump()
-    )
-
-@app.exception_handler(ValidationError)
-async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
-    """Handle Pydantic model validation errors with standardized format (MED-008)."""
-    client_ip = get_client_ip(request)
-    request_id = getattr(request.state, 'request_id', None)
-    
-    error_details = []
-    for error in exc.errors():
-        field = " -> ".join(str(loc) for loc in error['loc'])
-        error_details.append({
-            "field": field,
-            "message": error['msg'],
-            "type": error['type'],
-            "input": error.get('input', 'N/A')
-        })
-    
-    logger.error(f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
-    
-    error_response = ErrorResponse(
-        error="MODEL_VALIDATION_ERROR",
-        message="Data model validation failed",
-        code="MODEL_VALIDATION_ERROR",
-        details=error_details,
-        path=request.url.path,
-        method=request.method,
-        request_id=request_id
-    )
-    
-    return JSONResponse(
-        status_code=422,
-        content=error_response.model_dump()
-    )
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTPException with standardized error format (MED-008)."""
-    request_id = getattr(request.state, 'request_id', None)
-    
-    # Handle different detail formats
-    if isinstance(exc.detail, dict):
-        # Already in structured format, use it
-        detail_data = exc.detail
-        error_message = detail_data.get("message", detail_data.get("detail", "An error occurred"))
-        error_code = detail_data.get("code", ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR"))
-        error_details = detail_data.get("details")
-    elif isinstance(exc.detail, str):
-        # Simple string detail, convert to standardized format
-        error_message = exc.detail
-        error_code = ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR")
-        error_details = None
-    else:
-        error_message = str(exc.detail) if exc.detail else "An error occurred"
-        error_code = ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR")
-        error_details = None
-    
-    error_response = ErrorResponse(
-        error=error_code,
-        message=error_message,
-        code=error_code,
-        details=error_details,
-        path=request.url.path,
-        method=request.method,
-        request_id=request_id
-    )
-    
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=error_response.model_dump()
-    )
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle unhandled exceptions with standardized error format (MED-008)."""
-    request_id = getattr(request.state, 'request_id', None)
-    
-    # Log full error details server-side
-    logger.error(f"❌ UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)} | Path={request.url.path} | Request-ID={request_id}", exc_info=True)
-    
-    # Return generic error to client (don't expose internal details)
-    error_response = ErrorResponse(
-        error="INTERNAL_SERVER_ERROR",
-        message="An internal server error occurred" if not DEBUG else str(exc),
-        code="INTERNAL_SERVER_ERROR",
-        details={"type": type(exc).__name__} if DEBUG else None,
-        path=request.url.path,
-        method=request.method,
-        request_id=request_id
-    )
-    
-    return JSONResponse(
-        status_code=500,
-        content=error_response.model_dump()
-    )
+# Register exception handlers from exceptions module
+register_exception_handlers(app)
 
 # Include all routers
 app.include_router(root_router)
 app.include_router(health_router)
 app.include_router(weather_router)
+app.include_router(records_agg_router)  # Must come before v1_records_router
 app.include_router(v1_records_router)
-app.include_router(records_agg_router)
 app.include_router(locations_preapproved_router)
 app.include_router(cache_router)
 app.include_router(jobs_router)
@@ -1633,7 +1481,7 @@ async def verify_token_middleware(request: Request, call_next):
 
     # Public paths that don't require a token or rate limiting
     # Note: Stats endpoints removed - they require authentication (HIGH-012)
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors", "/v1/jobs/diagnostics/worker-status"]
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/analytics", "/health", "/health/detailed", "/v1/jobs/diagnostics/worker-status"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
         if DEBUG:
             logger.debug(f"[DEBUG] Middleware: Public path, allowing through")
