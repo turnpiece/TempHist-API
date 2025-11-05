@@ -19,16 +19,16 @@ from config import (
 )
 from cache_utils import (
     get_cache_value, set_cache_value, generate_cache_key, get_cache_stats,
-    normalize_location_for_cache, get_cache_updated_timestamp
+    normalize_location_for_cache, get_cache_updated_timestamp, _get_location_timezone
 )
 
-def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None) -> bool:
+def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None, redis_client: Optional[redis.Redis] = None) -> bool:
     """Check if a date is today in the location's timezone, or UTC if location not found.
     
     This is a wrapper that uses cache_utils logic but can be imported here.
     """
     from cache_utils import _is_today_in_location_timezone as check_today
-    return check_today(date, location)
+    return check_today(date, location, redis_client)
 from utils.validation import validate_location_for_ssrf
 from utils.location_validation import (
     is_location_likely_invalid, validate_location_response, InvalidLocationCache
@@ -452,6 +452,11 @@ async def get_temperature_data_v1(
         "end_date": end_date_obj.strftime("%Y-%m-%d")
     }
     
+    # Get timezone for the location
+    timezone_str = None
+    if redis_client:
+        timezone_str = _get_location_timezone(location, redis_client)
+    
     return {
         "period": period,
         "location": location,
@@ -462,7 +467,8 @@ async def get_temperature_data_v1(
         "average": avg_data.model_dump(),
         "trend": trend_data.model_dump(),
         "summary": summary_text,
-        "metadata": create_metadata(len(years), len(values), missing_years, additional_metadata)
+        "metadata": create_metadata(len(years), len(values), missing_years, additional_metadata),
+        "timezone": timezone_str
     }
 
 
@@ -532,6 +538,11 @@ async def get_record(
                 if updated_timestamp:
                     data["updated"] = updated_timestamp.isoformat()
                 
+                # Add timezone to cached data if not already present
+                if "timezone" not in data or data["timezone"] is None:
+                    timezone_str = _get_location_timezone(location, redis_client)
+                    data["timezone"] = timezone_str
+                
                 # Set smart cache headers for cached data too
                 json_response = JSONResponse(content=data)
                 set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
@@ -556,7 +567,7 @@ async def get_record(
             # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
             # Check if date is "today" in the location's timezone (or UTC if location not found)
             if period == "daily":
-                if _is_today_in_location_timezone(end_date, location):
+                if _is_today_in_location_timezone(end_date, location, redis_client):
                     cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
                 else:
                     cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
@@ -620,6 +631,10 @@ async def get_record_average(
                     logger.debug(f"✅ SERVING CACHED V1 AVERAGE: {cache_key}")
                 data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
                 data = json.loads(data_str)
+                # Add timezone to cached data if not already present
+                if "timezone" not in data or data["timezone"] is None:
+                    timezone_str = _get_location_timezone(location, redis_client)
+                    data["timezone"] = timezone_str
                 # Set smart cache headers for cached data too
                 json_response = JSONResponse(content=data)
                 set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|average|metric|v1")
@@ -641,7 +656,8 @@ async def get_record_average(
             location=record_data["location"],
             identifier=record_data["identifier"],
             data=record_data["average"],
-            metadata=record_data["metadata"]
+            metadata=record_data["metadata"],
+            timezone=record_data.get("timezone")
         )
         
         # Cache the result
@@ -649,7 +665,7 @@ async def get_record_average(
             # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
             # Check if date is "today" in the location's timezone (or UTC if location not found)
             if period == "daily":
-                if _is_today_in_location_timezone(end_date, location):
+                if _is_today_in_location_timezone(end_date, location, redis_client):
                     cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
                 else:
                     cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
@@ -713,6 +729,10 @@ async def get_record_trend(
                     logger.debug(f"✅ SERVING CACHED V1 TREND: {cache_key}")
                 data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
                 data = json.loads(data_str)
+                # Add timezone to cached data if not already present
+                if "timezone" not in data or data["timezone"] is None:
+                    timezone_str = _get_location_timezone(location, redis_client)
+                    data["timezone"] = timezone_str
                 # Set smart cache headers for cached data too
                 json_response = JSONResponse(content=data)
                 set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|trend|metric|v1")
@@ -734,7 +754,8 @@ async def get_record_trend(
             location=record_data["location"],
             identifier=record_data["identifier"],
             data=record_data["trend"],
-            metadata=record_data["metadata"]
+            metadata=record_data["metadata"],
+            timezone=record_data.get("timezone")
         )
         
         # Cache the result
@@ -742,7 +763,7 @@ async def get_record_trend(
             # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
             # Check if date is "today" in the location's timezone (or UTC if location not found)
             if period == "daily":
-                if _is_today_in_location_timezone(end_date, location):
+                if _is_today_in_location_timezone(end_date, location, redis_client):
                     cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
                 else:
                     cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
@@ -806,6 +827,10 @@ async def get_record_summary(
                     logger.debug(f"✅ SERVING CACHED V1 SUMMARY: {cache_key}")
                 data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
                 data = json.loads(data_str)
+                # Add timezone to cached data if not already present
+                if "timezone" not in data or data["timezone"] is None:
+                    timezone_str = _get_location_timezone(location, redis_client)
+                    data["timezone"] = timezone_str
                 # Set smart cache headers for cached data too
                 json_response = JSONResponse(content=data)
                 set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|summary|metric|v1")
@@ -827,7 +852,8 @@ async def get_record_summary(
             location=record_data["location"],
             identifier=record_data["identifier"],
             data=record_data["summary"],
-            metadata=record_data["metadata"]
+            metadata=record_data["metadata"],
+            timezone=record_data.get("timezone")
         )
         
         # Cache the result
@@ -835,7 +861,7 @@ async def get_record_summary(
             # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
             # Check if date is "today" in the location's timezone (or UTC if location not found)
             if period == "daily":
-                if _is_today_in_location_timezone(end_date, location):
+                if _is_today_in_location_timezone(end_date, location, redis_client):
                     cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
                 else:
                     cache_duration = LONG_CACHE_DURATION  # 1 week for historical data

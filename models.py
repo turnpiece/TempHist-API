@@ -56,6 +56,7 @@ class RecordResponse(BaseModel):
     summary: str = Field(..., description="Human-readable summary")
     metadata: Dict = Field(default_factory=dict, description="Additional metadata")
     updated: Optional[str] = Field(None, description="ISO timestamp when data was last updated (if cached)")
+    timezone: Optional[str] = Field(None, description="IANA timezone identifier for the location (e.g., 'America/New_York', 'Europe/London')")
 
 
 class SubResourceResponse(BaseModel):
@@ -65,6 +66,7 @@ class SubResourceResponse(BaseModel):
     identifier: str = Field(..., description="Date identifier")
     data: Union[AverageData, TrendData, str] = Field(..., description="Subresource data")
     metadata: Dict = Field(default_factory=dict, description="Additional metadata")
+    timezone: Optional[str] = Field(None, description="IANA timezone identifier for the location (e.g., 'America/New_York', 'Europe/London')")
 
 
 # Analytics Models

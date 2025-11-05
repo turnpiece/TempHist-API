@@ -1696,8 +1696,79 @@ def get_weather_cache_key(location: str, date_str: str) -> str:
     normalized_location = normalize_location_for_cache(location)
     return f"{normalized_location}_{date_str}"
 
-def _get_location_timezone(location: str) -> Optional[str]:
-    """Get timezone for a location from preapproved locations data.
+def _get_location_timezone_from_cache(location: str, redis_client: Optional[redis.Redis] = None) -> Optional[str]:
+    """Get timezone for a location from Redis cache (stored from Visual Crossing API responses).
+    
+    Args:
+        location: Location name
+        redis_client: Optional Redis client (will try to get global cache if not provided)
+        
+    Returns:
+        IANA timezone string (e.g., "Europe/London") or None if not found
+    """
+    try:
+        if redis_client is None:
+            # Try to get Redis client from global cache
+            try:
+                cache = get_cache()
+                redis_client = cache.redis
+            except Exception:
+                return None
+        
+        if not redis_client:
+            return None
+        
+        # Normalize location for cache key
+        normalized_location = normalize_location_for_cache(location)
+        timezone_key = f"location_timezone:{normalized_location}"
+        
+        cached_timezone = redis_client.get(timezone_key)
+        if cached_timezone:
+            timezone_str = cached_timezone.decode('utf-8') if isinstance(cached_timezone, bytes) else cached_timezone
+            return timezone_str
+        
+        return None
+    except Exception as e:
+        if DEBUG:
+            logger.debug(f"Could not get timezone from cache for location '{location}': {e}")
+        return None
+
+def store_location_timezone(location: str, timezone_str: str, redis_client: Optional[redis.Redis] = None, ttl: int = 604800) -> None:
+    """Store timezone for a location in Redis cache.
+    
+    Args:
+        location: Location name
+        timezone_str: IANA timezone string from Visual Crossing API
+        redis_client: Optional Redis client (will try to get global cache if not provided)
+        ttl: Time to live in seconds (default: 7 days)
+    """
+    try:
+        if redis_client is None:
+            # Try to get Redis client from global cache
+            try:
+                cache = get_cache()
+                redis_client = cache.redis
+            except Exception:
+                return
+        
+        if not redis_client:
+            return
+        
+        # Normalize location for cache key
+        normalized_location = normalize_location_for_cache(location)
+        timezone_key = f"location_timezone:{normalized_location}"
+        
+        # Store with long TTL (timezone doesn't change often)
+        redis_client.setex(timezone_key, ttl, timezone_str)
+        
+        if DEBUG:
+            logger.debug(f"Stored timezone for location '{location}': {timezone_str}")
+    except Exception as e:
+        if DEBUG:
+            logger.debug(f"Could not store timezone for location '{location}': {e}")
+
+def _get_location_timezone_from_preapproved(location: str) -> Optional[str]:
+    """Get timezone for a location from preapproved locations data (fallback).
     
     Args:
         location: Location name (can be in various formats)
@@ -1745,21 +1816,43 @@ def _get_location_timezone(location: str) -> Optional[str]:
         return None
     except Exception as e:
         if DEBUG:
-            logger.debug(f"Could not get timezone for location '{location}': {e}")
+            logger.debug(f"Could not get timezone from preapproved locations for '{location}': {e}")
         return None
 
-def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None) -> bool:
+def _get_location_timezone(location: str, redis_client: Optional[redis.Redis] = None) -> Optional[str]:
+    """Get timezone for a location, trying multiple sources in order:
+    1. Redis cache (from Visual Crossing API responses)
+    2. Preapproved locations JSON file
+    3. None (fallback to UTC)
+    
+    Args:
+        location: Location name
+        redis_client: Optional Redis client
+        
+    Returns:
+        IANA timezone string (e.g., "Europe/London") or None if not found
+    """
+    # First try Redis cache (from Visual Crossing API)
+    timezone = _get_location_timezone_from_cache(location, redis_client)
+    if timezone:
+        return timezone
+    
+    # Fallback to preapproved locations
+    return _get_location_timezone_from_preapproved(location)
+
+def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None, redis_client: Optional[redis.Redis] = None) -> bool:
     """Check if a date is today in the location's timezone, or UTC if location not found.
     
     Args:
         date: Date to check
         location: Optional location name to look up timezone
+        redis_client: Optional Redis client for timezone cache lookup
         
     Returns:
         True if date is today in location's timezone (or UTC if location not found)
     """
     if location and ZoneInfo:
-        timezone_str = _get_location_timezone(location)
+        timezone_str = _get_location_timezone(location, redis_client)
         if timezone_str:
             try:
                 tz = ZoneInfo(timezone_str)
@@ -1828,7 +1921,7 @@ async def cached_endpoint_response(
     # since today's data uses forecast which may change
     # Check if date is "today" in the location's timezone (or UTC if location not found)
     if period == "daily" and date is not None:
-        if _is_today_in_location_timezone(date, location):
+        if _is_today_in_location_timezone(date, location, cache.redis):
             # Use shorter TTL for today's daily data
             ttl = CACHE_TTL_SHORT  # 1 hour instead of default
             cache_control = CACHE_CONTROL_DAILY_TODAY  # Shorter max-age

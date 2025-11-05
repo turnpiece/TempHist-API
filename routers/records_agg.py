@@ -504,6 +504,23 @@ async def _fetch_all_days(location: str, start: date, end: date, unit_group: str
                 raise HTTPException(r.status, f"Visual Crossing error: {text[:200]}")
             data = await r.json()
     
+    # Extract and store timezone from Visual Crossing response
+    try:
+        from cache_utils import store_location_timezone
+        from config import CACHE_ENABLED
+        timezone_str = data.get('timezone')
+        if CACHE_ENABLED and timezone_str:
+            # Try to get Redis client from global cache
+            try:
+                from cache_utils import get_cache
+                cache = get_cache()
+                if cache and cache.redis:
+                    store_location_timezone(location, timezone_str, cache.redis)
+            except Exception:
+                pass  # Silently fail if cache not available
+    except Exception:
+        pass  # Silently fail if imports fail
+    
     days = data.get("days") or []
     out: Dict[str, float] = {}
     for d in days:

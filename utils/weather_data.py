@@ -13,7 +13,7 @@ from config import (
 )
 from cache_utils import (
     get_cache_value, set_cache_value, get_weather_cache_key, generate_cache_key,
-    get_cache_stats
+    get_cache_stats, store_location_timezone
 )
 from utils.validation import build_visual_crossing_url
 from utils.sanitization import sanitize_url, sanitize_for_logging
@@ -73,6 +73,13 @@ async def get_weather_for_date(
                     logger.info(f"[DEBUG] Parsing JSON response...")
                     data = await resp.json()
                     logger.info(f"[DEBUG] JSON parsed successfully, checking for 'days' data")
+                    
+                    # Extract and store timezone from Visual Crossing response
+                    if CACHE_ENABLED and redis_client:
+                        timezone_str = data.get('timezone')
+                        if timezone_str:
+                            store_location_timezone(location, timezone_str, redis_client)
+                    
                     days = data.get('days')
                     if days is not None and len(days) > 0:
                         # Check if we got valid temperature data
@@ -125,6 +132,13 @@ async def get_weather_for_date(
                             logger.info(f"[DEBUG] Parsing remote JSON response...")
                             remote_data = await remote_resp.json()
                             logger.info(f"[DEBUG] Remote JSON parsed successfully, checking for 'days' data")
+                            
+                            # Extract and store timezone from Visual Crossing response
+                            if CACHE_ENABLED and redis_client:
+                                timezone_str = remote_data.get('timezone')
+                                if timezone_str:
+                                    store_location_timezone(location, timezone_str, redis_client)
+                            
                             remote_days = remote_data.get('days')
                             if remote_days is not None and len(remote_days) > 0:
                                 remote_day_data = remote_days[0]
@@ -180,6 +194,13 @@ async def get_forecast_data(location: str, date, redis_client: redis.Redis = Non
         response = await client.get(url, headers={"Accept-Encoding": "gzip"})
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         data = response.json()
+        
+        # Extract and store timezone from Visual Crossing response
+        if CACHE_ENABLED and redis_client:
+            timezone_str = data.get('timezone')
+            if timezone_str:
+                store_location_timezone(location, timezone_str, redis_client)
+        
         if data.get('days') and len(data['days']) > 0:
             day_data = data['days'][0]
             temp = day_data.get('temp')
