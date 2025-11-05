@@ -158,9 +158,13 @@ def validate_cors_config():
     regex = os.getenv("CORS_ORIGIN_REGEX", "").strip()
     env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
     
+    # Use _temp_logger since logger is not yet defined at module initialization time
+    # This function is called at module level before logger is initialized
+    _log = _logging.getLogger(__name__)
+    
     # Warn about permissive configurations
     if not origins and not regex:
-        logger.warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
+        _log.warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
     
     if regex:
         # Test regex is valid and not too permissive
@@ -170,21 +174,21 @@ def validate_cors_config():
             # Warn if regex looks too permissive
             permissive_patterns = [".*", ".+", r".*\.*"]
             if regex in permissive_patterns or (".*" in regex and env == "production"):
-                logger.error(f"❌ CORS regex very permissive: {regex}")
+                _log.error(f"❌ CORS regex very permissive: {regex}")
                 if env == "production":
                     raise ValueError("Overly permissive CORS regex not allowed in production")
                 else:
-                    logger.warning(f"⚠️  Permissive CORS regex in {env} environment: {regex}")
+                    _log.warning(f"⚠️  Permissive CORS regex in {env} environment: {regex}")
         except re.error as e:
-            logger.error(f"❌ Invalid CORS_ORIGIN_REGEX: {e}")
+            _log.error(f"❌ Invalid CORS_ORIGIN_REGEX: {e}")
             raise ValueError(f"Invalid CORS_ORIGIN_REGEX: {e}")
     
     if origins == "*":
-        logger.error("❌ CORS_ORIGINS set to '*' - this is insecure!")
+        _log.error("❌ CORS_ORIGINS set to '*' - this is insecure!")
         if env == "production":
             raise ValueError("Wildcard CORS not allowed in production")
         else:
-            logger.warning("⚠️  Wildcard CORS in non-production environment")
+            _log.warning("⚠️  Wildcard CORS in non-production environment")
     
     return origins, regex
 
