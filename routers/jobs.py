@@ -143,35 +143,16 @@ async def create_rolling_bundle_job(
     request: Request,
     location: str = Path(..., description="Location name"),
     anchor: str = Path(..., description="Anchor date"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius"),
 ):
     """This endpoint has been removed. Use individual period endpoints instead."""
-    try:
-        # Parse anchor date to get MM-DD format
-        from datetime import datetime
-        anchor_date = datetime.strptime(anchor, "%Y-%m-%d").date()
-        mmdd = anchor_date.strftime("%m-%d")
-    except Exception:
-        mmdd = "01-15"  # Fallback
-    
-    base_url = str(request.base_url).rstrip('/')
-    encoded_location = quote(location, safe='')
-    
-    links = {
-        "daily": f"{base_url}/v1/records/daily/{encoded_location}/{mmdd}",
-        "weekly": f"{base_url}/v1/records/weekly/{encoded_location}/{mmdd}",
-        "monthly": f"{base_url}/v1/records/monthly/{encoded_location}/{mmdd}",
-        "yearly": f"{base_url}/v1/records/yearly/{encoded_location}/{mmdd}"
-    }
-    
-    return JSONResponse(
-        status_code=410,
-        content={
-            "error": "GONE",
-            "message": "The rolling-bundle async job endpoint has been removed",
-            "code": "GONE",
-            "details": "This endpoint is no longer available. Please use the individual period endpoints instead.",
-            "links": links
-        }
+    from routers.records_agg import _rolling_bundle_gone_response
+    return _rolling_bundle_gone_response(
+        request,
+        "The rolling-bundle async job endpoint has been removed",
+        location,
+        anchor,
+        unit_group
     )
 
 

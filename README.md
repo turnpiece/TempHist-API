@@ -596,15 +596,6 @@ GET /v1/records/daily/london/01-15/average
 GET /v1/records/daily/london/01-15/trend
 ```
 
-#### Rolling Bundle Endpoint Details
-
-The rolling bundle endpoint provides cross-year temperature series for multiple time periods in a single request, computed efficiently from cached daily data.
-
-**Parameters:**
-
-- `location`: Location name (e.g., "london", "new_york")
-- `anchor`: Anchor date in YYYY-MM-DD format (e.g., "2024-01-15")
-
 ### Removed Endpoints
 
 ❌ **These endpoints have been removed. Please use v1 endpoints instead.**
