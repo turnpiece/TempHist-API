@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException
 from models import ErrorResponse
 from config import DEBUG
+from utils.ip_utils import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -24,23 +25,6 @@ ERROR_CODES = {
     503: "SERVICE_UNAVAILABLE",
     504: "GATEWAY_TIMEOUT"
 }
-
-
-def get_client_ip(request: Request) -> str:
-    """Get the client IP address from the request."""
-    # Check for forwarded headers first (for proxy/load balancer scenarios)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # Take the first IP in the chain
-        return forwarded_for.split(",")[0].strip()
-    
-    # Check for real IP header
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-    
-    # Fallback to direct connection
-    return request.client.host if request.client else "unknown"
 
 
 def register_exception_handlers(app):
