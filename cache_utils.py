@@ -40,7 +40,7 @@ _preapproved_locations_cache: Optional[List[Dict[str, Any]]] = None
 def validate_ttl(ttl: int, name: str, default: int) -> int:
     """Validate cache TTL value with min/max bounds."""
     MIN_TTL = 60  # 1 minute minimum
-    MAX_TTL = 6048000  # 70 days maximum (reasonable limit)
+    MAX_TTL = 7776000  # 90 days maximum (allows for stable historical data caching)
     
     if not isinstance(ttl, int):
         logger.warning(f"{name} TTL is not integer, using default {default}s")
@@ -58,6 +58,14 @@ CACHE_TTL_DEFAULT = validate_ttl(int(os.getenv("CACHE_TTL_DEFAULT", "86400")), "
 CACHE_TTL_SHORT = validate_ttl(int(os.getenv("CACHE_TTL_SHORT", "3600")), "CACHE_TTL_SHORT", 3600)  # 1 hour  
 CACHE_TTL_LONG = validate_ttl(int(os.getenv("CACHE_TTL_LONG", "604800")), "CACHE_TTL_LONG", 604800)  # 7 days
 CACHE_TTL_JOB = validate_ttl(int(os.getenv("CACHE_TTL_JOB", "7200")), "CACHE_TTL_JOB", 7200)  # 2 hours for job results
+
+# Year-based caching TTL constants
+TTL_STABLE = validate_ttl(int(os.getenv("TTL_STABLE", "7776000")), "TTL_STABLE", 7776000)  # 90 days for past years
+TTL_CURRENT_DAILY = validate_ttl(int(os.getenv("TTL_CURRENT_DAILY", "7200")), "TTL_CURRENT_DAILY", 7200)  # 2 hours for current year daily
+TTL_CURRENT_WEEKLY = validate_ttl(int(os.getenv("TTL_CURRENT_WEEKLY", "14400")), "TTL_CURRENT_WEEKLY", 14400)  # 4 hours for current year weekly
+TTL_CURRENT_MONTHLY = validate_ttl(int(os.getenv("TTL_CURRENT_MONTHLY", "43200")), "TTL_CURRENT_MONTHLY", 43200)  # 12 hours for current year monthly
+TTL_CURRENT_YEARLY = validate_ttl(int(os.getenv("TTL_CURRENT_YEARLY", "86400")), "TTL_CURRENT_YEARLY", 86400)  # 24 hours for current year yearly
+TTL_BUNDLE = validate_ttl(int(os.getenv("TTL_BUNDLE", "900")), "TTL_BUNDLE", 900)  # 15 minutes for assembled bundle
 
 # Coordinate precision for cache key normalization
 COORD_PRECISION = 4  # 4 decimal places (~11m precision)
@@ -1887,6 +1895,224 @@ def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
         return f"{prefix}_{location}_{date_part}"
     else:
         return f"{prefix}_{location}"
+
+# Year-based caching helper functions
+def rec_key(scope: str, slug: str, identifier: str, year: int) -> str:
+    """Generate cache key for a per-year record.
+    
+    Args:
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        year: Year (e.g., 1979, 2024)
+        
+    Returns:
+        str: Cache key in format records:v1:{scope}:{slug}:{identifier}:{year}
+    """
+    return f"records:v1:{scope}:{slug}:{identifier}:{year}"
+
+def bundle_key(scope: str, slug: str, identifier: str) -> str:
+    """Generate cache key for assembled bundle.
+    
+    Args:
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        
+    Returns:
+        str: Cache key in format records:v1:{scope}:{slug}:{identifier}:bundle
+    """
+    return f"records:v1:{scope}:{slug}:{identifier}:bundle"
+
+def rec_etag_key(scope: str, slug: str, identifier: str, year: int) -> str:
+    """Generate cache key for per-year ETag.
+    
+    Args:
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        year: Year (e.g., 1979, 2024)
+        
+    Returns:
+        str: ETag cache key in format records:v1:{scope}:{slug}:{identifier}:{year}:etag
+    """
+    return f"records:v1:{scope}:{slug}:{identifier}:{year}:etag"
+
+async def get_records(
+    redis_client: redis.Redis,
+    scope: str,
+    slug: str,
+    identifier: str,
+    years: List[int]
+) -> Tuple[Dict[int, Dict], List[int], bool]:
+    """Get per-year records from cache using MGET.
+    
+    Args:
+        redis_client: Redis client instance
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        years: List of years to fetch
+        
+    Returns:
+        Tuple of (year_data dict, missing_past list, missing_current bool):
+        - year_data: Dict mapping year -> record data (only for found years)
+        - missing_past: List of past years that are missing
+        - missing_current: True if current year is missing
+    """
+    if not years:
+        return {}, [], False
+    
+    current_year = datetime.now(timezone.utc).year
+    
+    # Build all keys for MGET
+    keys = [rec_key(scope, slug, identifier, year) for year in years]
+    
+    # MGET all year keys
+    try:
+        values = redis_client.mget(keys)
+    except Exception as e:
+        logger.error(f"Error in MGET for records: {e}")
+        return {}, years, current_year in years
+    
+    year_data = {}
+    missing_past = []
+    missing_current = False
+    
+    for year, value in zip(years, values):
+        if value:
+            try:
+                data = json.loads(value.decode() if isinstance(value, bytes) else value)
+                year_data[year] = data
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning(f"Error decoding cached data for year {year}: {e}")
+                if year < current_year:
+                    missing_past.append(year)
+                elif year == current_year:
+                    missing_current = True
+        else:
+            if year < current_year:
+                missing_past.append(year)
+            elif year == current_year:
+                missing_current = True
+    
+    return year_data, missing_past, missing_current
+
+async def assemble_and_cache(
+    redis_client: redis.Redis,
+    scope: str,
+    slug: str,
+    identifier: str,
+    year_data: Dict[int, Dict],
+    year_etags: Optional[Dict[int, str]] = None
+) -> Tuple[Dict, str]:
+    """Assemble final payload from per-year records and cache bundle with ETag.
+    
+    Args:
+        redis_client: Redis client instance
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        year_data: Dict mapping year -> record data
+        year_etags: Optional dict mapping year -> ETag (if not provided, will fetch)
+        
+    Returns:
+        Tuple of (payload dict, bundle_etag string)
+    """
+    # Sort records by year
+    sorted_years = sorted(year_data.keys())
+    ordered_records = [year_data[y] for y in sorted_years]
+    
+    # Build final payload
+    payload = {
+        "version": 1,
+        "count": len(ordered_records),
+        "records": ordered_records
+    }
+    
+    # Get year ETags if not provided
+    if year_etags is None:
+        year_etags = await get_year_etags(redis_client, scope, slug, identifier, sorted_years)
+    
+    # Compute bundle ETag from per-year ETags
+    bundle_etag_computed = compute_bundle_etag(year_etags)
+    
+    # Cache bundle with short TTL
+    bundle_key_str = bundle_key(scope, slug, identifier)
+    bundle_etag_key = f"{bundle_key_str}:etag"
+    try:
+        json_data = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+        redis_client.setex(bundle_key_str, TTL_BUNDLE, json_data)
+        redis_client.setex(bundle_etag_key, TTL_BUNDLE, bundle_etag_computed)
+        if DEBUG:
+            logger.debug(f"Cached bundle: {bundle_key_str} with ETag")
+    except Exception as e:
+        logger.warning(f"Error caching bundle {bundle_key_str}: {e}")
+    
+    return payload, bundle_etag_computed
+
+def compute_bundle_etag(year_etags: Dict[int, str]) -> str:
+    """Compute bundle ETag from ordered list of per-year ETags.
+    
+    Args:
+        year_etags: Dict mapping year -> ETag string
+        
+    Returns:
+        str: SHA256 hash of ordered per-year ETags (32 chars)
+    """
+    # Sort by year and extract ETag values (remove quotes if present)
+    sorted_etags = []
+    for year in sorted(year_etags.keys()):
+        etag = year_etags[year]
+        # Remove quotes if present
+        etag_clean = etag.strip('"\'')
+        sorted_etags.append(f"{year}:{etag_clean}")
+    
+    # Hash the concatenated ETags
+    etag_string = "|".join(sorted_etags)
+    return f'"{hashlib.sha256(etag_string.encode()).hexdigest()[:32]}"'
+
+async def get_year_etags(
+    redis_client: redis.Redis,
+    scope: str,
+    slug: str,
+    identifier: str,
+    years: List[int]
+) -> Dict[int, str]:
+    """Get ETags for all years using MGET.
+    
+    Args:
+        redis_client: Redis client instance
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        years: List of years to fetch ETags for
+        
+    Returns:
+        Dict mapping year -> ETag string (empty string if not found)
+    """
+    if not years:
+        return {}
+    
+    # Build all ETag keys for MGET
+    keys = [rec_etag_key(scope, slug, identifier, year) for year in years]
+    
+    # MGET all ETag keys
+    try:
+        values = redis_client.mget(keys)
+    except Exception as e:
+        logger.error(f"Error in MGET for ETags: {e}")
+        return {year: "" for year in years}
+    
+    year_etags = {}
+    for year, value in zip(years, values):
+        if value:
+            etag = value.decode() if isinstance(value, bytes) else value
+            year_etags[year] = etag
+        else:
+            year_etags[year] = ""
+    
+    return year_etags
 
 async def cached_endpoint_response(
     request: Request,

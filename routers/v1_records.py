@@ -5,8 +5,8 @@ import redis
 import asyncio
 import httpx
 from datetime import datetime, timedelta, timezone, date as dt_date
-from typing import Literal, Dict, Tuple, Optional
-from fastapi import APIRouter, HTTPException, Path, Response, Depends
+from typing import Literal, Dict, Tuple, Optional, List
+from fastapi import APIRouter, HTTPException, Path, Response, Request, Depends
 from fastapi.responses import JSONResponse
 
 from models import (
@@ -19,7 +19,11 @@ from config import (
 )
 from cache_utils import (
     get_cache_value, set_cache_value, generate_cache_key, get_cache_stats,
-    normalize_location_for_cache, get_cache_updated_timestamp, _get_location_timezone
+    normalize_location_for_cache, get_cache_updated_timestamp, _get_location_timezone,
+    rec_key, bundle_key, rec_etag_key, get_records, assemble_and_cache,
+    compute_bundle_etag, get_year_etags, TTL_STABLE, TTL_CURRENT_DAILY,
+    TTL_CURRENT_WEEKLY, TTL_CURRENT_MONTHLY, TTL_CURRENT_YEARLY, TTL_BUNDLE,
+    get_job_manager
 )
 
 def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None, redis_client: Optional[redis.Redis] = None) -> bool:
@@ -472,8 +476,284 @@ async def get_temperature_data_v1(
     }
 
 
+def _is_preapproved_location(slug: str) -> bool:
+    """Check if a location slug is in the preapproved locations list.
+    
+    Args:
+        slug: Normalized location slug
+        
+    Returns:
+        True if location is preapproved, False otherwise
+    """
+    try:
+        import os
+        import json
+        
+        # Find project root
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = current_dir
+        while project_root != os.path.dirname(project_root):
+            if os.path.exists(os.path.join(project_root, "pyproject.toml")):
+                break
+            project_root = os.path.dirname(project_root)
+        
+        data_file = os.path.join(project_root, "data", "preapproved_locations.json")
+        
+        with open(data_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        slug_lower = slug.lower()
+        for item in data:
+            item_slug = (item.get('slug') or item.get('id', '')).lower()
+            if item_slug == slug_lower:
+                return True
+        
+        return False
+    except Exception:
+        # If we can't check, assume not preapproved (safer)
+        return False
+
+def _rebuild_full_response_from_values(
+    values: List[Dict],
+    period: str,
+    location: str,
+    identifier: str,
+    month: int,
+    day: int,
+    current_year: int,
+    years: List[int],
+    redis_client: redis.Redis
+) -> Dict:
+    """Rebuild full RecordResponse from list of year values.
+    
+    Args:
+        values: List of TemperatureValue dicts
+        period: Period type
+        location: Location name
+        identifier: Date identifier
+        month: Month
+        day: Day
+        current_year: Current year
+        years: List of all years in range
+        redis_client: Redis client
+        
+    Returns:
+        Full response dict with all fields
+    """
+    from utils.temperature import calculate_trend_slope, generate_summary
+    from utils.weather import create_metadata
+    
+    all_temps = [v.get('temperature') for v in values if v.get('temperature') is not None]
+    
+    if all_temps:
+        avg_data = {
+            "mean": round(sum(all_temps) / len(all_temps), 1),
+            "unit": "celsius",
+            "data_points": len(all_temps)
+        }
+    else:
+        avg_data = {"mean": 0.0, "unit": "celsius", "data_points": 0}
+    
+    if len(values) >= 2:
+        trend_input = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
+        slope = calculate_trend_slope(trend_input)
+        trend_data = {
+            "slope": slope,
+            "unit": "°C/decade",
+            "data_points": len(values),
+            "r_squared": None
+        }
+    else:
+        trend_data = {"slope": 0.0, "unit": "°C/decade", "data_points": len(values)}
+    
+    end_date_obj = datetime(current_year, month, day)
+    summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
+    summary_text = generate_summary(summary_data, end_date_obj, period)
+    
+    return {
+        "period": period,
+        "location": location,
+        "identifier": identifier,
+        "range": {
+            "start": f"{min(v.get('year') for v in values)}-{month:02d}-{day:02d}",
+            "end": f"{max(v.get('year') for v in values)}-{month:02d}-{day:02d}",
+            "years": max(v.get('year') for v in values) - min(v.get('year') for v in values) + 1
+        },
+        "unit_group": "celsius",
+        "values": values,
+        "average": avg_data,
+        "trend": trend_data,
+        "summary": summary_text,
+        "metadata": create_metadata(len(years), len(values), [], {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
+        "timezone": _get_location_timezone(location, redis_client),
+        "updated": datetime.now(timezone.utc).isoformat()
+    }
+
+def _extract_per_year_records(full_data: Dict) -> Dict[int, Dict]:
+    """Extract per-year records from full response data.
+    
+    Args:
+        full_data: Full response from get_temperature_data_v1
+        
+    Returns:
+        Dict mapping year -> per-year record (just the TemperatureValue for that year)
+    """
+    per_year = {}
+    if 'values' in full_data:
+        for value in full_data['values']:
+            year = value.get('year')
+            if year:
+                per_year[year] = value
+    return per_year
+
+def _get_ttl_for_current_year(period: str) -> int:
+    """Get TTL for current year based on period."""
+    if period == "daily":
+        return TTL_CURRENT_DAILY
+    elif period == "weekly":
+        return TTL_CURRENT_WEEKLY
+    elif period == "monthly":
+        return TTL_CURRENT_MONTHLY
+    elif period == "yearly":
+        return TTL_CURRENT_YEARLY
+    else:
+        return TTL_CURRENT_DAILY  # Default
+
+async def _store_per_year_records(
+    redis_client: redis.Redis,
+    scope: str,
+    slug: str,
+    identifier: str,
+    per_year_records: Dict[int, Dict],
+    current_year: int
+):
+    """Store per-year records in cache with appropriate TTLs."""
+    from cache_utils import ETagGenerator
+    
+    for year, record_data in per_year_records.items():
+        year_key = rec_key(scope, slug, identifier, year)
+        etag_key = rec_etag_key(scope, slug, identifier, year)
+        
+        # Determine TTL
+        if year < current_year:
+            ttl = TTL_STABLE
+        else:
+            ttl = _get_ttl_for_current_year(scope)
+        
+        # Generate ETag for this year's record
+        etag = ETagGenerator.generate_etag(record_data)
+        
+        try:
+            json_data = json.dumps(record_data, sort_keys=True, separators=(',', ':'))
+            redis_client.setex(year_key, ttl, json_data)
+            redis_client.setex(etag_key, ttl, etag)
+            if DEBUG:
+                logger.debug(f"Cached per-year record: {year_key} (TTL: {ttl}s)")
+        except Exception as e:
+            logger.warning(f"Error caching per-year record {year_key}: {e}")
+
+async def _get_record_data_internal(
+    period: str,
+    location: str,
+    identifier: str,
+    redis_client: redis.Redis,
+    invalid_location_cache: InvalidLocationCache
+) -> Dict:
+    """Internal helper to get record data using per-year caching (returns dict, not response)."""
+    # This is essentially the same logic as get_record but returns the data dict
+    # Parse identifier
+    month, day, _ = parse_identifier(period, identifier)
+    current_year = datetime.now(timezone.utc).year
+    slug = normalize_location_for_cache(location)
+    years = get_year_range(current_year)
+    
+    if CACHE_ENABLED:
+        # Try bundle cache first
+        bundle_key_str = bundle_key(period, slug, identifier)
+        bundle_data = redis_client.get(bundle_key_str)
+        
+        if bundle_data:
+            try:
+                data_str = bundle_data.decode('utf-8') if isinstance(bundle_data, bytes) else bundle_data
+                bundle_payload = json.loads(data_str)
+                if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
+                    values = bundle_payload['records']
+                    all_temps = [v.get('temperature') for v in values if v.get('temperature') is not None]
+                    
+                    from utils.temperature import calculate_trend_slope, generate_summary
+                    from utils.weather import create_metadata
+                    
+                    if all_temps:
+                        avg_data = {
+                            "mean": round(sum(all_temps) / len(all_temps), 1),
+                            "unit": "celsius",
+                            "data_points": len(all_temps)
+                        }
+                    else:
+                        avg_data = {"mean": 0.0, "unit": "celsius", "data_points": 0}
+                    
+                    if len(values) >= 2:
+                        trend_input = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
+                        slope = calculate_trend_slope(trend_input)
+                        trend_data = {
+                            "slope": slope,
+                            "unit": "°C/decade",
+                            "data_points": len(values),
+                            "r_squared": None
+                        }
+                    else:
+                        trend_data = {"slope": 0.0, "unit": "°C/decade", "data_points": len(values)}
+                    
+                    end_date_obj = datetime(current_year, month, day)
+                    summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
+                    summary_text = generate_summary(summary_data, end_date_obj, period)
+                    
+                    return {
+                        "period": period,
+                        "location": location,
+                        "identifier": identifier,
+                        "range": {
+                            "start": f"{min(v.get('year') for v in values)}-{month:02d}-{day:02d}",
+                            "end": f"{max(v.get('year') for v in values)}-{month:02d}-{day:02d}",
+                            "years": max(v.get('year') for v in values) - min(v.get('year') for v in values) + 1
+                        },
+                        "unit_group": "celsius",
+                        "values": values,
+                        "average": avg_data,
+                        "trend": trend_data,
+                        "summary": summary_text,
+                        "metadata": create_metadata(len(years), len(values), [], {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
+                        "timezone": _get_location_timezone(location, redis_client),
+                        "updated": datetime.now(timezone.utc).isoformat()
+                    }
+            except Exception:
+                pass
+        
+        # MGET all year keys
+        year_data, missing_past, missing_current = await get_records(
+            redis_client, period, slug, identifier, years
+        )
+        
+        # Handle missing years (simplified - just fetch if needed)
+        if missing_past or missing_current:
+            full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+            per_year_records = _extract_per_year_records(full_data)
+            await _store_per_year_records(redis_client, period, slug, identifier, per_year_records, current_year)
+            year_data = per_year_records
+        
+        # Assemble from year_data using helper
+        if year_data:
+            values = [year_data[y] for y in sorted(year_data.keys())]
+            return _rebuild_full_response_from_values(
+                values, period, location, identifier, month, day, current_year, years, redis_client
+            )
+    
+    # Fallback: fetch fresh
+    return await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+
 @router.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
 async def get_record(
+    request: Request,
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
@@ -510,73 +790,290 @@ async def get_record(
         
         # Parse identifier to get the end date for cache headers
         month, day, _ = parse_identifier(period, identifier)
-        current_year = datetime.now().year
+        current_year = datetime.now(timezone.utc).year
         end_date = datetime(current_year, month, day).date()
         
-        # Create cache key for v1 endpoint with comprehensive format
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
+        # Normalize location to slug format
+        slug = normalize_location_for_cache(location)
         
-        # Check cache first
+        # Get year range (50 years back + current year)
+        years = get_year_range(current_year)
+        
+        # Check for ETag conditional request
+        if_none_match = request.headers.get("if-none-match")
+        
+        # Initialize variables for cache status tracking
+        year_data = {}
+        cache_status = "MISS"
+        bundle_etag_computed = None
+        
         if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 RECORD: {cache_key}")
-                data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
-                data = json.loads(data_str)
+            # Step 1: Try bundle cache first (fast path)
+            bundle_key_str = bundle_key(period, slug, identifier)
+            bundle_etag_key = f"{bundle_key_str}:etag"
+            bundle_data = redis_client.get(bundle_key_str)
+            bundle_etag = redis_client.get(bundle_etag_key)
+            
+            if bundle_data and bundle_etag:
+                try:
+                    data_str = bundle_data.decode('utf-8') if isinstance(bundle_data, bytes) else bundle_data
+                    bundle_payload = json.loads(data_str)
+                    bundle_etag_str = bundle_etag.decode('utf-8') if isinstance(bundle_etag, bytes) else bundle_etag
+                    
+                    # Check ETag conditional request
+                    if if_none_match:
+                        from cache_utils import ETagGenerator
+                        if ETagGenerator.matches_etag(bundle_etag_str, if_none_match):
+                            response.status_code = 304
+                            response.headers["ETag"] = bundle_etag_str
+                            response.headers["X-Cache-Status"] = "HIT"
+                            return None
+                    
+                    # Reconstruct full response from bundle
+                    if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
+                        values = bundle_payload['records']
+                        data = _rebuild_full_response_from_values(
+                            values, period, location, identifier, month, day, current_year, years, redis_client
+                        )
+                        
+                        # Validate cached data
+                        is_valid, error_msg = validate_location_response(data, location)
+                        if not is_valid:
+                            invalid_location_cache.mark_location_invalid(location, "no_data_cached")
+                            raise HTTPException(status_code=400, detail=error_msg)
+                        
+                        # Set cache headers with stale-while-revalidate and ETag
+                        json_response = JSONResponse(content=data)
+                        json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+                        json_response.headers["ETag"] = bundle_etag_str
+                        json_response.headers["X-Cache-Status"] = "HIT"
+                        set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
+                        
+                        if DEBUG:
+                            logger.debug(f"✅ SERVING BUNDLE CACHE: {bundle_key_str}")
+                        
+                        return json_response
+                except (json.JSONDecodeError, KeyError, ValueError) as e:
+                    if DEBUG:
+                        logger.debug(f"Error parsing bundle cache: {e}, falling through to per-year lookup")
+            
+            # Step 2: MGET all year keys
+            year_data, missing_past, missing_current = await get_records(
+                redis_client, period, slug, identifier, years
+            )
+            
+            # Step 3: Handle missing years with guardrail for preapproved locations
+            if missing_past or missing_current:
+                # Guardrail: For preapproved locations, never trigger 50 external fetches
+                # If bundle is MISS and location is preapproved, assemble from per-year keys
+                # and only fetch current-year if missing
+                is_preapproved = _is_preapproved_location(slug)
                 
-                # Validate cached data
-                is_valid, error_msg = validate_location_response(data, location)
-                if not is_valid:
-                    # Mark location as invalid and return error
-                    invalid_location_cache.mark_location_invalid(location, "no_data_cached")
-                    raise HTTPException(status_code=400, detail=error_msg)
+                # If only current year is missing, serve bundle immediately and enqueue refresh
+                if missing_past == [] and missing_current:
+                    # Try to serve last bundle if available (stale-while-revalidate)
+                    bundle_data = redis_client.get(bundle_key_str)
+                    bundle_etag = redis_client.get(f"{bundle_key_str}:etag")
+                    if bundle_data:
+                        try:
+                            data_str = bundle_data.decode('utf-8') if isinstance(bundle_data, bytes) else bundle_data
+                            bundle_payload = json.loads(data_str)
+                            if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
+                                values = bundle_payload['records']
+                                data = _rebuild_full_response_from_values(
+                                    values, period, location, identifier, month, day, current_year, years, redis_client
+                                )
+                                
+                                # Validate cached data
+                                is_valid, error_msg = validate_location_response(data, location)
+                                if not is_valid:
+                                    invalid_location_cache.mark_location_invalid(location, "no_data_cached")
+                                    raise HTTPException(status_code=400, detail=error_msg)
+                                
+                                # Compute bundle ETag from per-year ETags
+                                year_etags = await get_year_etags(redis_client, period, slug, identifier, years)
+                                bundle_etag_computed = compute_bundle_etag(year_etags)
+                                
+                                # Check ETag conditional request
+                                if if_none_match:
+                                    from cache_utils import ETagGenerator
+                                    if ETagGenerator.matches_etag(bundle_etag_computed, if_none_match):
+                                        response.status_code = 304
+                                        response.headers["ETag"] = bundle_etag_computed
+                                        response.headers["X-Cache-Status"] = "STALE"
+                                        return None
+                                
+                                # Serve stale bundle with refresh job
+                                json_response = JSONResponse(content=data)
+                                json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+                                json_response.headers["ETag"] = bundle_etag_computed
+                                json_response.headers["X-Cache-Status"] = "STALE"
+                                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
+                                
+                                # Enqueue job to refresh current year only
+                                try:
+                                    job_manager = get_job_manager()
+                                    if job_manager:
+                                        job_id = job_manager.create_job("record_computation", {
+                                            "scope": period,
+                                            "slug": slug,
+                                            "identifier": identifier,
+                                            "year": current_year,
+                                            "location": location
+                                        })
+                                        if DEBUG:
+                                            logger.debug(f"Enqueued job to refresh current year: {job_id}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to enqueue refresh job: {e}")
+                                
+                                return json_response
+                        except Exception as e:
+                            if DEBUG:
+                                logger.debug(f"Error serving stale bundle: {e}")
+                    
+                    # If no stale bundle, fetch current year only
+                    if is_preapproved:
+                        # For preapproved locations, only fetch current year
+                        if DEBUG:
+                            logger.debug(f"Preapproved location {slug}: fetching only current year {current_year}")
+                        full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+                        per_year_records = _extract_per_year_records(full_data)
+                        if current_year in per_year_records:
+                            year_key = rec_key(period, slug, identifier, current_year)
+                            etag_key = rec_etag_key(period, slug, identifier, current_year)
+                            ttl = _get_ttl_for_current_year(period)
+                            from cache_utils import ETagGenerator
+                            etag = ETagGenerator.generate_etag(per_year_records[current_year])
+                            try:
+                                json_data = json.dumps(per_year_records[current_year], sort_keys=True, separators=(',', ':'))
+                                redis_client.setex(year_key, ttl, json_data)
+                                redis_client.setex(etag_key, ttl, etag)
+                                year_data[current_year] = per_year_records[current_year]
+                            except Exception as e:
+                                logger.warning(f"Error caching current year: {e}")
+                    else:
+                        # For non-preapproved, enqueue job to refresh current year
+                        try:
+                            job_manager = get_job_manager()
+                            if job_manager:
+                                job_id = job_manager.create_job("record_computation", {
+                                    "scope": period,
+                                    "slug": slug,
+                                    "identifier": identifier,
+                                    "year": current_year,
+                                    "location": location
+                                })
+                                if DEBUG:
+                                    logger.debug(f"Enqueued job to refresh current year: {job_id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to enqueue refresh job: {e}")
                 
-                # Add updated timestamp for cached data
-                updated_timestamp = await get_cache_updated_timestamp(cache_key, redis_client)
-                if updated_timestamp:
-                    data["updated"] = updated_timestamp.isoformat()
+                # Fetch missing past years (should be rare after prewarming)
+                # Guardrail: For preapproved locations, if past years are missing, 
+                # this is unexpected - log warning but still fetch
+                if missing_past:
+                    if is_preapproved:
+                        logger.warning(f"Preapproved location {slug} missing past years: {missing_past}. This should not happen after prewarming.")
+                    
+                    # Fetch full data (will get all years)
+                    full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+                    
+                    # Extract per-year records
+                    per_year_records = _extract_per_year_records(full_data)
+                    
+                    # Store missing past years only
+                    for year in missing_past:
+                        if year in per_year_records:
+                            year_key = rec_key(period, slug, identifier, year)
+                            etag_key = rec_etag_key(period, slug, identifier, year)
+                            ttl = TTL_STABLE
+                            from cache_utils import ETagGenerator
+                            etag = ETagGenerator.generate_etag(per_year_records[year])
+                            try:
+                                json_data = json.dumps(per_year_records[year], sort_keys=True, separators=(',', ':'))
+                                redis_client.setex(year_key, ttl, json_data)
+                                redis_client.setex(etag_key, ttl, etag)
+                                year_data[year] = per_year_records[year]
+                            except Exception as e:
+                                logger.warning(f"Error caching year {year}: {e}")
+            
+            # Step 4: Assemble response from per-year records
+            if year_data:
+                # Get per-year ETags
+                year_etags = await get_year_etags(redis_client, period, slug, identifier, list(year_data.keys()))
                 
-                # Add timezone to cached data if not already present
-                if "timezone" not in data or data["timezone"] is None:
-                    timezone_str = _get_location_timezone(location, redis_client)
-                    data["timezone"] = timezone_str
+                # Assemble bundle and store with ETag (returns payload and ETag)
+                bundle_payload, bundle_etag_computed = await assemble_and_cache(
+                    redis_client, period, slug, identifier, year_data, year_etags
+                )
                 
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
-                return json_response
-        
-        # Get data
-        data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+                # Check ETag conditional request
+                if if_none_match:
+                    from cache_utils import ETagGenerator
+                    if ETagGenerator.matches_etag(bundle_etag_computed, if_none_match):
+                        response.status_code = 304
+                        response.headers["ETag"] = bundle_etag_computed
+                        response.headers["X-Cache-Status"] = "HIT"
+                        return None
+                
+                # Rebuild full response from year_data using helper
+                values = [year_data[y] for y in sorted(year_data.keys())]
+                data = _rebuild_full_response_from_values(
+                    values, period, location, identifier, month, day, current_year, years, redis_client
+                )
+                
+                # Set cache status
+                cache_status = "HIT" if not missing_past and not missing_current else "PARTIAL"
+            else:
+                # No cached data, fetch fresh
+                data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+                
+                # Extract and store per-year records
+                per_year_records = _extract_per_year_records(data)
+                await _store_per_year_records(redis_client, period, slug, identifier, per_year_records, current_year)
+                
+                # Assemble bundle with ETag
+                year_etags = await get_year_etags(redis_client, period, slug, identifier, list(per_year_records.keys()))
+                bundle_payload, bundle_etag_computed = await assemble_and_cache(
+                    redis_client, period, slug, identifier, per_year_records, year_etags
+                )
+                
+                cache_status = "MISS"
+        else:
+            # Cache disabled, fetch fresh
+            data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
         
         # Validate the response data
         is_valid, error_msg = validate_location_response(data, location)
         if not is_valid:
-            # Mark location as invalid for future requests
             invalid_location_cache.mark_location_invalid(location, "no_data")
             raise HTTPException(status_code=400, detail=error_msg)
         
-        # Add updated timestamp for newly computed data
-        current_time = datetime.now(timezone.utc)
-        data["updated"] = current_time.isoformat()
+        # Ensure updated timestamp
+        if "updated" not in data:
+            data["updated"] = datetime.now(timezone.utc).isoformat()
         
-        # Cache the result
-        if CACHE_ENABLED:
-            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
-            # Check if date is "today" in the location's timezone (or UTC if location not found)
-            if period == "daily":
-                if _is_today_in_location_timezone(end_date, location, redis_client):
-                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
+        # Compute bundle ETag if not already computed
+        if bundle_etag_computed is None:
+            if CACHE_ENABLED:
+                # Try to get from stored bundle ETag
+                bundle_key_str = bundle_key(period, slug, identifier)
+                bundle_etag_key = f"{bundle_key_str}:etag"
+                bundle_etag_stored = redis_client.get(bundle_etag_key)
+                if bundle_etag_stored:
+                    bundle_etag_computed = bundle_etag_stored.decode('utf-8') if isinstance(bundle_etag_stored, bytes) else bundle_etag_stored
                 else:
-                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
+                    # Fallback: compute from data
+                    from cache_utils import ETagGenerator
+                    bundle_etag_computed = ETagGenerator.generate_etag(data)
             else:
-                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
-            set_cache_value(cache_key, cache_duration, json.dumps(data), redis_client)
+                from cache_utils import ETagGenerator
+                bundle_etag_computed = ETagGenerator.generate_etag(data)
         
         # Create response with smart cache headers
         json_response = JSONResponse(content=data)
+        json_response.headers["ETag"] = bundle_etag_computed
+        json_response.headers["X-Cache-Status"] = cache_status if CACHE_ENABLED else "DISABLED"
         set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
         return json_response
     
@@ -584,6 +1081,8 @@ async def get_record(
         raise
     except Exception as e:
         logger.error(f"Error in v1 records endpoint: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -619,36 +1118,8 @@ async def get_record_average(
         current_year = datetime.now().year
         end_date = datetime(current_year, month, day).date()
         
-        # Create cache key for subresource
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:average"
-        
-        # Check cache first
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records_average", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 AVERAGE: {cache_key}")
-                data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
-                data = json.loads(data_str)
-                # Add timezone to cached data if not already present
-                if "timezone" not in data or data["timezone"] is None:
-                    timezone_str = _get_location_timezone(location, redis_client)
-                    data["timezone"] = timezone_str
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|average|metric|v1")
-                return json_response
-        
-        # Get full record data
-        record_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
-        
-        # Validate the response data
-        is_valid, error_msg = validate_location_response(record_data, location)
-        if not is_valid:
-            # Mark location as invalid for future requests
-            invalid_location_cache.mark_location_invalid(location, "no_data")
-            raise HTTPException(status_code=400, detail=error_msg)
+        # Get full record data using per-year caching
+        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache)
         
         # Extract average data
         response_data = SubResourceResponse(
@@ -660,21 +1131,9 @@ async def get_record_average(
             timezone=record_data.get("timezone")
         )
         
-        # Cache the result
-        if CACHE_ENABLED:
-            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
-            # Check if date is "today" in the location's timezone (or UTC if location not found)
-            if period == "daily":
-                if _is_today_in_location_timezone(end_date, location, redis_client):
-                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
-                else:
-                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
-            else:
-                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
-            set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
-        
         # Create response with smart cache headers
         json_response = JSONResponse(content=response_data.model_dump())
+        json_response.headers["X-Cache-Status"] = "HIT" if CACHE_ENABLED else "DISABLED"
         set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|average|metric|v1")
         return json_response
     
@@ -717,36 +1176,8 @@ async def get_record_trend(
         current_year = datetime.now().year
         end_date = datetime(current_year, month, day).date()
         
-        # Create cache key for subresource
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:trend"
-        
-        # Check cache first
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records_trend", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 TREND: {cache_key}")
-                data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
-                data = json.loads(data_str)
-                # Add timezone to cached data if not already present
-                if "timezone" not in data or data["timezone"] is None:
-                    timezone_str = _get_location_timezone(location, redis_client)
-                    data["timezone"] = timezone_str
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|trend|metric|v1")
-                return json_response
-        
-        # Get full record data
-        record_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
-        
-        # Validate the response data
-        is_valid, error_msg = validate_location_response(record_data, location)
-        if not is_valid:
-            # Mark location as invalid for future requests
-            invalid_location_cache.mark_location_invalid(location, "no_data")
-            raise HTTPException(status_code=400, detail=error_msg)
+        # Get full record data using per-year caching
+        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache)
         
         # Extract trend data
         response_data = SubResourceResponse(
@@ -758,21 +1189,9 @@ async def get_record_trend(
             timezone=record_data.get("timezone")
         )
         
-        # Cache the result
-        if CACHE_ENABLED:
-            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
-            # Check if date is "today" in the location's timezone (or UTC if location not found)
-            if period == "daily":
-                if _is_today_in_location_timezone(end_date, location, redis_client):
-                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
-                else:
-                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
-            else:
-                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
-            set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
-        
         # Create response with smart cache headers
         json_response = JSONResponse(content=response_data.model_dump())
+        json_response.headers["X-Cache-Status"] = "HIT" if CACHE_ENABLED else "DISABLED"
         set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|trend|metric|v1")
         return json_response
     
@@ -815,36 +1234,8 @@ async def get_record_summary(
         current_year = datetime.now().year
         end_date = datetime(current_year, month, day).date()
         
-        # Create cache key for subresource
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:summary"
-        
-        # Check cache first
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records_summary", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 SUMMARY: {cache_key}")
-                data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
-                data = json.loads(data_str)
-                # Add timezone to cached data if not already present
-                if "timezone" not in data or data["timezone"] is None:
-                    timezone_str = _get_location_timezone(location, redis_client)
-                    data["timezone"] = timezone_str
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|summary|metric|v1")
-                return json_response
-        
-        # Get full record data
-        record_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
-        
-        # Validate the response data
-        is_valid, error_msg = validate_location_response(record_data, location)
-        if not is_valid:
-            # Mark location as invalid for future requests
-            invalid_location_cache.mark_location_invalid(location, "no_data")
-            raise HTTPException(status_code=400, detail=error_msg)
+        # Get full record data using per-year caching
+        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache)
         
         # Extract summary data
         response_data = SubResourceResponse(
@@ -856,21 +1247,9 @@ async def get_record_summary(
             timezone=record_data.get("timezone")
         )
         
-        # Cache the result
-        if CACHE_ENABLED:
-            # Use shorter cache for daily endpoint with today's date (uses forecast which may change)
-            # Check if date is "today" in the location's timezone (or UTC if location not found)
-            if period == "daily":
-                if _is_today_in_location_timezone(end_date, location, redis_client):
-                    cache_duration = SHORT_CACHE_DURATION  # 1 hour for today's daily data
-                else:
-                    cache_duration = LONG_CACHE_DURATION  # 1 week for historical data
-            else:
-                cache_duration = LONG_CACHE_DURATION  # Use long cache for other periods
-            set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
-        
         # Create response with smart cache headers
         json_response = JSONResponse(content=response_data.model_dump())
+        json_response.headers["X-Cache-Status"] = "HIT" if CACHE_ENABLED else "DISABLED"
         set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|summary|metric|v1")
         return json_response
     

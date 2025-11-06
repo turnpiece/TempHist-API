@@ -35,12 +35,54 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 DEFAULT_BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-DEFAULT_LOCATIONS = [
-    "New York, NY", "Los Angeles, CA", "Chicago, IL", "Houston, TX", "Phoenix, AZ",
-    "Philadelphia, PA", "San Antonio, TX", "San Diego, CA", "Dallas, TX", "San Jose, CA",
-    "Austin, TX", "Jacksonville, FL", "Fort Worth, TX", "Columbus, OH", "Charlotte, NC",
-    "San Francisco, CA", "Indianapolis, IN", "Seattle, WA", "Denver, CO", "Washington, DC"
-]
+
+def load_preapproved_slugs(locations_file: str = None) -> List[str]:
+    """Load location slugs from preapproved_locations.json.
+    
+    Args:
+        locations_file: Optional path to locations JSON file. If not provided,
+                       will look for data/preapproved_locations.json relative to script.
+    
+    Returns:
+        List of location slugs (e.g., ['london', 'new-york', 'berlin'])
+    """
+    slugs = []
+    
+    # Find project root by looking for pyproject.toml
+    if locations_file is None:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = current_dir
+        while project_root != os.path.dirname(project_root):
+            if os.path.exists(os.path.join(project_root, "pyproject.toml")):
+                break
+            project_root = os.path.dirname(project_root)
+        
+        locations_file = os.path.join(project_root, "data", "preapproved_locations.json")
+    
+    try:
+        with open(locations_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        for item in data:
+            # Prefer slug, fallback to id
+            slug = item.get('slug') or item.get('id', '')
+            if slug:
+                slugs.append(slug)
+        
+        logger.info(f"Loaded {len(slugs)} location slugs from {locations_file}")
+        return slugs
+    except FileNotFoundError:
+        logger.warning(f"Locations file not found: {locations_file}, using empty list")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing locations file: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Error loading locations: {e}")
+        return []
+
+# Default locations - will be loaded from preapproved_locations.json
+DEFAULT_LOCATIONS = load_preapproved_slugs()
 
 DEFAULT_ENDPOINTS = [
     "v1/records/daily",
@@ -173,15 +215,25 @@ class CachePrewarmer:
         return patterns
     
     def _build_url(self, endpoint: str, location: str, date_pattern: Dict[str, str]) -> str:
-        """Build URL for the given endpoint and parameters."""
+        """Build URL for the given endpoint and parameters.
+        
+        Args:
+            endpoint: Endpoint path (e.g., 'v1/records/daily')
+            location: Location slug (e.g., 'london', 'new-york')
+            date_pattern: Dict with 'identifier' key (e.g., {'identifier': '11-06'})
+        """
+        # Ensure location is in slug format (normalize if needed)
+        # Location should already be a slug from preapproved_locations.json
+        location_slug = location.lower().replace(" ", "-").replace("_", "-")
+        
         if endpoint == "v1/records/daily":
-            return f"{self.base_url}/v1/records/daily/{location}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/daily/{location_slug}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/weekly":
-            return f"{self.base_url}/v1/records/weekly/{location}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/weekly/{location_slug}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/monthly":
-            return f"{self.base_url}/v1/records/monthly/{location}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/monthly/{location_slug}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/yearly":
-            return f"{self.base_url}/v1/records/yearly/{location}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/yearly/{location_slug}/{date_pattern['identifier']}"
         else:
             raise ValueError(f"Unknown endpoint: {endpoint}")
     
@@ -259,11 +311,21 @@ async def main():
     
     # Load locations
     if args.locations_file:
-        with open(args.locations_file, 'r') as f:
-            custom_locations = json.load(f)
-        locations = custom_locations[:args.locations]
+        # If locations_file is provided, try to load slugs from it
+        if args.locations_file.endswith('.json'):
+            slugs = load_preapproved_slugs(args.locations_file)
+            locations = slugs[:args.locations] if slugs else []
+        else:
+            # Assume it's a simple text file with one location per line
+            with open(args.locations_file, 'r') as f:
+                locations = [line.strip() for line in f if line.strip()][:args.locations]
     else:
-        locations = DEFAULT_LOCATIONS[:args.locations]
+        # Use default locations (loaded from preapproved_locations.json)
+        locations = DEFAULT_LOCATIONS[:args.locations] if DEFAULT_LOCATIONS else []
+    
+    if not locations:
+        logger.warning("No locations to prewarm. Check that preapproved_locations.json exists and contains valid slugs.")
+        sys.exit(1)
     
     # Create prewarmer
     prewarmer = CachePrewarmer(args.base_url, args.redis_url)

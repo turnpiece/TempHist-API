@@ -221,39 +221,111 @@ class JobWorker:
             self.redis.lrem(self.job_queue_key, 1, job_id)
     
     async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
-        """Process a record computation job."""
-        from main import get_temperature_data_v1
+        """Process a record computation job with per-year granularity."""
+        from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year
+        from cache_utils import (
+            normalize_location_for_cache, rec_key, rec_etag_key,
+            TTL_STABLE, ETagGenerator
+        )
         from fastapi import HTTPException
         
         logger.info(f"🔍 Processing record job with params: {params}")
-        period = params.get("period")
+        scope = params.get("scope") or params.get("period")  # Support both for backward compatibility
         location = params.get("location")
         identifier = params.get("identifier")
+        year = params.get("year")
         
-        if not all([period, location, identifier]):
-            raise ValueError(f"Missing required params - period: {period}, location: {location}, identifier: {identifier}")
+        if not all([scope, location, identifier]):
+            raise ValueError(f"Missing required params - scope: {scope}, location: {location}, identifier: {identifier}")
         
-        # Build cache key using the same format as the main endpoint
-        from cache_utils import normalize_location_for_cache
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
+        # Normalize location to slug
+        slug = normalize_location_for_cache(location)
+        current_year = datetime.now(timezone.utc).year
         
-        # Compute the data - catch HTTPException and convert to regular exception
-        try:
-            data = await get_temperature_data_v1(location, period, identifier)
-        except HTTPException as http_err:
-            # Convert HTTPException to regular exception for job error handling
-            raise ValueError(f"{http_err.detail}") from http_err
-        
-        # Store in cache using the same utilities as the main endpoint
-        etag = self._store_cache_data(cache_key, data)
-        
-        return {
-            "cache_key": cache_key,
-            "etag": etag,
-            "data": data,
-            "computed_at": datetime.now(timezone.utc).isoformat()
-        }
+        # If year is specified, fetch only that year's data
+        if year is not None:
+            logger.info(f"📅 Fetching data for year {year} only")
+            
+            # Fetch full data (get_temperature_data_v1 fetches all years, but we'll extract just the one we need)
+            try:
+                full_data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
+            except HTTPException as http_err:
+                raise ValueError(f"{http_err.detail}") from http_err
+            
+            # Extract per-year records
+            per_year_records = _extract_per_year_records(full_data)
+            
+            if year not in per_year_records:
+                raise ValueError(f"No data found for year {year}")
+            
+            # Get the specific year's record
+            year_record = per_year_records[year]
+            
+            # Determine TTL
+            if year < current_year:
+                ttl = TTL_STABLE
+            else:
+                ttl = _get_ttl_for_current_year(scope)
+            
+            # Generate cache keys
+            year_key = rec_key(scope, slug, identifier, year)
+            etag_key = rec_etag_key(scope, slug, identifier, year)
+            
+            # Generate ETag
+            etag = ETagGenerator.generate_etag(year_record)
+            
+            # Store per-year record
+            try:
+                json_data = json.dumps(year_record, sort_keys=True, separators=(',', ':'))
+                self.redis.setex(year_key, ttl, json_data)
+                self.redis.setex(etag_key, ttl, etag)
+                logger.info(f"✅ Cached per-year record: {year_key} (TTL: {ttl}s)")
+            except Exception as e:
+                logger.warning(f"Error caching per-year record {year_key}: {e}")
+                raise
+            
+            return {
+                "cache_key": year_key,
+                "etag": etag,
+                "year": year,
+                "data": year_record,
+                "computed_at": datetime.now(timezone.utc).isoformat()
+            }
+        else:
+            # Backward compatibility: if no year specified, fetch all years (old behavior)
+            logger.info(f"⚠️  No year specified, fetching all years (backward compatibility mode)")
+            try:
+                data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
+            except HTTPException as http_err:
+                raise ValueError(f"{http_err.detail}") from http_err
+            
+            # Extract and store all per-year records
+            per_year_records = _extract_per_year_records(data)
+            for y, record_data in per_year_records.items():
+                year_key = rec_key(scope, slug, identifier, y)
+                etag_key = rec_etag_key(scope, slug, identifier, y)
+                
+                if y < current_year:
+                    ttl = TTL_STABLE
+                else:
+                    ttl = _get_ttl_for_current_year(scope)
+                
+                etag = ETagGenerator.generate_etag(record_data)
+                
+                try:
+                    json_data = json.dumps(record_data, sort_keys=True, separators=(',', ':'))
+                    self.redis.setex(year_key, ttl, json_data)
+                    self.redis.setex(etag_key, ttl, etag)
+                except Exception as e:
+                    logger.warning(f"Error caching year {y}: {e}")
+            
+            # Return summary
+            return {
+                "cache_keys": [rec_key(scope, slug, identifier, y) for y in per_year_records.keys()],
+                "years_cached": list(per_year_records.keys()),
+                "data": data,
+                "computed_at": datetime.now(timezone.utc).isoformat()
+            }
     
     async def process_cache_warming_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
         """Process a cache warming job."""
