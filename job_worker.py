@@ -13,7 +13,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from cache_utils import get_job_manager, get_cache, JobStatus
+from cache_utils import get_job_manager, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,6 @@ class JobWorker:
         try:
             # Get all pending jobs
             job_manager = get_job_manager()
-            cache = get_cache()
             
             # Find pending jobs (this is a simple implementation)
             # In production, you might want to use Redis Streams or a proper queue
@@ -101,7 +100,7 @@ class JobWorker:
             
             for job_id in pending_jobs:
                 logger.info(f"🔄 Processing job: {job_id}")
-                await self.process_job(job_id, job_manager, cache)
+                await self.process_job(job_id, job_manager)
                 
         except Exception as e:
             logger.error(f"❌ Error processing jobs: {e}")
@@ -146,7 +145,7 @@ class JobWorker:
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return []
     
-    async def process_job(self, job_id: str, job_manager, cache):
+    async def process_job(self, job_id: str, job_manager):
         """Process a single job."""
         start_time = datetime.now(timezone.utc)
         try:
@@ -170,10 +169,10 @@ class JobWorker:
             try:
                 if job_type == "record_computation":
                     logger.info(f"🔢 Starting record computation...")
-                    result = await self.process_record_job(params, cache)
+                    result = await self.process_record_job(params)
                 elif job_type == "cache_warming":
                     logger.info(f"🔥 Starting cache warming...")
-                    result = await self.process_cache_warming_job(params, cache)
+                    result = await self.process_cache_warming_job(params)
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
             except Exception as compute_error:
@@ -220,7 +219,7 @@ class JobWorker:
             # Remove failed job from queue
             self.redis.lrem(self.job_queue_key, 1, job_id)
     
-    async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
+    async def process_record_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record computation job with per-year granularity."""
         from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year
         from cache_utils import (
@@ -292,8 +291,8 @@ class JobWorker:
                 "computed_at": datetime.now(timezone.utc).isoformat()
             }
         else:
-            # Backward compatibility: if no year specified, fetch all years (old behavior)
-            logger.info(f"⚠️  No year specified, fetching all years (backward compatibility mode)")
+            # Default behavior: if no year specified, fetch all available years for the identifier
+            logger.info("ℹ️ No year specified; returning the full historical range")
             try:
                 data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
             except HTTPException as http_err:
@@ -327,7 +326,7 @@ class JobWorker:
                 "computed_at": datetime.now(timezone.utc).isoformat()
             }
     
-    async def process_cache_warming_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
+    async def process_cache_warming_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a cache warming job."""
         from cache_utils import get_cache_warmer
         
