@@ -4,8 +4,8 @@ import logging
 import redis
 import asyncio
 import httpx
-from datetime import datetime, timedelta, timezone, date as dt_date
-from typing import Literal, Dict, Tuple, Optional, List
+from datetime import datetime, timedelta, timezone
+from typing import Literal, Dict, List
 from fastapi import APIRouter, HTTPException, Path, Response, Request, Depends
 from fastapi.responses import JSONResponse
 
@@ -14,25 +14,17 @@ from models import (
     TemperatureValue, DateRange, AverageData, TrendData
 )
 from config import (
-    CACHE_ENABLED, DEBUG, LONG_CACHE_DURATION, SHORT_CACHE_DURATION, API_KEY,
+    CACHE_ENABLED, DEBUG, API_KEY,
     MAX_CONCURRENT_REQUESTS
 )
 from cache_utils import (
-    get_cache_value, set_cache_value, generate_cache_key, get_cache_stats,
     normalize_location_for_cache, get_cache_updated_timestamp, _get_location_timezone,
     rec_key, bundle_key, rec_etag_key, get_records, assemble_and_cache,
     compute_bundle_etag, get_year_etags, TTL_STABLE, TTL_CURRENT_DAILY,
-    TTL_CURRENT_WEEKLY, TTL_CURRENT_MONTHLY, TTL_CURRENT_YEARLY, TTL_BUNDLE,
+    TTL_CURRENT_WEEKLY, TTL_CURRENT_MONTHLY, TTL_CURRENT_YEARLY,
     get_job_manager
 )
 
-def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None, redis_client: Optional[redis.Redis] = None) -> bool:
-    """Check if a date is today in the location's timezone, or UTC if location not found.
-    
-    This is a wrapper that uses cache_utils logic but can be imported here.
-    """
-    from cache_utils import _is_today_in_location_timezone as check_today
-    return check_today(date, location, redis_client)
 from utils.validation import validate_location_for_ssrf
 from utils.location_validation import (
     is_location_likely_invalid, validate_location_response, InvalidLocationCache
@@ -40,9 +32,8 @@ from utils.location_validation import (
 from routers.dependencies import get_redis_client, get_invalid_location_cache
 from utils.temperature import calculate_trend_slope, get_friendly_date, generate_summary
 from utils.weather import get_year_range, track_missing_year, create_metadata
-from utils.weather_data import get_temperature_series, get_forecast_data
+from utils.weather_data import get_temperature_series
 from utils.cache_headers import set_weather_cache_headers
-from utils.firebase import verify_firebase_token
 from constants import VC_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -446,6 +437,12 @@ async def get_temperature_data_v1(
     
     # Generate summary text
     summary_text = generate_summary(summary_data, end_date_obj, period)
+
+    # Ensure metadata reflects missing current year when data is unavailable
+    available_years = {v.year for v in values}
+    if current_year not in available_years:
+        if not any(entry.get("year") == current_year for entry in missing_years):
+            track_missing_year(missing_years, current_year, "no_data_current_year")
     
     # Replace the friendly date in the summary with our period-specific version
     summary_text = summary_text.replace(get_friendly_date(end_date_obj), friendly_date)
@@ -569,6 +566,11 @@ def _rebuild_full_response_from_values(
     end_date_obj = datetime(current_year, month, day)
     summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
     summary_text = generate_summary(summary_data, end_date_obj, period)
+
+    available_years = {v.get('year') for v in values if v.get('year') is not None}
+    rebuilt_missing_years = []
+    if current_year not in available_years:
+        track_missing_year(rebuilt_missing_years, current_year, "no_data_current_year")
     
     return {
         "period": period,
@@ -584,7 +586,7 @@ def _rebuild_full_response_from_values(
         "average": avg_data,
         "trend": trend_data,
         "summary": summary_text,
-        "metadata": create_metadata(len(years), len(values), [], {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
+        "metadata": create_metadata(len(years), len(values), rebuilt_missing_years, {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
         "timezone": _get_location_timezone(location, redis_client),
         "updated": datetime.now(timezone.utc).isoformat()
     }

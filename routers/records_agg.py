@@ -1,14 +1,10 @@
 # routers/records_agg.py
-from fastapi import APIRouter, HTTPException, Query, Depends, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from typing import List, Dict, Any, Optional, Tuple, Literal, Set
-import os, aiohttp, asyncio, json
-import redis
-from datetime import datetime, date, timedelta
-from pydantic import BaseModel
+from typing import List, Dict, Any, Optional, Literal
+import os, aiohttp, asyncio
+from datetime import datetime, date
 from constants import VC_BASE_URL
-from dateutil.relativedelta import relativedelta
-from routers.dependencies import get_redis_client
 from urllib.parse import quote
 
 router = APIRouter()

@@ -3,6 +3,7 @@ import json
 import logging
 import redis
 from datetime import datetime
+from typing import Any, Dict, List, Tuple
 from fastapi import APIRouter, Request, Query, HTTPException, Depends
 from models import AnalyticsData, AnalyticsResponse
 from utils.ip_utils import get_client_ip
@@ -13,6 +14,125 @@ from analytics_storage import AnalyticsStorage
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+INT_FIELDS_DEFAULTS: Tuple[Tuple[str, int], ...] = (
+    ("session_duration", 0),
+    ("api_calls", 0),
+    ("retry_attempts", 0),
+    ("location_failures", 0),
+    ("error_count", 0),
+)
+
+
+def _coerce_non_negative_int(value: Any, field: str, default: int, warnings: List[str]) -> int:
+    """Best-effort coercion of analytics numeric fields to non-negative ints."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        coerced = int(value)
+    elif isinstance(value, (int, float)):
+        coerced = int(value)
+    elif isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return default
+        cleaned = cleaned.replace(",", "")
+        if cleaned.endswith("%"):
+            cleaned = cleaned[:-1]
+        try:
+            coerced = int(float(cleaned))
+        except ValueError:
+            warnings.append(f"{field}: could not parse '{value}', defaulted to {default}")
+            return default
+    else:
+        warnings.append(f"{field}: unsupported type {type(value).__name__}, defaulted to {default}")
+        return default
+    if coerced < 0:
+        warnings.append(f"{field}: negative value {coerced} reset to {default}")
+        return default
+    return coerced
+
+
+def _normalize_failure_rate(value: Any, warnings: List[str]) -> str:
+    """Normalize API failure rate into a percentage string."""
+    default = "0%"
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        numeric = max(float(value), 0.0)
+        return f"{numeric:.1f}%" if numeric % 1 else f"{int(numeric)}%"
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return default
+        if cleaned.endswith("%"):
+            cleaned = cleaned[:-1]
+        cleaned = cleaned.replace(",", "")
+        try:
+            numeric = max(float(cleaned), 0.0)
+            return f"{numeric:.1f}%" if numeric % 1 else f"{int(numeric)}%"
+        except ValueError:
+            warnings.append(f"api_failure_rate: could not parse '{value}', defaulted to {default}")
+            return default
+    warnings.append(f"api_failure_rate: unsupported type {type(value).__name__}, defaulted to {default}")
+    return default
+
+
+def _sanitize_recent_errors(raw_errors: Any, warnings: List[str]) -> List[Dict[str, Any]]:
+    """Return only well-formed recent error records."""
+    if raw_errors is None:
+        return []
+    if not isinstance(raw_errors, list):
+        warnings.append("recent_errors: expected list, defaulted to empty list")
+        return []
+    sanitized: List[Dict[str, Any]] = []
+    required_keys = {"timestamp", "error_type", "message"}
+    for idx, item in enumerate(raw_errors):
+        if not isinstance(item, dict):
+            warnings.append(f"recent_errors[{idx}]: skipped non-dict entry")
+            continue
+        if not required_keys.issubset(item.keys()):
+            missing = required_keys.difference(item.keys())
+            warnings.append(f"recent_errors[{idx}]: missing keys {sorted(missing)}, entry skipped")
+            continue
+        sanitized.append(item)
+    return sanitized
+
+
+def _sanitize_analytics_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """Sanitize raw analytics payload to prevent validation failures."""
+    sanitized: Dict[str, Any] = {}
+    warnings: List[str] = []
+    data = payload or {}
+
+    for field_name, default in INT_FIELDS_DEFAULTS:
+        sanitized[field_name] = _coerce_non_negative_int(data.get(field_name), field_name, default, warnings)
+
+    sanitized["api_failure_rate"] = _normalize_failure_rate(data.get("api_failure_rate"), warnings)
+    sanitized["recent_errors"] = _sanitize_recent_errors(data.get("recent_errors"), warnings)
+
+    # Optional string metadata fields
+    for optional_field in ("app_version", "platform", "user_agent", "session_id"):
+        value = data.get(optional_field)
+        if value is None:
+            sanitized[optional_field] = None
+        else:
+            sanitized[optional_field] = str(value)
+
+    # Preserve any additional metadata fields not explicitly handled
+    extra_fields = set(data.keys()) - {name for name, _ in INT_FIELDS_DEFAULTS} - {
+        "api_failure_rate",
+        "recent_errors",
+        "app_version",
+        "platform",
+        "user_agent",
+        "session_id",
+    }
+    for extra_field in extra_fields:
+        sanitized[extra_field] = data.get(extra_field)
+
+    return sanitized, warnings
 
 
 @router.post("/analytics", response_model=AnalyticsResponse)
@@ -119,11 +239,14 @@ async def submit_analytics(
                 detail="Failed to read request body"
             )
         
+        # Sanitize analytics payload before validation
+        sanitized_payload, sanitization_warnings = _sanitize_analytics_payload(json_data)
+
         # Validate data using Pydantic model
         try:
-            analytics_data = AnalyticsData(**json_data)
+            analytics_data = AnalyticsData(**sanitized_payload)
         except Exception as e:
-            logger.error(f"❌ ANALYTICS VALIDATION ERROR: {e} | IP={client_ip} | Data: {json_data}")
+            logger.error(f"❌ ANALYTICS VALIDATION ERROR: {e} | IP={client_ip} | Data: {sanitized_payload}")
             
             # Provide detailed validation error information
             if hasattr(e, 'errors'):
@@ -131,9 +254,9 @@ async def submit_analytics(
                 for error in e.errors():
                     field = " -> ".join(str(loc) for loc in error['loc'])
                     error_details.append(f"{field}: {error['msg']}")
-                error_message = f"Validation failed: {'; '.join(error_details)}"
+                error_message = f"Validation failed after sanitization: {'; '.join(error_details)}"
             else:
-                error_message = f"Validation failed: {str(e)}"
+                error_message = f"Validation failed after sanitization: {str(e)}"
             
             raise HTTPException(
                 status_code=422,
@@ -155,9 +278,18 @@ async def submit_analytics(
                 detail="Failed to store analytics data"
             )
         
+        if sanitization_warnings:
+            logger.warning(
+                f"⚠️  ANALYTICS SANITIZATION WARNINGS: {sanitization_warnings} | IP={client_ip}"
+            )
+
+        response_message = "Analytics data submitted successfully"
+        if sanitization_warnings:
+            response_message += f" (sanitized {len(sanitization_warnings)} field(s))"
+
         return AnalyticsResponse(
             status="success",
-            message="Analytics data submitted successfully",
+            message=response_message,
             analytics_id=analytics_id,
             timestamp=datetime.now().isoformat()
         )

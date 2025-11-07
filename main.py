@@ -1935,14 +1935,14 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         else:
             # For daily periods, use the period context
             avg_summary = "However, " if cold_summary else ""
-            # Don't capitalize the period context when it follows "However, "
+            # Don't capitalise the period context when it follows "However, "
             if cold_summary:  # Use the same condition as above
                 # Force lowercase for period context when following "However, "
                 period_lower = period_context.lower()
                 avg_summary += f"{period_lower} {tense_context} {rounded_diff}°C warmer than average."
             else:
-                period_capitalized = period_context.capitalize()
-                avg_summary += f"{period_capitalized} {tense_context} {rounded_diff}°C warmer than average."
+                period_capitalised = period_context.capitalize()
+                avg_summary += f"{period_capitalised} {tense_context} {rounded_diff}°C warmer than average."
     else:
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
@@ -1951,14 +1951,14 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         else:
             # For daily periods, use the period context
             avg_summary = "However, " if warm_summary else ""
-            # Don't capitalize the period context when it follows "However, "
+            # Don't capitalise the period context when it follows "However, "
             if warm_summary:  # Use the same condition as above
                 # Force lowercase for period context when following "However, "
                 period_lower = period_context.lower()
                 avg_summary += f"{period_lower} {tense_context} {abs(rounded_diff)}°C cooler than average."
             else:
-                period_capitalized = period_context.capitalize()
-                avg_summary += f"{period_capitalized} {tense_context} {abs(rounded_diff)}°C cooler than average."
+                period_capitalised = period_context.capitalize()
+                avg_summary += f"{period_capitalised} {tense_context} {abs(rounded_diff)}°C cooler than average."
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
@@ -2388,6 +2388,20 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
             logger.debug(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
 
     data_list = sorted(data, key=lambda d: d['x'])
+
+    if data_list:
+        latest_year = data_list[-1]['x']
+        if isinstance(latest_year, str):
+            try:
+                latest_year = int(latest_year)
+            except ValueError:
+                latest_year = None
+        if latest_year is not None and latest_year != current_year:
+            if not any(entry.get("year") == current_year for entry in missing_years):
+                track_missing_year(missing_years, current_year, "no_data_current_year")
+    elif current_year not in [entry.get("year") for entry in missing_years]:
+        track_missing_year(missing_years, current_year, "no_data_current_year")
+
     if not data_list:
         logger.warning(f"No valid temperature data found for {location} on {month}-{day}")
         return {

@@ -5,8 +5,6 @@ import redis
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Path, Query, Response, Depends, Request
-from fastapi.responses import JSONResponse
-from urllib.parse import quote
 from cache_utils import get_job_manager, JobStatus
 from routers.dependencies import get_redis_client
 

@@ -1,6 +1,6 @@
 """Temperature calculation and summary generation utilities."""
 from typing import List, Dict
-from datetime import datetime, timedelta, date as dt_date
+from datetime import datetime, timedelta
 
 
 def calculate_historical_average(data: List[Dict[str, float]]) -> float:
@@ -286,8 +286,8 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
                 period_lower = period_context.lower()
                 avg_summary += f"{period_lower} {tense_context} {rounded_diff}°C warmer than average."
             else:
-                period_capitalized = period_context.capitalize()
-                avg_summary += f"{period_capitalized} {tense_context} {rounded_diff}°C warmer than average."
+                period_capitalised = period_context.capitalize()
+                avg_summary += f"{period_capitalised} {tense_context} {rounded_diff}°C warmer than average."
     else:
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
@@ -300,7 +300,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
                 period_lower = period_context.lower()
                 avg_summary += f"{period_lower} {tense_context} {abs(rounded_diff)}°C cooler than average."
             else:
-                period_capitalized = period_context.capitalize()
-                avg_summary += f"{period_capitalized} {tense_context} {abs(rounded_diff)}°C cooler than average."
+                period_capitalised = period_context.capitalize()
+                avg_summary += f"{period_capitalised} {tense_context} {abs(rounded_diff)}°C cooler than average."
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))

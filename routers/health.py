@@ -6,7 +6,7 @@ import time
 import httpx
 import redis
 from config import (
-    DEBUG, API_KEY, OPENWEATHER_API_KEY, REDIS_URL
+    API_KEY, OPENWEATHER_API_KEY
 )
 from cache_utils import get_cache_stats
 from routers.dependencies import get_redis_client

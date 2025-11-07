@@ -1,5 +1,4 @@
 """Redis client creation and management."""
-import os
 import logging
 import ssl
 from urllib.parse import urlparse
@@ -20,10 +19,7 @@ def create_redis_client(url: str) -> redis.Redis:
         raise ValueError("Redis password required in production environment")
     
     # Enforce SSL in production
-    ssl_context = None
-    if parsed.scheme == "rediss":
-        ssl_context = ssl.create_default_context()
-    elif env == "production":
+    if parsed.scheme != "rediss" and env == "production":
         logger.warning("⚠️  Redis not using SSL (rediss://) in production! Consider using rediss:// for encrypted connections.")
         # In production, warn but don't fail (some providers handle SSL at network level)
     

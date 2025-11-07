@@ -23,7 +23,6 @@ from fastapi import FastAPI
 from routers.locations_preapproved import (
     router,
     LocationItem,
-    PreapprovedResponse,
     initialize_locations_data,
     get_cache_key,
     validate_country_code,

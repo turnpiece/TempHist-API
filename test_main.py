@@ -3,8 +3,6 @@ from fastapi.testclient import TestClient
 from datetime import datetime
 from unittest.mock import patch, MagicMock, AsyncMock
 import time
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from main import (
     calculate_historical_average, 
     calculate_trend_slope, 

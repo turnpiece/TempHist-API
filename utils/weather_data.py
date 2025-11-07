@@ -4,8 +4,8 @@ import logging
 import asyncio
 import aiohttp
 import httpx
-from typing import Dict, List, Optional
-from datetime import datetime, date as dt_date, timedelta
+from typing import Dict
+from datetime import datetime, timedelta
 from config import (
     CACHE_ENABLED, FILTER_WEATHER_DATA, SHORT_CACHE_DURATION_SECONDS,
     LONG_CACHE_DURATION_SECONDS, SHORT_CACHE_DURATION, LONG_CACHE_DURATION,
@@ -17,7 +17,7 @@ from cache_utils import (
 )
 from utils.validation import build_visual_crossing_url
 from utils.sanitization import sanitize_url, sanitize_for_logging
-from utils.weather import is_today, is_today_or_future
+from utils.weather import is_today
 import redis
 
 logger = logging.getLogger(__name__)
@@ -374,6 +374,20 @@ async def get_temperature_series(
             logger.debug(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
 
     data_list = sorted(data, key=lambda d: d['x'])
+
+    if data_list:
+        latest_year = data_list[-1]['x']
+        if isinstance(latest_year, str):
+            try:
+                latest_year = int(latest_year)
+            except ValueError:
+                latest_year = None
+        if latest_year is not None and latest_year != current_year:
+            if not any(entry.get("year") == current_year for entry in missing_years):
+                track_missing_year(missing_years, current_year, "no_data_current_year")
+    elif current_year not in [entry.get("year") for entry in missing_years]:
+        track_missing_year(missing_years, current_year, "no_data_current_year")
+
     if not data_list:
         logger.warning(f"No valid temperature data found for {location} on {month}-{day}")
         return {

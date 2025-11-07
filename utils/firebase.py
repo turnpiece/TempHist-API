@@ -4,7 +4,7 @@ import json
 import logging
 import firebase_admin
 from firebase_admin import credentials
-from config import DEBUG
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -49,5 +49,5 @@ def verify_firebase_token(request):
         from firebase_admin import auth
         decoded_token = auth.verify_id_token(id_token)
         return decoded_token
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=403, detail="Invalid token")

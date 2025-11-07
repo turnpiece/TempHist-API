@@ -1,7 +1,7 @@
 """Location validation utilities."""
 import json
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 from datetime import datetime, timezone
 import redis
 

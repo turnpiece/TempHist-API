@@ -1,8 +1,10 @@
 """Input validation utilities for security."""
 import re
 from datetime import datetime
-from config import VISUAL_CROSSING_UNIT_GROUP, VISUAL_CROSSING_INCLUDE_PARAMS, VISUAL_CROSSING_REMOTE_DATA
-from config import API_KEY, VISUAL_CROSSING_BASE_URL
+from typing import Dict
+from urllib.parse import quote
+import logging
+from config import VISUAL_CROSSING_BASE_URL
 
 
 def clean_location_string(location: str) -> str:
@@ -159,13 +161,6 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
     Raises:
         ValueError: If location or date validation fails
     """
-    from urllib.parse import quote
-    import logging
-    from config import (
-        VISUAL_CROSSING_BASE_URL, VISUAL_CROSSING_UNIT_GROUP,
-        VISUAL_CROSSING_INCLUDE_PARAMS, VISUAL_CROSSING_REMOTE_DATA, API_KEY
-    )
-    
     logger = logging.getLogger(__name__)
     
     # Validate inputs to prevent SSRF and injection attacks
@@ -189,8 +184,8 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
             logger.error(f"Encoded location contains dangerous pattern after encoding: {pattern}")
             raise ValueError("Invalid location format")
     
-    base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
+    base_params = f"unitGroup={VISUAL_CROSSING_BASE_URL}&include={VISUAL_CROSSING_BASE_URL}&key={VISUAL_CROSSING_BASE_URL}"
     if remote:
-        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{base_params}&{VISUAL_CROSSING_BASE_URL}"
     else:
         return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{base_params}"
