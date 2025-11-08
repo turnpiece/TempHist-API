@@ -2,14 +2,13 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional, Literal
-import os, aiohttp, asyncio
+import os, aiohttp, asyncio, re
 from datetime import datetime, date
 from constants import VC_BASE_URL
+from utils.visual_crossing_timeline import close_client_session as close_timeline_client
 from urllib.parse import quote
 
 router = APIRouter()
-# Strip whitespace/newlines from API key to prevent authentication issues
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 UNIT_GROUP_DEFAULT = os.getenv("UNIT_GROUP", "celsius")
 
 def _safe_parse_date(s: str) -> date:
@@ -126,202 +125,6 @@ async def rolling_bundle_preload(
         unit_group
     )
 
-_client: Optional[aiohttp.ClientSession] = None
-_sem = asyncio.Semaphore(2)
-
-async def _client_session() -> aiohttp.ClientSession:
-    global _client
-    if _client is None or _client.closed:
-        # Increased timeout for large date ranges, with connection and read timeouts
-        _client = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(
-                total=120,  # 2 minutes total timeout for large requests
-                connect=30,  # 30 seconds to establish connection
-                sock_read=90  # 90 seconds to read response data
-            )
-        )
-    return _client
-
-async def _close_client_session():
-    """Close the global client session."""
-    global _client
-    if _client is not None and not _client.closed:
-        await _client.close()
-        _client = None
-
-def _years_range() -> tuple[int, int]:
-    y = datetime.now().year
-    return (y - 50, y)
-
-def _convert_unit_group_for_vc(unit_group: str) -> str:
-    """Convert API unit_group format (celsius/fahrenheit) to Visual Crossing format (metric/us).
-    
-    Args:
-        unit_group: Unit group in API format ('celsius' or 'fahrenheit')
-        
-    Returns:
-        Visual Crossing unit group ('metric' for celsius, 'us' for fahrenheit)
-    """
-    if unit_group.lower() == "celsius":
-        return "metric"
-    elif unit_group.lower() == "fahrenheit":
-        return "us"
-    elif unit_group.lower() in ("metric", "us", "uk"):
-        # Already in VC format, return as-is
-        return unit_group.lower()
-    else:
-        # Default to metric if unknown
-        return "metric"
-
-async def fetch_historysummary(
-    location: str,
-    min_year: Optional[int] = None,
-    max_year: Optional[int] = None,
-    chrono_unit: str = "years",
-    break_by: str = "years",
-    unit_group: str = UNIT_GROUP_DEFAULT,
-    daily_summaries: bool = False,
-    params_extra: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
-    # Validate location to prevent SSRF attacks
-    from utils.validation import validate_location_for_ssrf
-    try:
-        location = validate_location_for_ssrf(location)
-    except ValueError as e:
-        raise ValueError(f"Invalid location: {str(e)}") from e
-    
-    if API_KEY is None:
-        raise RuntimeError("VISUAL_CROSSING_API_KEY is not configured")
-    if min_year is None or max_year is None:
-        min_year, max_year = _years_range()
-    params = {
-        "aggregateHours": "24",
-        "minYear": str(min_year),
-        "maxYear": str(max_year),
-        "chronoUnit": chrono_unit,        # weeks | months | years
-        "breakBy": break_by,              # years | self | none
-        "dailySummaries": "true" if daily_summaries else "false",
-        "contentType": "json",
-        "unitGroup": _convert_unit_group_for_vc(unit_group),
-        "locations": location,
-        "maxStations": 8,
-        "maxDistance": 120000,
-        "key": API_KEY,
-    }
-    if params_extra:
-        params.update(params_extra)
-    url = f"{VC_BASE_URL}/weatherdata/historysummary"
-    sess = await _client_session()
-    async with _sem:
-        async with sess.get(url, params=params, headers={"Accept-Encoding": "gzip"}) as resp:
-            if resp.status >= 400:
-                text = await resp.text()
-                # Historysummary endpoint often returns 400s - don't raise HTTPException, let caller handle fallback
-                # Log detailed error but return generic error to prevent information disclosure
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error(f"Visual Crossing API error: status={resp.status}, response={text[:200]}")
-                # Return generic error - don't expose API response details
-                raise ValueError(f"External API error: {resp.status}")
-            return await resp.json()
-
-def _historysummary_values(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    locs = payload.get("locations") or {}
-    if not locs:
-        return []
-    first = next(iter(locs.values()))
-    vals = first.get("values")
-    if isinstance(vals, list):
-        return vals
-    data = first.get("data")
-    if isinstance(data, dict) and isinstance(data.get("values"), list):
-        return data["values"]
-    return []
-
-def _row_year(row: Dict[str, Any]) -> Optional[int]:
-    for k in ("year", "years"):
-        v = row.get(k)
-        if isinstance(v, int): return v
-        if isinstance(v, str) and v.isdigit(): return int(v)
-    for k in ("datetime", "datetimeStr", "period", "startTime", "start"):
-        v = row.get(k)
-        if isinstance(v, str) and v[:4].isdigit(): return int(v[:4])
-    return None
-
-def _row_month(row: Dict[str, Any]) -> Optional[int]:
-    for k in ("month", "months", "monthnum", "monthNum"):
-        v = row.get(k)
-        if isinstance(v, int): return v
-        if isinstance(v, str) and v.isdigit(): return int(v)
-    for k in ("datetime", "datetimeStr", "period", "start", "startTime"):
-        v = row.get(k)
-        if isinstance(v, str) and len(v) >= 7:
-            try: return int(v[5:7])
-            except: pass
-    return None
-
-def _row_week_start(row: Dict[str, Any]) -> Optional[str]:
-    for k in ("period", "start", "startTime", "datetime", "datetimeStr"):
-        v = row.get(k)
-        if isinstance(v, str) and len(v) >= 10 and v[4] == "-" and v[7] == "-":
-            return v[:10]
-    return None
-
-def _row_mean_temp(row: Dict[str, Any]) -> Optional[float]:
-    for k in ("temp", "tempavg", "avgtemp", "averageTemp"):
-        v = row.get(k)
-        if isinstance(v, (int, float)): return float(v)
-        if isinstance(v, str):
-            try: return float(v)
-            except: pass
-    return None
-
-@router.get("/v1/records/monthly/{location}/{ym}/series")
-async def monthly_series(location: str, ym: str, unit_group: str = UNIT_GROUP_DEFAULT):
-    # ym is YYYY-MM (same month across all years)
-    try:
-        month = datetime.strptime(ym, "%Y-%m").month
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Identifier must be YYYY-MM")
-    min_year, max_year = _years_range()
-    payload = await fetch_historysummary(location, min_year, max_year, chrono_unit="months", break_by="years", unit_group=unit_group)
-    rows = _historysummary_values(payload)
-    items = []
-    for r in rows:
-        if _row_month(r) == month:
-            y = _row_year(r); t = _row_mean_temp(r)
-            if y is not None and t is not None:
-                items.append({"year": y, "temp": round(t, 2)})
-    items.sort(key=lambda x: x["year"])
-    return {"period": "monthly", "location": location, "identifier": ym, "unit_group": unit_group, "values": items, "count": len(items)}
-
-@router.get("/v1/records/weekly/{location}/{week_start}/series")
-async def weekly_series(location: str, week_start: str, unit_group: str = UNIT_GROUP_DEFAULT):
-    """
-    week_start = MM-DD or YYYY-MM-DD (anchor). We match the *ISO week number* of that anchor
-    across all years using historysummary weeks (one call).
-    """
-    try:
-        mmdd = week_start if len(week_start) == 5 else datetime.strptime(week_start, "%Y-%m-%d").strftime("%m-%d")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Identifier must be MM-DD or YYYY-MM-DD")
-    min_year, max_year = _years_range()
-    payload = await fetch_historysummary(location, min_year, max_year, chrono_unit="weeks", break_by="years", unit_group=unit_group)
-    rows = _historysummary_values(payload)
-    desired_week = {y: datetime.strptime(f"{y}-{mmdd}", "%Y-%m-%d").isocalendar().week for y in range(min_year, max_year + 1)}
-    items = []
-    for r in rows:
-        y = _row_year(r); start = _row_week_start(r); t = _row_mean_temp(r)
-        if y is None or t is None or not start: continue
-        try:
-            wn = datetime.strptime(start, "%Y-%m-%d").isocalendar().week
-        except Exception:
-            continue
-        if wn == desired_week.get(y):
-            items.append({"year": y, "temp": round(t, 2)})
-    items.sort(key=lambda x: x["year"])
-    return {"period": "weekly", "location": location, "identifier": mmdd, "unit_group": unit_group, "values": items, "count": len(items), "note": "historysummary uses week bins; we align via ISO week number"}
-
 # Cache for daily data (used by other endpoints)
 class KVCache:
     def __init__(self, redis=None, ttl_seconds: int = 24 * 60 * 60):
@@ -357,8 +160,8 @@ async def _close_rolling_http_client():
 
 async def cleanup_http_sessions():
     """Clean up all HTTP client sessions."""
-    await _close_client_session()
     await _close_rolling_http_client()
+    await close_timeline_client()
 
 # Helper functions
 def _safe_parse_date(s: str) -> date:

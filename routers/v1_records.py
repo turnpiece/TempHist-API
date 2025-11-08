@@ -3,9 +3,8 @@ import json
 import logging
 import redis
 import asyncio
-import httpx
-from datetime import datetime, timedelta, timezone
-from typing import Literal, Dict, List
+from datetime import datetime, timedelta, timezone, date
+from typing import Literal, Dict, List, Tuple
 from fastapi import APIRouter, HTTPException, Path, Response, Request, Depends
 from fastapi.responses import JSONResponse
 
@@ -15,7 +14,6 @@ from models import (
 )
 from config import (
     CACHE_ENABLED, DEBUG, API_KEY,
-    MAX_CONCURRENT_REQUESTS
 )
 from cache_utils import (
     normalize_location_for_cache, get_cache_updated_timestamp, _get_location_timezone,
@@ -34,13 +32,14 @@ from utils.temperature import calculate_trend_slope, get_friendly_date, generate
 from utils.weather import get_year_range, track_missing_year, create_metadata
 from utils.weather_data import get_temperature_series
 from utils.cache_headers import set_weather_cache_headers
-from constants import VC_BASE_URL
+from utils.daily_temperature_store import (
+    DailyTemperatureRecord,
+    get_daily_temperature_store,
+)
+from utils.visual_crossing_timeline import fetch_timeline_days
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# Global semaphore for Visual Crossing API requests
-visual_crossing_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 
 def parse_identifier(period: str, identifier: str) -> tuple:
@@ -55,12 +54,6 @@ def parse_identifier(period: str, identifier: str) -> tuple:
         return month, day, period
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Identifier must be in MM-DD format: {str(e)}")
-
-
-async def get_http_client():
-    """Get configured httpx client."""
-    from config import HTTP_TIMEOUT
-    return httpx.AsyncClient(timeout=HTTP_TIMEOUT)
 
 
 def _convert_unit_group_for_vc(unit_group: str) -> str:
@@ -83,49 +76,183 @@ def _convert_unit_group_for_vc(unit_group: str) -> str:
         # Default to metric if unknown
         return "metric"
 
-async def _fetch_yearly_summary(
-    location: str,
-    start_year: int,
-    end_year: int,
-    unit_group: str = "celsius"
-):
-    """Fetch yearly summary data from Visual Crossing historysummary endpoint."""
-    url = f"{VC_BASE_URL}/weatherdata/historysummary"
-    params = {
-        "aggregateHours": 24,
-        "minYear": start_year,
-        "maxYear": end_year,
-        "chronoUnit": "years",
-        "breakBy": "years",
-        "dailySummaries": "false",
-        "contentType": "json",
-        "unitGroup": _convert_unit_group_for_vc(unit_group),
-        "locations": location,
-        "maxStations": 8,
-        "maxDistance": 120000,
-        "key": API_KEY,
-    }
-    
-    async with visual_crossing_semaphore:
-        http = await get_http_client()
-        async with http:
-            r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
-    r.raise_for_status()
-    data = r.json()
-    
-    # Parse the response to extract yearly temperature data
-    yearly_data = []
-    if 'locations' in data and location in data['locations']:
-        location_data = data['locations'][location]
-        if 'values' in location_data:
-            for value in location_data['values']:
-                year = value.get('year')
-                temp = value.get('temp')
-                if year and temp is not None:
-                    yearly_data.append((year, temp))
-    
-    return yearly_data
 
+def _coerce_float(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _convert_c_to_unit(temp_c: float, unit_group: str) -> float:
+    group = unit_group.lower()
+    if group in ("celsius", "metric"):
+        return temp_c
+    if group in ("fahrenheit", "us"):
+        return (temp_c * 9.0 / 5.0) + 32.0
+    return temp_c
+
+
+def _resolve_anchor_date(year: int, month: int, day: int) -> date | None:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        if month == 2 and day == 29:
+            try:
+                return date(year, 2, 28)
+            except ValueError:
+                return None
+        # Fallback to last valid day of month
+        for candidate_day in range(31, 27, -1):
+            try:
+                return date(year, month, candidate_day)
+            except ValueError:
+                continue
+    return None
+
+
+def _collapse_consecutive_dates(dates: List[date]) -> List[Tuple[date, date]]:
+    if not dates:
+        return []
+    ordered = sorted(dates)
+    ranges: List[Tuple[date, date]] = []
+    start = prev = ordered[0]
+    for current in ordered[1:]:
+        if current == prev + timedelta(days=1):
+            prev = current
+            continue
+        ranges.append((start, prev))
+        start = prev = current
+    ranges.append((start, prev))
+    return ranges
+
+
+WINDOW_DAYS = {
+    "weekly": 7,
+    "monthly": 31,
+    "yearly": 365,
+}
+
+
+async def _collect_rolling_window_values(
+    location: str,
+    period: Literal["weekly", "monthly", "yearly"],
+    month: int,
+    day: int,
+    unit_group: str,
+    years: List[int],
+) -> Tuple[List[TemperatureValue], List[float], List[Dict]]:
+    store = await get_daily_temperature_store()
+
+    values: List[TemperatureValue] = []
+    aggregated: List[float] = []
+    missing_years: List[Dict] = []
+    window_days = WINDOW_DAYS[period]
+
+    for year in years:
+        anchor = _resolve_anchor_date(year, month, day)
+        if anchor is None:
+            track_missing_year(missing_years, year, "invalid_anchor_date")
+            continue
+
+        start_date = anchor - timedelta(days=window_days - 1)
+        date_sequence = [start_date + timedelta(days=i) for i in range(window_days)]
+        cache = await store.fetch(location, date_sequence)
+
+        missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
+        timeline_failed = False
+
+        if missing_dates:
+            for range_start, range_end in _collapse_consecutive_dates(missing_dates):
+                try:
+                    timeline_days = await fetch_timeline_days(location, range_start, range_end)
+                except Exception as exc:
+                    logger.error(
+                        "❌ timeline fetch failed for %s (%s to %s): %s",
+                        location,
+                        range_start,
+                        range_end,
+                        exc,
+                    )
+                    track_missing_year(missing_years, year, "timeline_error")
+                    timeline_failed = True
+                    break
+
+                records_to_store: List[DailyTemperatureRecord] = []
+                for day_payload in timeline_days:
+                    dt_raw = day_payload.get("datetime") or day_payload.get("date")
+                    if not dt_raw:
+                        continue
+                    dt_text = str(dt_raw)[:10]
+                    try:
+                        record_date = datetime.strptime(dt_text, "%Y-%m-%d").date()
+                    except ValueError:
+                        continue
+                    if record_date < range_start or record_date > range_end:
+                        continue
+                    temp = _coerce_float(day_payload.get("temp"))
+                    temp_max = _coerce_float(day_payload.get("tempmax") or day_payload.get("maxt"))
+                    temp_min = _coerce_float(day_payload.get("tempmin") or day_payload.get("mint"))
+                    filtered_payload = {
+                        "datetime": record_date.isoformat(),
+                        "temp": temp,
+                        "tempmax": temp_max,
+                        "tempmin": temp_min,
+                    }
+                    records_to_store.append(
+                        DailyTemperatureRecord(
+                            date=record_date,
+                            temp_c=temp,
+                            temp_max_c=temp_max,
+                            temp_min_c=temp_min,
+                            payload=filtered_payload,
+                            source="timeline",
+                        )
+                    )
+
+                if records_to_store:
+                    await store.upsert(location, records_to_store)
+                    for rec in records_to_store:
+                        cache[rec.date] = rec
+
+            if timeline_failed:
+                continue
+
+            remaining_missing = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
+            if remaining_missing:
+                track_missing_year(missing_years, year, "insufficient_daily_data")
+                continue
+
+        temps_converted = []
+        incomplete = False
+        for d in date_sequence:
+            record = cache.get(d)
+            if not record or record.temp_c is None:
+                incomplete = True
+                break
+            temps_converted.append(_convert_c_to_unit(record.temp_c, unit_group))
+
+        if incomplete or len(temps_converted) != len(date_sequence):
+            track_missing_year(missing_years, year, "insufficient_daily_data")
+            continue
+
+        avg_temp = sum(temps_converted) / len(temps_converted)
+        aggregated.append(avg_temp)
+        values.append(
+            TemperatureValue(
+                date=anchor.strftime("%Y-%m-%d"),
+                year=anchor.year,
+                temperature=round(avg_temp, 1),
+            )
+        )
+
+    return values, aggregated, missing_years
 
 async def get_temperature_data_v1(
     location: str,
@@ -134,7 +261,7 @@ async def get_temperature_data_v1(
     unit_group: str = "celsius",
     redis_client: redis.Redis = None  # Can be None, will use dependency if not provided
 ) -> Dict:
-    """Get temperature data for v1 API with unified logic using historysummary for weekly/monthly/yearly."""
+    """Get temperature data for v1 API using rolling timeline windows for weekly/monthly/yearly."""
     # Parse identifier based on period (all use MM-DD format representing end date)
     month, day, period_type = parse_identifier(period, identifier)
     
@@ -153,9 +280,9 @@ async def get_temperature_data_v1(
         start_date = end_date - timedelta(days=6)
         date_range_days = 7
     elif period == "monthly":
-        # 30 days ending on the specified date
-        start_date = end_date - timedelta(days=29)
-        date_range_days = 30
+        # Trailing month (31 days) ending on the specified date
+        start_date = end_date - timedelta(days=30)
+        date_range_days = 31
     elif period == "yearly":
         # 365 days ending on the specified date
         start_date = end_date - timedelta(days=364)
@@ -187,195 +314,18 @@ async def get_temperature_data_v1(
                         temperature=temp
                     ))
     
-    elif period in ["weekly", "monthly"]:
-        # Use historysummary endpoint for weekly/monthly data (much more efficient)
-        try:
-            from routers.records_agg import fetch_historysummary, _historysummary_values, _row_year, _row_mean_temp
-            
-            # Determine chrono_unit based on period
-            chrono_unit = "weeks" if period == "weekly" else "months"
-            
-            if DEBUG:
-                logger.debug(f"Fetching {period} summary for {location} from {start_year} to {current_year}")
-            
-            payload = await fetch_historysummary(
-                location, 
-                start_year, 
-                current_year, 
-                chrono_unit=chrono_unit, 
-                break_by="years",
-                unit_group=unit_group
-            )
-            
-            rows = _historysummary_values(payload)
-            if DEBUG:
-                logger.debug(f"Got {len(rows)} {period} data points")
-            
-            # For weekly, we need to match by ISO week number
-            if period == "weekly":
-                desired_week = datetime(current_year, month, day).isocalendar().week
-                for r in rows:
-                    y = _row_year(r)
-                    t = _row_mean_temp(r)
-                    if y is not None and t is not None:
-                        # Check if this row corresponds to the desired week
-                        try:
-                            # Try to extract week info from the row
-                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
-                            if period_str:
-                                row_date = datetime.strptime(period_str[:10], "%Y-%m-%d")
-                                row_week = row_date.isocalendar().week
-                                if row_week == desired_week:
-                                    all_temps.append(t)
-                                    values.append(TemperatureValue(
-                                        date=f"{y}-{month:02d}-{day:02d}",
-                                        year=y,
-                                        temperature=round(t, 1),
-                                    ))
-                        except Exception as e:
-                            if DEBUG:
-                                logger.debug(f"Error processing weekly row: {e}")
-                            continue
-            
-            # For monthly, we need to match by month
-            elif period == "monthly":
-                for r in rows:
-                    y = _row_year(r)
-                    t = _row_mean_temp(r)
-                    if y is not None and t is not None:
-                        # Check if this row corresponds to the desired month
-                        try:
-                            # Try to extract month info from the row
-                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
-                            if period_str:
-                                row_month = int(period_str[5:7])
-                                if row_month == month:
-                                    all_temps.append(t)
-                                    values.append(TemperatureValue(
-                                        date=f"{y}-{month:02d}-{day:02d}",
-                                        year=y,
-                                        temperature=round(t, 1),
-                                    ))
-                        except Exception as e:
-                            if DEBUG:
-                                logger.debug(f"Error processing monthly row: {e}")
-                            continue
-            
-            if not values:
-                if DEBUG:
-                    logger.debug(f"No {period} data found, falling back to sampling")
-                raise Exception(f"No {period} data found")
-                
-        except Exception as e:
-            # Only log on first occurrence to reduce log noise (historysummary often fails, fallback is expected)
-            if DEBUG and "historysummary" not in str(e).lower():
-                logger.debug(f"Error fetching {period} summary: {e}, falling back to sampling")
-            # Fallback to sampling approach if historysummary fails
-            sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
-            step = max(1, date_range_days // sample_days)
-            
-            for year in range(start_year, current_year + 1):
-                year_temps = []
-                for day_offset in range(0, date_range_days, step):
-                    current_date = start_date.replace(year=year) + timedelta(days=day_offset)
-                    
-                    try:
-                        weather_data = await get_temperature_series(location, current_date.month, current_date.day, redis_client)
-                        if weather_data and 'data' in weather_data:
-                            # Extract missing years from the series metadata
-                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
-                                for missing_year_info in weather_data['metadata']['missing_years']:
-                                    if missing_year_info['year'] == year:
-                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_sampling")
-                                        break
-                            
-                            for data_point in weather_data['data']:
-                                if int(data_point['x']) == year and data_point['y'] is not None:
-                                    year_temps.append(data_point['y'])
-                                    break
-                    except Exception as e:
-                        if DEBUG:
-                            logger.debug(f"Error getting data for {current_date}: {e}")
-                        track_missing_year(missing_years, year, "sampling_error")
-                        continue
-                
-                # Calculate average for the year (only add one value per year)
-                if year_temps:
-                    avg_temp = sum(year_temps) / len(year_temps)
-                    all_temps.append(avg_temp)  # Add to all_temps only once per year
-                    values.append(TemperatureValue(
-                        date=end_date.replace(year=year).strftime("%Y-%m-%d"),
-                        year=year,
-                        temperature=round(avg_temp, 1),
-                    ))
-                else:
-                    track_missing_year(missing_years, year, "no_data_sampling")
-    
-    elif period == "yearly":
-        # For yearly, use the Visual Crossing historysummary endpoint for efficiency
-        try:
-            if DEBUG:
-                logger.debug(f"Fetching yearly summary for {location} from {start_year} to {current_year}")
-            yearly_data = await _fetch_yearly_summary(location, start_year, current_year, unit_group=unit_group)
-            if DEBUG:
-                logger.debug(f"Got {len(yearly_data)} yearly data points")
-            
-            if yearly_data:
-                for year, temp in yearly_data:
-                    all_temps.append(temp)
-                    values.append(TemperatureValue(
-                        date=f"{year}-{month:02d}-{day:02d}",
-                        year=year,
-                        temperature=round(temp, 1),
-                    ))
-            else:
-                if DEBUG:
-                    logger.debug("No yearly data returned, falling back to sampling")
-                raise Exception("No yearly data returned")
-        except Exception as e:
-            # Historysummary endpoint often fails (400 errors), fallback is normal - don't log every occurrence
-            pass
-            # Fallback to simple sampling approach if historysummary fails
-            # Just sample a few representative days for each year
-            sample_dates = [
-                (1, 15), (4, 15), (7, 15), (10, 15)  # Mid-month samples for each season
-            ]
-            
-            for year in range(start_year, current_year + 1):
-                year_values = []
-                for sample_month, sample_day in sample_dates:
-                    try:
-                        weather_data = await get_temperature_series(location, sample_month, sample_day, redis_client)
-                        if weather_data and 'data' in weather_data:
-                            # Extract missing years from the series metadata
-                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
-                                for missing_year_info in weather_data['metadata']['missing_years']:
-                                    if missing_year_info['year'] == year:
-                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_yearly_sampling")
-                                        break
-                            
-                            for data_point in weather_data['data']:
-                                if int(data_point['x']) == year and data_point['y'] is not None:
-                                    temp = data_point['y']
-                                    year_values.append(temp)
-                                    all_temps.append(temp)
-                                    break
-                    except Exception as e:
-                        if DEBUG:
-                            logger.debug(f"Error getting data for {year}-{sample_month:02d}-{sample_day:02d}: {e}")
-                        track_missing_year(missing_years, year, "yearly_sampling_error")
-                        continue
-                
-                # Calculate average for the year
-                if year_values:
-                    avg_temp = sum(year_values) / len(year_values)
-                    values.append(TemperatureValue(
-                        date=f"{year}-{month:02d}-{day:02d}",
-                        year=year,
-                        temperature=round(avg_temp, 1),
-                    ))
-                else:
-                    track_missing_year(missing_years, year, "no_data_yearly_sampling")
+    elif period in ["weekly", "monthly", "yearly"]:
+        window_values, aggregated_values, window_missing = await _collect_rolling_window_values(
+            location=location,
+            period=period,  # type: ignore[arg-type]
+            month=month,
+            day=day,
+            unit_group=unit_group,
+            years=years,
+        )
+        values.extend(window_values)
+        all_temps.extend(aggregated_values)
+        missing_years.extend(window_missing)
     
     # Calculate date range
     if values:
