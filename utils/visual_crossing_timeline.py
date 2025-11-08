@@ -19,6 +19,8 @@ API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 _client: Optional[aiohttp.ClientSession] = None
 _client_lock = asyncio.Lock()
 _sem = asyncio.Semaphore(2)
+_RETRY_ATTEMPTS = int(os.getenv("VC_TIMELINE_RETRIES", "3"))
+_RETRY_BASE_DELAY = float(os.getenv("VC_TIMELINE_RETRY_DELAY", "1.0"))
 
 
 async def _get_client() -> aiohttp.ClientSession:
@@ -56,17 +58,40 @@ async def fetch_timeline_days(location: str, start: date, end: date) -> List[Dic
         raise ValueError("start date must be before end date")
 
     url = _build_timeline_url(location, start, end)
+    redacted_url = url.replace(API_KEY, "[redacted]") if API_KEY else url
     session = await _get_client()
-    logger.debug("🌡️ timeline GET %s", url)
-    async with _sem:
-        async with session.get(url, headers={"Accept-Encoding": "gzip"}) as response:
-            if response.status >= 400:
-                text = await response.text()
-                logger.error("Visual Crossing timeline error: %s %s", response.status, text[:200])
-                raise RuntimeError(f"Visual Crossing timeline error: {response.status}")
-            payload = await response.json()
-            days = payload.get("days") or []
-            if not isinstance(days, list):
-                raise RuntimeError("Unexpected timeline response payload")
-            return days
+    logger.debug("🌡️ timeline GET %s", redacted_url)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            async with _sem:
+                async with session.get(url, headers={"Accept-Encoding": "gzip"}) as response:
+                    if response.status >= 400:
+                        text = await response.text()
+                        logger.error(
+                            "Visual Crossing timeline error: status=%s url=%s body=%s",
+                            response.status,
+                            redacted_url,
+                            text[:200],
+                        )
+                        raise RuntimeError(f"Visual Crossing timeline error: {response.status}")
+                    payload = await response.json()
+                    days = payload.get("days") or []
+                    if not isinstance(days, list):
+                        raise RuntimeError("Unexpected timeline response payload")
+                    return days
+        except (asyncio.TimeoutError, aiohttp.ClientError, RuntimeError) as exc:
+            if attempt >= _RETRY_ATTEMPTS:
+                logger.error("Timeline fetch failed after %s attempts: %s (%s)", attempt, exc, redacted_url)
+                raise
+            delay = _RETRY_BASE_DELAY * attempt
+            logger.warning(
+                "Timeline fetch attempt %s failed for %s – retrying in %.1fs (%s)",
+                attempt,
+                redacted_url,
+                delay,
+                exc,
+            )
+            await asyncio.sleep(delay)
 
