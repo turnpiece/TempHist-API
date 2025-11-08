@@ -3,17 +3,16 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
-import aiosqlite
+import asyncpg  # type: ignore[import-untyped]
 
 from cache_utils import normalize_location_for_cache
 
 
 @dataclass(frozen=True)
 class DailyTemperatureRecord:
-    """Represents a cached daily temperature observation stored in SQLite."""
+    """Represents a cached daily temperature observation stored in the database."""
 
     date: date
     temp_c: Optional[float]
@@ -22,65 +21,49 @@ class DailyTemperatureRecord:
     payload: Dict[str, object]
     source: str
 
-    def as_storage_tuple(self) -> Tuple[str, Optional[float], Optional[float], Optional[float], str, str]:
-        """Return values suitable for SQLite insertion."""
-        payload_json = json.dumps(self.payload, separators=(",", ":"), sort_keys=True)
-        return (
-            self.date.isoformat(),
-            self.temp_c,
-            self.temp_max_c,
-            self.temp_min_c,
-            payload_json,
-            self.source,
-        )
-
 
 class DailyTemperatureStore:
-    """Persistent cache for daily temperature data using SQLite."""
+    """Persistent cache for daily temperature data backed by Postgres."""
 
-    def __init__(self, db_path: Optional[str] = None):
-        default_path = Path(__file__).resolve().parents[1] / "weather_cache" / "daily_temperatures.db"
-        self._db_path = Path(db_path or os.getenv("TEMPHIST_DAILY_CACHE_DB", default_path))
+    def __init__(self, dsn: Optional[str] = None):
+        self._dsn = dsn or os.getenv("TEMPHIST_PG_DSN") or os.getenv("DATABASE_URL")
+        if not self._dsn:
+            raise RuntimeError(
+                "Configure TEMPHIST_PG_DSN (or DATABASE_URL) with the Postgres connection string."
+            )
+        self._pool: Optional[asyncpg.Pool] = None
         self._init_lock = asyncio.Lock()
-        self._initialized = False
 
-    @property
-    def db_path(self) -> Path:
-        return self._db_path
-
-    async def _ensure_initialized(self) -> None:
-        """Create the SQLite database and schema on first use."""
-        if self._initialized:
-            return
+    async def _ensure_pool(self) -> asyncpg.Pool:
+        if self._pool:
+            return self._pool
         async with self._init_lock:
-            if self._initialized:
-                return
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            async with aiosqlite.connect(self._db_path) as conn:
-                await conn.execute("PRAGMA journal_mode=WAL;")
+            if self._pool:
+                return self._pool
+            self._pool = await asyncpg.create_pool(dsn=self._dsn, min_size=1, max_size=5)
+            async with self._pool.acquire() as conn:
                 await conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS daily_temperatures (
                         location TEXT NOT NULL,
-                        date TEXT NOT NULL,
-                        temp_c REAL,
-                        temp_max_c REAL,
-                        temp_min_c REAL,
-                        payload TEXT NOT NULL,
+                        day DATE NOT NULL,
+                        temp_c DOUBLE PRECISION,
+                        temp_max_c DOUBLE PRECISION,
+                        temp_min_c DOUBLE PRECISION,
+                        payload JSONB NOT NULL,
                         source TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        PRIMARY KEY (location, date)
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        PRIMARY KEY (location, day)
                     )
                     """
                 )
                 await conn.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_date
-                    ON daily_temperatures (location, date)
+                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
+                    ON daily_temperatures (location, day)
                     """
                 )
-                await conn.commit()
-            self._initialized = True
+            return self._pool
 
     async def fetch(
         self,
@@ -88,33 +71,36 @@ class DailyTemperatureStore:
         dates: Iterable[date],
     ) -> Dict[date, DailyTemperatureRecord]:
         """Fetch cached records for a location and list of dates."""
-        await self._ensure_initialized()
-        normalized_location = normalize_location_for_cache(location)
-        date_list = sorted({d.isoformat() for d in dates})
+        date_list = sorted({d for d in dates})
         if not date_list:
             return {}
 
-        placeholders = ",".join(["?"] * len(date_list))
-        query = (
-            f"SELECT date, temp_c, temp_max_c, temp_min_c, payload, source "
-            f"FROM daily_temperatures WHERE location = ? AND date IN ({placeholders})"
-        )
-
+        pool = await self._ensure_pool()
+        normalized_location = normalize_location_for_cache(location)
         result: Dict[date, DailyTemperatureRecord] = {}
-        async with aiosqlite.connect(self._db_path) as conn:
-            conn.row_factory = aiosqlite.Row
-            cursor = await conn.execute(query, [normalized_location, *date_list])
-            async for row in cursor:
-                row_date = datetime.strptime(row["date"], "%Y-%m-%d").date()
-                payload = json.loads(row["payload"])
-                result[row_date] = DailyTemperatureRecord(
-                    date=row_date,
-                    temp_c=row["temp_c"],
-                    temp_max_c=row["temp_max_c"],
-                    temp_min_c=row["temp_min_c"],
-                    payload=payload,
-                    source=row["source"],
-                )
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT day, temp_c, temp_max_c, temp_min_c, payload, source
+                FROM daily_temperatures
+                WHERE location = $1 AND day = ANY($2::date[])
+                """,
+                normalized_location,
+                date_list,
+            )
+
+        for row in rows:
+            record_date: date = row["day"]
+            payload = row["payload"] or {}
+            result[record_date] = DailyTemperatureRecord(
+                date=record_date,
+                temp_c=row["temp_c"],
+                temp_max_c=row["temp_max_c"],
+                temp_min_c=row["temp_min_c"],
+                payload=payload,
+                source=row["source"],
+            )
         return result
 
     async def upsert(
@@ -125,29 +111,17 @@ class DailyTemperatureStore:
         """Insert or update a batch of records for a location."""
         if not records:
             return
-        await self._ensure_initialized()
-        normalized_location = normalize_location_for_cache(location)
-        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        values = [
-            (
-                normalized_location,
-                record.date.isoformat(),
-                record.temp_c,
-                record.temp_max_c,
-                record.temp_min_c,
-                json.dumps(record.payload, separators=(",", ":"), sort_keys=True),
-                record.source,
-                now_iso,
-            )
-            for record in records
-        ]
 
-        async with aiosqlite.connect(self._db_path) as conn:
+        pool = await self._ensure_pool()
+        normalized_location = normalize_location_for_cache(location)
+        now_ts = datetime.now(timezone.utc)
+
+        async with pool.acquire() as conn:
             await conn.executemany(
                 """
                 INSERT INTO daily_temperatures (
                     location,
-                    date,
+                    day,
                     temp_c,
                     temp_max_c,
                     temp_min_c,
@@ -155,18 +129,29 @@ class DailyTemperatureStore:
                     source,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(location, date) DO UPDATE SET
-                    temp_c=excluded.temp_c,
-                    temp_max_c=excluded.temp_max_c,
-                    temp_min_c=excluded.temp_min_c,
-                    payload=excluded.payload,
-                    source=excluded.source,
-                    updated_at=excluded.updated_at
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+                ON CONFLICT (location, day) DO UPDATE SET
+                    temp_c = EXCLUDED.temp_c,
+                    temp_max_c = EXCLUDED.temp_max_c,
+                    temp_min_c = EXCLUDED.temp_min_c,
+                    payload = EXCLUDED.payload,
+                    source = EXCLUDED.source,
+                    updated_at = EXCLUDED.updated_at
                 """,
-                values,
+                [
+                    (
+                        normalized_location,
+                        record.date,
+                        record.temp_c,
+                        record.temp_max_c,
+                        record.temp_min_c,
+                        json.dumps(record.payload, separators=(",", ":"), sort_keys=True),
+                        record.source,
+                        now_ts,
+                    )
+                    for record in records
+                ],
             )
-            await conn.commit()
 
 
 _store: Optional[DailyTemperatureStore] = None

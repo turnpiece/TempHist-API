@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from typing import Dict
 import sys
 from pathlib import Path
 
@@ -9,13 +10,35 @@ if str(ROOT_DIR) not in sys.path:
 import pytest
 
 from routers.v1_records import _collect_rolling_window_values
-from utils.daily_temperature_store import DailyTemperatureStore, DailyTemperatureRecord
+from utils.daily_temperature_store import DailyTemperatureRecord
+
+
+def _normalize_location(text: str) -> str:
+    return text.lower().replace(" ", "_").replace(",", "_")
+
+
+class InMemoryDailyTemperatureStore:
+    def __init__(self):
+        self._data: Dict[tuple[str, date], DailyTemperatureRecord] = {}
+
+    async def fetch(self, location: str, dates):
+        normalized = _normalize_location(location)
+        result = {}
+        for day in dates:
+            key = (normalized, day)
+            if key in self._data:
+                result[day] = self._data[key]
+        return result
+
+    async def upsert(self, location: str, records):
+        normalized = _normalize_location(location)
+        for record in records:
+            self._data[(normalized, record.date)] = record
 
 
 @pytest.mark.asyncio
-async def test_collect_rolling_window_weekly_caches(tmp_path, monkeypatch):
-    db_path = tmp_path / "daily.db"
-    store = DailyTemperatureStore(db_path=str(db_path))
+async def test_collect_rolling_window_weekly_caches(monkeypatch):
+    store = InMemoryDailyTemperatureStore()
 
     async def fake_get_store():
         return store
@@ -54,7 +77,7 @@ async def test_collect_rolling_window_weekly_caches(tmp_path, monkeypatch):
     assert fetched_ranges == [(date(2024, 11, 2), date(2024, 11, 8))]
     assert pytest.approx(aggregated[0], rel=1e-6) == sum(10.0 + i for i in range(7)) / 7
 
-    # Second call should hit the SQLite cache, avoiding new API fetches
+    # Second call should hit the cache, avoiding new API fetches
     fetched_ranges.clear()
     values_again, aggregated_again, missing_again = await _collect_rolling_window_values(
         "Test City",
@@ -72,9 +95,8 @@ async def test_collect_rolling_window_weekly_caches(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_collect_rolling_window_respects_unit_conversion(tmp_path, monkeypatch):
-    db_path = tmp_path / "daily2.db"
-    store = DailyTemperatureStore(db_path=str(db_path))
+async def test_collect_rolling_window_respects_unit_conversion(monkeypatch):
+    store = InMemoryDailyTemperatureStore()
 
     async def fake_get_store():
         return store
