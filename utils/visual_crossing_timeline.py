@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from datetime import date
-from typing import Dict, List
+from typing import Any, Dict, List, Tuple
 from urllib.parse import quote
 
 import aiohttp
@@ -52,7 +52,7 @@ def _build_timeline_url(location: str, start: date, end: date) -> str:
     )
 
 
-async def fetch_timeline_days(location: str, start: date, end: date) -> List[Dict]:
+async def fetch_timeline_days(location: str, start: date, end: date) -> Tuple[List[Dict], Dict[str, Any]]:
     """Fetch timeline data for a contiguous date range (inclusive)."""
     if start > end:
         raise ValueError("start date must be before end date")
@@ -80,7 +80,15 @@ async def fetch_timeline_days(location: str, start: date, end: date) -> List[Dic
                     days = payload.get("days") or []
                     if not isinstance(days, list):
                         raise RuntimeError("Unexpected timeline response payload")
-                    return days
+                    metadata = {
+                        "resolvedAddress": payload.get("resolvedAddress"),
+                        "address": payload.get("address"),
+                        "timezone": payload.get("timezone"),
+                        "tz": payload.get("tz"),
+                        "latitude": payload.get("latitude"),
+                        "longitude": payload.get("longitude"),
+                    }
+                    return days, metadata
         except (asyncio.TimeoutError, aiohttp.ClientError, RuntimeError) as exc:
             if attempt >= _RETRY_ATTEMPTS:
                 logger.error("Timeline fetch failed after %s attempts: %s (%s)", attempt, exc, redacted_url)

@@ -170,8 +170,11 @@ async def _collect_rolling_window_values(
 
         if missing_dates:
             for range_start, range_end in _collapse_consecutive_dates(missing_dates):
+                timeline_metadata = None
                 try:
-                    timeline_days = await fetch_timeline_days(location, range_start, range_end)
+                    timeline_days, timeline_metadata = await fetch_timeline_days(
+                        location, range_start, range_end
+                    )
                 except Exception as exc:
                     logger.error(
                         "❌ timeline fetch failed for %s (%s to %s): %s",
@@ -183,7 +186,6 @@ async def _collect_rolling_window_values(
                     track_missing_year(missing_years, year, "timeline_error")
                     timeline_failed = True
                     break
-
                 records_to_store: List[DailyTemperatureRecord] = []
                 for day_payload in timeline_days:
                     dt_raw = day_payload.get("datetime") or day_payload.get("date")
@@ -215,9 +217,8 @@ async def _collect_rolling_window_values(
                             source="timeline",
                         )
                     )
-
                 if records_to_store:
-                    await store.upsert(location, records_to_store)
+                    await store.upsert(location, records_to_store, metadata=timeline_metadata)
                     for rec in records_to_store:
                         cache[rec.date] = rec
 

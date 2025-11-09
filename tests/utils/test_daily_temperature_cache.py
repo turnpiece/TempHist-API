@@ -30,7 +30,7 @@ class InMemoryDailyTemperatureStore:
                 result[day] = self._data[key]
         return result
 
-    async def upsert(self, location: str, records):
+    async def upsert(self, location: str, records, metadata=None):
         normalized = _normalize_location(location)
         for record in records:
             self._data[(normalized, record.date)] = record
@@ -50,15 +50,23 @@ async def test_collect_rolling_window_weekly_caches(monkeypatch):
     async def fake_fetch(location, start, end):
         fetched_ranges.append((start, end))
         days = (end - start).days + 1
-        return [
+        return (
+            [
+                {
+                    "datetime": (start + timedelta(days=i)).isoformat(),
+                    "temp": 10.0 + i,
+                    "tempmax": 11.0 + i,
+                    "tempmin": 9.0 + i,
+                }
+                for i in range(days)
+            ],
             {
-                "datetime": (start + timedelta(days=i)).isoformat(),
-                "temp": 10.0 + i,
-                "tempmax": 11.0 + i,
-                "tempmin": 9.0 + i,
-            }
-            for i in range(days)
-        ]
+                "resolvedAddress": "Test City",
+                "latitude": 53.0,
+                "longitude": -2.0,
+                "timezone": "Europe/London",
+            },
+        )
 
     monkeypatch.setattr("routers.v1_records.fetch_timeline_days", fake_fetch)
 
