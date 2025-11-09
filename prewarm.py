@@ -17,11 +17,12 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import aiohttp
 import redis
 from dotenv import load_dotenv
+from urllib.parse import quote  # URL-encode location path segments
 
 # Load environment variables
 load_dotenv()
@@ -35,18 +36,20 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 DEFAULT_BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+DEFAULT_API_TOKEN = os.getenv("API_ACCESS_TOKEN") or os.getenv("PREWARM_API_TOKEN")
 
-def load_preapproved_slugs(locations_file: str = None) -> List[str]:
-    """Load location slugs from preapproved_locations.json.
-    
+
+def load_preapproved_locations(locations_file: str = None) -> List[str]:
+    """Load canonical location strings from preapproved_locations.json.
+
     Args:
         locations_file: Optional path to locations JSON file. If not provided,
-                       will look for data/preapproved_locations.json relative to script.
-    
+                        will look for data/preapproved_locations.json relative to script.
+
     Returns:
-        List of location slugs (e.g., ['london', 'new-york', 'berlin'])
+        List of full location strings (e.g., "London, England, United Kingdom")
     """
-    slugs = []
+    locations: List[str] = []
     
     # Find project root by looking for pyproject.toml
     if locations_file is None:
@@ -63,26 +66,36 @@ def load_preapproved_slugs(locations_file: str = None) -> List[str]:
         with open(locations_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
+        seen = set()
         for item in data:
-            # Prefer slug, fallback to id
-            slug = item.get('slug') or item.get('id', '')
-            if slug:
-                slugs.append(slug)
-        
-        logger.info(f"Loaded {len(slugs)} location slugs from {locations_file}")
-        return slugs
+            name = item.get("name")
+            admin1 = item.get("admin1")
+            country = item.get("country_name")
+            if not name:
+                continue
+            components = [comp for comp in (name, admin1, country) if comp]
+            full_name = ", ".join(components)
+            normalized = full_name.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            locations.append(full_name)
+
+        logger.info(f"Loaded {len(locations)} locations from {locations_file}")
+        return locations
     except FileNotFoundError:
         logger.warning(f"Locations file not found: {locations_file}, using empty list")
         return []
-    except json.JSONDecodeError as e:
-        logger.error(f"Error parsing locations file: {e}")
+    except json.JSONDecodeError as exc:
+        logger.error(f"Error parsing locations file: {exc}")
         return []
-    except Exception as e:
-        logger.error(f"Error loading locations: {e}")
+    except Exception as exc:
+        logger.error(f"Error loading locations: {exc}")
         return []
 
+
 # Default locations - will be loaded from preapproved_locations.json
-DEFAULT_LOCATIONS = load_preapproved_slugs()
+DEFAULT_LOCATIONS = load_preapproved_locations()
 
 DEFAULT_ENDPOINTS = [
     "v1/records/daily",
@@ -140,10 +153,11 @@ class PrewarmStats:
 class CachePrewarmer:
     """Cache prewarmer for popular locations and endpoints."""
     
-    def __init__(self, base_url: str, redis_url: str = None):
+    def __init__(self, base_url: str, redis_url: str = None, api_token: Optional[str] = None):
         self.base_url = base_url.rstrip('/')
         self.redis = redis.from_url(redis_url) if redis_url else None
         self.stats = PrewarmStats()
+        self.api_token = api_token
         
     async def prewarm_location(self, location: str, endpoints: List[str], days: int = 7) -> Dict[str, Any]:
         """Prewarm cache for a specific location."""
@@ -157,33 +171,37 @@ class CachePrewarmer:
             "cache_misses": 0,
             "total_time": 0
         }
-        
-        # Generate date patterns to prewarm
         date_patterns = self._generate_date_patterns(days)
-        
-        for endpoint in endpoints:
-            for date_pattern in date_patterns:
-                url = self._build_url(endpoint, location, date_pattern)
-                
-                start_time = time.time()
-                success, cache_hit = await self._make_request(url)
-                duration = time.time() - start_time
-                
-                location_stats["requests"] += 1
-                location_stats["total_time"] += duration
-                
-                if success:
-                    location_stats["successes"] += 1
-                else:
-                    location_stats["failures"] += 1
-                    
-                if not cache_hit:
-                    location_stats["cache_misses"] += 1
-                
-                self.stats.add_request(success, duration, cache_hit)
-                
-                # Small delay to avoid overwhelming the server
-                await asyncio.sleep(0.1)
+
+        headers = {"Accept": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+
+        timeout = aiohttp.ClientTimeout(total=120)
+        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+            for endpoint in endpoints:
+                for date_pattern in date_patterns:
+                    url = self._build_url(endpoint, location, date_pattern)
+
+                    start_time = time.time()
+                    success, cache_hit = await self._make_request(session, url)
+                    duration = time.time() - start_time
+
+                    location_stats["requests"] += 1
+                    location_stats["total_time"] += duration
+
+                    if success:
+                        location_stats["successes"] += 1
+                    else:
+                        location_stats["failures"] += 1
+
+                    if not cache_hit:
+                        location_stats["cache_misses"] += 1
+
+                    self.stats.add_request(success, duration, cache_hit)
+
+                    # Small delay to avoid overwhelming the server
+                    await asyncio.sleep(0.1)
         
         return location_stats
     
@@ -207,10 +225,11 @@ class CachePrewarmer:
         current_day = today.day
         patterns.append({"identifier": f"{current_month:02d}-{current_day:02d}"})
         
-        # Weekly patterns (recent weeks)
+        # Weekly patterns (recent weeks, use week-ending MM-DD identifier)
         for i in range(4):  # Last 4 weeks
             week_start = today - timedelta(weeks=i, days=today.weekday())
-            patterns.append({"identifier": week_start.strftime("%Y-%m-%d")})
+            week_end = week_start + timedelta(days=6)
+            patterns.append({"identifier": week_end.strftime("%m-%d")})
         
         return patterns
     
@@ -222,39 +241,34 @@ class CachePrewarmer:
             location: Location slug (e.g., 'london', 'new-york')
             date_pattern: Dict with 'identifier' key (e.g., {'identifier': '11-06'})
         """
-        # Ensure location is in slug format (normalize if needed)
-        # Location should already be a slug from preapproved_locations.json
-        location_slug = location.lower().replace(" ", "-").replace("_", "-")
+        encoded_location = quote(location, safe="")
         
         if endpoint == "v1/records/daily":
-            return f"{self.base_url}/v1/records/daily/{location_slug}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/daily/{encoded_location}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/weekly":
-            return f"{self.base_url}/v1/records/weekly/{location_slug}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/weekly/{encoded_location}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/monthly":
-            return f"{self.base_url}/v1/records/monthly/{location_slug}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/monthly/{encoded_location}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/yearly":
-            return f"{self.base_url}/v1/records/yearly/{location_slug}/{date_pattern['identifier']}"
+            return f"{self.base_url}/v1/records/yearly/{encoded_location}/{date_pattern['identifier']}"
         else:
             raise ValueError(f"Unknown endpoint: {endpoint}")
     
-    async def _make_request(self, url: str) -> tuple[bool, bool]:
+    async def _make_request(self, session: aiohttp.ClientSession, url: str) -> tuple[bool, bool]:
         """Make a request and return (success, cache_hit)."""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        # Check if response was cached
-                        cache_hit = response.headers.get("X-Cache-Status") == "HIT" or \
-                                   "cache" in response.headers.get("X-Cache", "").lower()
-                        return True, cache_hit
-                    elif response.status == 304:
-                        # Not Modified - this is a cache hit
-                        return True, True
-                    else:
-                        logger.warning(f"Request failed with status {response.status}: {url}")
-                        return False, False
-        except Exception as e:
-            logger.error(f"Request error for {url}: {e}")
+            async with session.get(url) as response:
+                if response.status == 200:
+                    cache_hit = response.headers.get("X-Cache-Status") == "HIT" or \
+                               "cache" in response.headers.get("X-Cache", "").lower()
+                    return True, cache_hit
+                if response.status == 304:
+                    return True, True
+                body_excerpt = (await response.text())[:200]
+                logger.warning("Request failed with status %s: %s -- %s", response.status, url, body_excerpt)
+                return False, False
+        except Exception as exc:
+            logger.error(f"Request error for {url}: {exc}")
             return False, False
     
     async def prewarm_popular_locations(self, locations: List[str], endpoints: List[str], days: int = 7):
@@ -302,6 +316,7 @@ async def main():
     parser.add_argument("--endpoints", nargs="+", default=DEFAULT_ENDPOINTS, help="Endpoints to prewarm")
     parser.add_argument("--redis-url", help="Redis URL for cache inspection")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--api-token", help="Bearer token for authenticated endpoints (defaults to API_ACCESS_TOKEN/PREWARM_API_TOKEN env vars)")
     parser.add_argument("--locations-file", help="JSON file with custom locations list")
     
     args = parser.parse_args()
@@ -313,8 +328,8 @@ async def main():
     if args.locations_file:
         # If locations_file is provided, try to load slugs from it
         if args.locations_file.endswith('.json'):
-            slugs = load_preapproved_slugs(args.locations_file)
-            locations = slugs[:args.locations] if slugs else []
+            locs = load_preapproved_locations(args.locations_file)
+            locations = locs[:args.locations] if locs else []
         else:
             # Assume it's a simple text file with one location per line
             with open(args.locations_file, 'r') as f:
@@ -324,11 +339,17 @@ async def main():
         locations = DEFAULT_LOCATIONS[:args.locations] if DEFAULT_LOCATIONS else []
     
     if not locations:
-        logger.warning("No locations to prewarm. Check that preapproved_locations.json exists and contains valid slugs.")
+        logger.warning("No locations to prewarm. Check that preapproved_locations.json exists and contains valid entries.")
         sys.exit(1)
     
     # Create prewarmer
-    prewarmer = CachePrewarmer(args.base_url, args.redis_url)
+    api_token = args.api_token or DEFAULT_API_TOKEN
+    if api_token:
+        logger.info("Using bearer token authentication for prewarming requests.")
+    else:
+        logger.warning("No API token provided. Secured endpoints may respond with 401 Unauthorized.")
+
+    prewarmer = CachePrewarmer(args.base_url, args.redis_url, api_token=api_token)
     
     # Run prewarming
     try:

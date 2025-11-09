@@ -4,14 +4,20 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[bool, bool, bool]:
+    """Determine which temperature columns are present to build a typed insert."""
+    has_temp = any(record.temp_c is not None for record in records)
+    has_max = any(record.temp_max_c is not None for record in records)
+    has_min = any(record.temp_min_c is not None for record in records)
+    return has_temp, has_max, has_min
 
 import asyncpg  # type: ignore[import-untyped]
 
 from cache_utils import normalize_location_for_cache
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass(frozen=True)
 class DailyTemperatureRecord:
@@ -23,6 +29,93 @@ class DailyTemperatureRecord:
     temp_min_c: Optional[float]
     payload: Dict[str, Any]
     source: str
+
+
+_PREAPPROVED_LOCATION_MAP: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def _register_preapproved_candidate(
+    mapping: Dict[str, Dict[str, Any]],
+    candidate: Optional[str],
+    info: Dict[str, Any],
+) -> None:
+    if not candidate:
+        return
+    normalized = normalize_location_for_cache(candidate)
+    if not normalized or normalized in mapping:
+        return
+    mapping[normalized] = info
+
+    if "-" in candidate:
+        _register_preapproved_candidate(mapping, candidate.replace("-", " "), info)
+        _register_preapproved_candidate(mapping, candidate.replace("-", "_"), info)
+
+
+def _load_preapproved_location_map() -> Dict[str, Dict[str, Any]]:
+    global _PREAPPROVED_LOCATION_MAP
+    if _PREAPPROVED_LOCATION_MAP is not None:
+        return _PREAPPROVED_LOCATION_MAP
+
+    mapping: Dict[str, Dict[str, Any]] = {}
+    try:
+        current_path = Path(__file__).resolve()
+        project_root = current_path.parent
+        while project_root != project_root.parent:
+            if (project_root / "pyproject.toml").exists():
+                break
+            project_root = project_root.parent
+        data_file = project_root / "data" / "preapproved_locations.json"
+        with data_file.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        logger.warning("Preapproved locations file not found; location metadata backfill disabled.")
+        _PREAPPROVED_LOCATION_MAP = {}
+        return _PREAPPROVED_LOCATION_MAP
+    except Exception as exc:
+        logger.warning("Failed to load preapproved locations: %s", exc)
+        _PREAPPROVED_LOCATION_MAP = {}
+        return _PREAPPROVED_LOCATION_MAP
+
+    for entry in data:
+        name = entry.get("name")
+        admin1 = entry.get("admin1")
+        country = entry.get("country_name")
+        latitude = entry.get("latitude")
+        longitude = entry.get("longitude")
+        timezone_name = entry.get("timezone")
+        slug = entry.get("slug")
+        identifier = entry.get("id")
+
+        components = [part for part in [name, admin1, country] if part]
+        full_name = ", ".join(components) if components else name
+        if not full_name:
+            continue
+
+        info = {
+            "full_name": full_name,
+            "latitude": latitude,
+            "longitude": longitude,
+            "timezone": timezone_name,
+            "slug": slug,
+            "id": identifier,
+        }
+
+        candidates = {full_name, name, identifier, slug}
+        if country and name:
+            candidates.add(f"{name}, {country}")
+        if slug:
+            candidates.add(slug.replace("-", " "))
+
+        for candidate in list(candidates):
+            _register_preapproved_candidate(mapping, candidate, info)
+
+    _PREAPPROVED_LOCATION_MAP = mapping
+    return _PREAPPROVED_LOCATION_MAP
+
+
+def _get_preapproved_location_info(normalized_name: str) -> Optional[Dict[str, Any]]:
+    mapping = _load_preapproved_location_map()
+    return mapping.get(normalized_name)
 
 
 class DailyTemperatureStore:
@@ -71,6 +164,7 @@ class DailyTemperatureStore:
             async with pool.acquire() as conn:
                 await self._ensure_locations_table(conn)
                 await self._ensure_daily_temperatures_table(conn)
+                await self._backfill_locations_metadata(conn)
             self._schema_initialized = True
 
     async def _ensure_locations_table(self, conn: asyncpg.Connection) -> None:
@@ -146,6 +240,42 @@ class DailyTemperatureStore:
             """
         )
 
+    async def _backfill_locations_metadata(self, conn: asyncpg.Connection) -> None:
+        preapproved_map = _load_preapproved_location_map()
+        if not preapproved_map:
+            return
+
+        for normalized_name, info in preapproved_map.items():
+            await conn.execute(
+                """
+                UPDATE locations
+                SET
+                    original_name = CASE
+                        WHEN (POSITION(',' IN original_name) = 0 OR original_name = normalized_name) AND $2::text IS NOT NULL
+                        THEN $2::text
+                        ELSE original_name
+                    END,
+                    resolved_name = COALESCE(resolved_name, $2::text),
+                    latitude = COALESCE(latitude, $3::double precision),
+                    longitude = COALESCE(longitude, $4::double precision),
+                    timezone = COALESCE(timezone, $5::text),
+                    updated_at = CASE
+                        WHEN (resolved_name IS NULL AND $2::text IS NOT NULL)
+                             OR (latitude IS NULL AND $3::double precision IS NOT NULL)
+                             OR (longitude IS NULL AND $4::double precision IS NOT NULL)
+                             OR (timezone IS NULL AND $5::text IS NOT NULL)
+                        THEN NOW()
+                        ELSE updated_at
+                    END
+                WHERE normalized_name = $1::text
+                """,
+                normalized_name,
+                info.get("full_name"),
+                info.get("latitude"),
+                info.get("longitude"),
+                info.get("timezone"),
+            )
+
     async def _migrate_legacy_daily_temperatures(self, conn: asyncpg.Connection) -> None:
         await conn.execute("ALTER TABLE daily_temperatures RENAME TO daily_temperatures_legacy")
         await self._create_daily_temperatures_table(conn)
@@ -159,23 +289,39 @@ class DailyTemperatureStore:
             if not original_name:
                 continue
             normalized = normalize_location_for_cache(original_name)
+            preapproved = _get_preapproved_location_info(normalized)
+            resolved_name = (
+                preapproved.get("full_name") if preapproved and preapproved.get("full_name") else original_name
+            )
+            latitude = preapproved.get("latitude") if preapproved else None
+            longitude = preapproved.get("longitude") if preapproved else None
+            timezone_name = preapproved.get("timezone") if preapproved else None
             row = await conn.fetchrow(
                 """
                 INSERT INTO locations (
                     original_name,
                     normalized_name,
-                    resolved_name
+                    resolved_name,
+                    latitude,
+                    longitude,
+                    timezone
                 )
-                VALUES ($1, $2, $3)
+                VALUES ($1::text, $2::text, $3::text, $4::double precision, $5::double precision, $6::text)
                 ON CONFLICT (normalized_name) DO UPDATE SET
                     original_name = EXCLUDED.original_name,
                     resolved_name = COALESCE(EXCLUDED.resolved_name, locations.resolved_name),
+                    latitude = COALESCE(EXCLUDED.latitude, locations.latitude),
+                    longitude = COALESCE(EXCLUDED.longitude, locations.longitude),
+                    timezone = COALESCE(EXCLUDED.timezone, locations.timezone),
                     updated_at = NOW()
                 RETURNING id
                 """,
                 original_name,
                 normalized,
-                original_name,
+                resolved_name,
+                latitude,
+                longitude,
+                timezone_name,
             )
             if row:
                 location_id_map[normalized] = row["id"]
@@ -226,7 +372,7 @@ class DailyTemperatureStore:
                     source,
                     updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+                VALUES ($1::bigint, $2::date, $3::double precision, $4::double precision, $5::double precision, $6::jsonb, $7::text, $8::timestamptz)
                 """,
                 batch,
             )
@@ -239,9 +385,20 @@ class DailyTemperatureStore:
         dates: Iterable[date],
     ) -> Dict[date, DailyTemperatureRecord]:
         """Fetch cached records for a location and list of dates."""
-        date_list = sorted({d for d in dates})
+        normalized_dates: List[date] = []
+        for candidate in dates:
+            if isinstance(candidate, datetime):
+                normalized_dates.append(candidate.date())
+            elif isinstance(candidate, date):
+                normalized_dates.append(candidate)
+        date_list = sorted(set(normalized_dates))
         if not date_list:
             return {}
+
+        date_texts = [d.isoformat() for d in date_list]
+        date_set = set(date_list)
+        start_date = date_list[0]
+        end_date = date_list[-1]
 
         pool = await self._ensure_pool()
         if pool is None:
@@ -250,8 +407,18 @@ class DailyTemperatureStore:
         normalized_location = normalize_location_for_cache(location)
         result: Dict[date, DailyTemperatureRecord] = {}
 
+        query = """
+            SELECT day, temp_c, temp_max_c, temp_min_c, payload, source
+            FROM daily_temperatures
+            WHERE location_id = $1
+              AND day BETWEEN $2::date AND $3::date
+        """
+
+        logger.debug("Fetch cached records for a location and list of dates")
         try:
+            logger.debug("Acquiring connection from pool")
             async with pool.acquire() as conn:
+                logger.debug("Connection acquired; fetching id for %s", normalized_location)
                 location_row = await conn.fetchrow(
                     "SELECT id FROM locations WHERE normalized_name = $1",
                     normalized_location,
@@ -259,25 +426,60 @@ class DailyTemperatureStore:
                 if not location_row:
                     return {}
 
-                rows = await conn.fetch(
-                    """
-                    SELECT day, temp_c, temp_max_c, temp_min_c, payload, source
-                    FROM daily_temperatures
-                    WHERE location_id = $1 AND day = ANY($2::date[])
-                    """,
-                    location_row["id"],
-                    date_list,
-                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "DailyTemperatureStore.fetch executing SQL for %s (location_id=%s) with %d dates: %s",
+                        location,
+                        location_row["id"],
+                        len(date_texts),
+                        query.replace("\n", " ").strip(),
+                    )
+                    logger.debug(
+                        "DailyTemperatureStore.fetch date range %s -> %s (requested=%s)",
+                        start_date,
+                        end_date,
+                        date_texts,
+                    )
+
+                parameters = (location_row["id"], start_date, end_date)
+                rows = await conn.fetch(query, *parameters)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "DailyTemperatureStore.fetch returned %d rows for %s",
+                        len(rows),
+                        location,
+                    )
+            logger.debug("Connection released")
         except Exception as exc:
-            logger.warning(
-                "DailyTemperatureStore.fetch failed for %s due to %s. Returning empty result.",
-                location,
-                exc,
-            )
+            if isinstance(exc, asyncpg.PostgresError):
+                logger.error(
+                    "DailyTemperatureStore.fetch SQL error for %s: sqlstate=%s detail=%s hint=%s context=%s",
+                    location,
+                    getattr(exc, "sqlstate", None),
+                    getattr(exc, "detail", None),
+                    getattr(exc, "hint", None),
+                    getattr(exc, "context", None),
+                )
+                logger.error(
+                    "DailyTemperatureStore.fetch query: %s | date_range=(%s -> %s) | requested_dates=%s",
+                    query.replace("\n", " ").strip(),
+                    start_date,
+                    end_date,
+                    date_texts,
+                )
+                logger.error("DailyTemperatureStore.fetch parameters: %s", parameters if 'parameters' in locals() else None)
+            else:
+                logger.warning(
+                    "DailyTemperatureStore.fetch failed for %s due to %s. Returning empty result.",
+                    location,
+                    exc,
+                )
             return {}
 
         for row in rows:
             record_date: date = row["day"]
+            if record_date not in date_set:
+                continue
             payload = row["payload"] or {}
             result[record_date] = DailyTemperatureRecord(
                 date=record_date,
@@ -305,17 +507,63 @@ class DailyTemperatureStore:
 
         normalized_location = normalize_location_for_cache(location)
         now_ts = datetime.now(timezone.utc)
-        prepared_records = [
-            (
-                record.date,
-                record.temp_c,
-                record.temp_max_c,
-                record.temp_min_c,
-                json.dumps(record.payload, separators=(",", ":"), sort_keys=True),
-                record.source,
+        has_temp, has_max, has_min = _calculate_insert_fields(records)
+
+        column_clauses = ["location_id", "day"]
+        value_placeholders = ["$1::bigint", "$2::date"]
+        update_assignments = []
+
+        param_index = 3  # 1 and 2 are reserved for location_id and day in executemany loop
+
+        if has_temp:
+            column_clauses.append("temp_c")
+            value_placeholders.append(f"${param_index}::double precision")
+            update_assignments.append("temp_c = EXCLUDED.temp_c")
+            param_index += 1
+        if has_max:
+            column_clauses.append("temp_max_c")
+            value_placeholders.append(f"${param_index}::double precision")
+            update_assignments.append("temp_max_c = EXCLUDED.temp_max_c")
+            param_index += 1
+        if has_min:
+            column_clauses.append("temp_min_c")
+            value_placeholders.append(f"${param_index}::double precision")
+            update_assignments.append("temp_min_c = EXCLUDED.temp_min_c")
+            param_index += 1
+
+        # payload and source are always present
+        column_clauses.extend(["payload", "source", "updated_at"])
+        value_placeholders.extend(
+            [
+                f"${param_index}::jsonb",
+                f"${param_index + 1}::text",
+                f"${param_index + 2}::timestamptz",
+            ]
+        )
+        update_assignments.extend(
+            [
+                "payload = EXCLUDED.payload",
+                "source = EXCLUDED.source",
+                "updated_at = EXCLUDED.updated_at",
+            ]
+        )
+
+        insert_sql = f"""
+            INSERT INTO daily_temperatures (
+                {", ".join(column_clauses)}
             )
-            for record in records
-        ]
+            VALUES ({", ".join(value_placeholders)})
+            ON CONFLICT (location_id, day) DO UPDATE SET
+                {", ".join(update_assignments)}
+        """
+
+        logger.debug(
+            "DailyTemperatureStore.upsert SQL (has_temp=%s, has_max=%s, has_min=%s): %s",
+            has_temp,
+            has_max,
+            has_min,
+            insert_sql.replace("\n", " ").strip(),
+        )
 
         try:
             async with pool.acquire() as conn:
@@ -325,47 +573,66 @@ class DailyTemperatureStore:
                     )
                     if location_id is None:
                         return
-                    await conn.executemany(
-                        """
-                        INSERT INTO daily_temperatures (
+                    param_rows = [
+                        self._build_insert_params(
                             location_id,
-                            day,
-                            temp_c,
-                            temp_max_c,
-                            temp_min_c,
-                            payload,
-                            source,
-                            updated_at
+                            record,
+                            has_temp,
+                            has_max,
+                            has_min,
+                            now_ts,
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-                        ON CONFLICT (location_id, day) DO UPDATE SET
-                            temp_c = EXCLUDED.temp_c,
-                            temp_max_c = EXCLUDED.temp_max_c,
-                            temp_min_c = EXCLUDED.temp_min_c,
-                            payload = EXCLUDED.payload,
-                            source = EXCLUDED.source,
-                            updated_at = EXCLUDED.updated_at
-                        """,
-                        [
-                            (
-                                location_id,
-                                day,
-                                temp_c,
-                                temp_max_c,
-                                temp_min_c,
-                                payload,
-                                source,
-                                now_ts,
-                            )
-                            for day, temp_c, temp_max_c, temp_min_c, payload, source in prepared_records
-                        ],
-                    )
+                        for record in records
+                    ]
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "DailyTemperatureStore.upsert executing SQL for %s with %d rows: %s",
+                            location,
+                            len(param_rows),
+                            insert_sql.replace("\n", " ").strip(),
+                        )
+                    await conn.executemany(insert_sql, param_rows)
         except Exception as exc:
-            logger.warning(
-                "DailyTemperatureStore.upsert failed for %s due to %s. Skipping persistence.",
-                location,
-                exc,
-            )
+            if isinstance(exc, asyncpg.PostgresError):
+                logger.error(
+                    "DailyTemperatureStore.upsert SQL error for %s: sqlstate=%s detail=%s hint=%s context=%s",
+                    location,
+                    getattr(exc, "sqlstate", None),
+                    getattr(exc, "detail", None),
+                    getattr(exc, "hint", None),
+                    getattr(exc, "context", None),
+                )
+                if "daily_temperatures" in str(exc):
+                    logger.error(
+                        "Failed SQL: %s",
+                        insert_sql.replace("\n", " ").strip() if "insert_sql" in locals() else "<unknown>",
+                    )
+            else:
+                logger.warning(
+                    "DailyTemperatureStore.upsert failed for %s due to %s. Skipping persistence.",
+                    location,
+                    exc,
+                )
+
+    @staticmethod
+    def _build_insert_params(
+        location_id: int,
+        record: "DailyTemperatureRecord",
+        has_temp: bool,
+        has_max: bool,
+        has_min: bool,
+        now_ts: datetime,
+    ) -> Tuple[Any, ...]:
+        params: List[Any] = [location_id, record.date]
+        if has_temp:
+            params.append(record.temp_c)
+        if has_max:
+            params.append(record.temp_max_c)
+        if has_min:
+            params.append(record.temp_min_c)
+        payload_json = json.dumps(record.payload, separators=(",", ":"), sort_keys=True)
+        params.extend([payload_json, record.source, now_ts])
+        return tuple(params)
 
     async def _get_or_create_location_id(
         self,
@@ -379,6 +646,24 @@ class DailyTemperatureStore:
         longitude = self._extract_numeric_metadata(metadata, ["longitude", "lon", "lng"])
         timezone_name = self._extract_metadata_value(metadata, ["timezone", "tz"])
 
+        preapproved = _get_preapproved_location_info(normalized_name)
+        if preapproved:
+            if not resolved_name:
+                resolved_name = preapproved.get("full_name")
+            if latitude is None and preapproved.get("latitude") is not None:
+                latitude = preapproved.get("latitude")
+            if longitude is None and preapproved.get("longitude") is not None:
+                longitude = preapproved.get("longitude")
+            if not timezone_name:
+                timezone_name = preapproved.get("timezone")
+
+        if not resolved_name:
+            resolved_name = original_name
+
+        original_to_store = original_name
+        if resolved_name and "," not in original_name:
+            original_to_store = resolved_name
+
         try:
             row = await conn.fetchrow(
                 """
@@ -390,7 +675,7 @@ class DailyTemperatureStore:
                     longitude,
                     timezone
                 )
-                VALUES ($1, $2, $3, $4, $5, $6)
+                VALUES ($1::text, $2::text, $3::text, $4::double precision, $5::double precision, $6::text)
                 ON CONFLICT (normalized_name) DO UPDATE SET
                     original_name = EXCLUDED.original_name,
                     resolved_name = COALESCE(EXCLUDED.resolved_name, locations.resolved_name),
@@ -400,9 +685,9 @@ class DailyTemperatureStore:
                     updated_at = NOW()
                 RETURNING id
                 """,
-                original_name,
+                original_to_store,
                 normalized_name,
-                resolved_name or original_name,
+                resolved_name or original_to_store,
                 latitude,
                 longitude,
                 timezone_name,

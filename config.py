@@ -49,13 +49,6 @@ IP_BLACKLIST = [ip.strip() for ip in os.getenv("IP_BLACKLIST", "").split(",") if
 # Usage Tracking Configuration
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
-DEFAULT_POPULAR_LOCATIONS = [
-    loc.strip().lower() 
-    for loc in os.getenv("CACHE_WARMING_POPULAR_LOCATIONS", 
-                         "london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin").split(",")
-    if loc.strip()
-]
-
 # HTTP timeout configuration
 HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
 HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks

@@ -97,12 +97,6 @@ CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
 
-# Default popular locations for cache warming (from environment variable)
-# These should be simple location names that will be expanded to multiple formats
-DEFAULT_POPULAR_LOCATIONS = os.getenv("CACHE_WARMING_POPULAR_LOCATIONS", "london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin").split(",")
-DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCATIONS if loc.strip()]
-
-
 # Environment variables for cache warming
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
@@ -581,31 +575,36 @@ class CacheWarmer:
     
     def get_locations_to_warm(self) -> List[str]:
         """Get list of locations to warm, prioritizing preapproved locations."""
-        locations = set()
+        locations: List[str] = []
+        seen_normalized = set()
+
+        def add_location(candidate: str) -> None:
+            if not candidate:
+                return
+            normalized = normalize_location_for_cache(candidate)
+            if normalized in seen_normalized:
+                return
+            seen_normalized.add(normalized)
+            locations.append(candidate)
         
         # Priority 1: Preapproved locations in web app format
         preapproved_locations = self.get_preapproved_locations()
         if preapproved_locations:
-            locations.update(preapproved_locations)
+            for loc in preapproved_locations:
+                add_location(loc)
             if DEBUG:
                 logger.info(f"🔥 CACHE WARMING: Added {len(preapproved_locations)} preapproved locations")
         
-        # Priority 2: Environment variable locations (simple format)
-        if DEFAULT_POPULAR_LOCATIONS:
-            locations.update(DEFAULT_POPULAR_LOCATIONS)
-            if DEBUG:
-                logger.info(f"🔥 CACHE WARMING: Added {len(DEFAULT_POPULAR_LOCATIONS)} environment variable locations")
-        
-        # Priority 3: Recently popular locations from usage tracking
+        # Priority 2: Recently popular locations from usage tracking
         if self.usage_tracker and USAGE_TRACKING_ENABLED:
             recent_popular = self.usage_tracker.get_popular_locations(limit=10, hours=24)
             for location, count in recent_popular:
-                locations.add(location)
+                add_location(location)
             if DEBUG and recent_popular:
                 logger.info(f"🔥 CACHE WARMING: Added {len(recent_popular)} usage-based locations")
         
         # Limit to max locations
-        final_locations = list(locations)[:CACHE_WARMING_MAX_LOCATIONS]
+        final_locations = locations[:CACHE_WARMING_MAX_LOCATIONS]
         
         if DEBUG:
             logger.info(f"🔥 CACHE WARMING: Total locations to warm: {len(final_locations)}")
@@ -635,10 +634,15 @@ class CacheWarmer:
             
             # Extract locations in the format: "Name, Admin1, Country Name"
             locations = []
+            seen = set()
             for item in data:
                 if 'name' in item and 'admin1' in item and 'country_name' in item:
                     full_name = f"{item['name']}, {item['admin1']}, {item['country_name']}"
-                    locations.append(full_name.lower())
+                    normalized = normalize_location_for_cache(full_name)
+                    if normalized in seen:
+                        continue
+                    seen.add(normalized)
+                    locations.append(full_name)
             
             if DEBUG:
                 logger.info(f"📋 PREAPPROVED LOCATIONS: Loaded {len(locations)} locations in web app format")
@@ -2283,7 +2287,6 @@ def initialize_cache(redis_client: redis.Redis):
         usage_tracker = LocationUsageTracker(redis_client, USAGE_RETENTION_DAYS)
         if DEBUG:
             logger.info(f"📊 USAGE TRACKING INITIALIZED: {USAGE_RETENTION_DAYS} days retention")
-            logger.info(f"🏙️  DEFAULT POPULAR LOCATIONS: {', '.join(DEFAULT_POPULAR_LOCATIONS)}")
         else:
             logger.info(f"Usage tracking enabled: {USAGE_RETENTION_DAYS} days retention")
     else:

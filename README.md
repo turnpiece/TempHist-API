@@ -1143,8 +1143,9 @@ CACHE_WARMING_INTERVAL_HOURS=4                     # Hours between warming cycle
 CACHE_WARMING_DAYS_BACK=7                          # Days of data to warm (default: 7)
 CACHE_WARMING_CONCURRENT_REQUESTS=3                # Concurrent warming requests (default: 3)
 CACHE_WARMING_MAX_LOCATIONS=15                     # Max locations to warm (default: 15)
-CACHE_WARMING_POPULAR_LOCATIONS=london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin
 ```
+
+The warmer now sources its base location list from `data/preapproved_locations.json`, so no additional environment variable is required.
 
 **Cache Statistics:**
 
