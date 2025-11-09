@@ -60,30 +60,6 @@
     "tier": "global"
   },
   {
-    "id": "liverpool",
-    "slug": "liverpool",
-    "name": "Liverpool",
-    "admin1": "England",
-    "country_name": "United Kingdom",
-    "country_code": "GB",
-    "latitude": 53.4084,
-    "longitude": -2.9916,
-    "timezone": "Europe/London",
-    "tier": "global"
-  },
-  {
-    "id": "bristol",
-    "slug": "bristol",
-    "name": "Bristol",
-    "admin1": "England",
-    "country_name": "United Kingdom",
-    "country_code": "GB",
-    "latitude": 51.4545,
-    "longitude": -2.5879,
-    "timezone": "Europe/London",
-    "tier": "global"
-  },
-  {
     "id": "cardiff",
     "slug": "cardiff",
     "name": "Cardiff",
@@ -116,30 +92,6 @@
     "country_code": "IE",
     "latitude": 53.3498,
     "longitude": -6.2603,
-    "timezone": "Europe/Dublin",
-    "tier": "global"
-  },
-  {
-    "id": "cork",
-    "slug": "cork",
-    "name": "Cork",
-    "admin1": "Munster",
-    "country_name": "Ireland",
-    "country_code": "IE",
-    "latitude": 51.8985,
-    "longitude": -8.4756,
-    "timezone": "Europe/Dublin",
-    "tier": "global"
-  },
-  {
-    "id": "galway",
-    "slug": "galway",
-    "name": "Galway",
-    "admin1": "Connacht",
-    "country_name": "Ireland",
-    "country_code": "IE",
-    "latitude": 53.2707,
-    "longitude": -9.0568,
     "timezone": "Europe/Dublin",
     "tier": "global"
   },
