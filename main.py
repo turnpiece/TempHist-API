@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from datetime import datetime, timedelta, date as dt_date, timezone
 from typing import List, Dict, Optional, Set, Union, Literal
 from collections import defaultdict
@@ -23,7 +24,7 @@ from pydantic import BaseModel, Field
 
 # Load environment variables before importing routers
 # Use the directory where main.py is located to find .env file (more robust than current working directory)
-env_path = PathLib(__file__).parent / '.env'
+env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Import routers
@@ -306,6 +307,8 @@ else:
 # Initialize service token rate limiter (Redis-based, always enabled for security)
 # Note: redis_client is initialized later, so we'll create this in the lifespan handler
 service_token_rate_limiter: Optional[ServiceTokenRateLimiter] = None
+# Optional async Redis client placeholder (used when an async client is configured elsewhere)
+async_redis_client = None
 
 if RATE_LIMIT_ENABLED:
     if DEBUG:

@@ -139,6 +139,49 @@ WINDOW_DAYS = {
     "yearly": 365,
 }
 
+# Minimum coverage requirements (fraction of expected days) for using partially cached datasets.
+COVERAGE_TOLERANCE = {
+    # Allow up to one missing day in a week (≈86% coverage).
+    "weekly": {"min_ratio": 6 / 7, "min_days": 6},
+    # Require at least 28 of 31 days for monthly aggregations (≈90% coverage).
+    "monthly": {"min_ratio": 0.9, "min_days": 28},
+    # Yearly aggregates can tolerate larger gaps, but still require strong coverage.
+    "yearly": {"min_ratio": 0.9, "min_days": 330},
+}
+
+
+def _evaluate_coverage(period: str, available_days: int, expected_days: int) -> Tuple[bool, float]:
+    """Determine whether the available data meets tolerance for the requested period."""
+    if expected_days == 0:
+        return False, 0.0
+    tolerance = COVERAGE_TOLERANCE.get(period, {"min_ratio": 1.0, "min_days": expected_days})
+    ratio = available_days / expected_days
+    return (
+        available_days >= tolerance.get("min_days", expected_days)
+        and ratio >= tolerance.get("min_ratio", 1.0)
+    ), ratio
+
+
+def _enqueue_backfill_job(period: str, location: str, identifier: str, year: int) -> None:
+    """Request the background worker to backfill missing daily data for a specific year."""
+    try:
+        job_manager = get_job_manager()
+        if not job_manager:
+            return
+        job_manager.create_job(
+            "record_computation",
+            {
+                "scope": period,
+                "slug": normalize_location_for_cache(location),
+                "identifier": identifier,
+                "year": year,
+                "location": location,
+            },
+        )
+    except Exception as exc:  # Best-effort enqueue; log at debug level when verbose.
+        if DEBUG:
+            logger.debug("Failed to enqueue backfill job for %s %s %s: %s", period, location, year, exc)
+
 
 async def _collect_rolling_window_values(
     location: str,
@@ -147,12 +190,13 @@ async def _collect_rolling_window_values(
     day: int,
     unit_group: str,
     years: List[int],
-) -> Tuple[List[TemperatureValue], List[float], List[Dict]]:
+) -> Tuple[List[TemperatureValue], List[float], List[Dict], List[Dict]]:
     store = await get_daily_temperature_store()
 
     values: List[TemperatureValue] = []
     aggregated: List[float] = []
     missing_years: List[Dict] = []
+    coverage_details: List[Dict] = []
     window_days = WINDOW_DAYS[period]
 
     for year in years:
@@ -165,82 +209,95 @@ async def _collect_rolling_window_values(
         date_sequence = [start_date + timedelta(days=i) for i in range(window_days)]
         cache = await store.fetch(location, date_sequence)
 
+        expected_days = len(date_sequence)
         missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
+        available_count = expected_days - len(missing_dates)
+        coverage_ok, _ = _evaluate_coverage(period, available_count, expected_days)
         timeline_failed = False
+        final_missing_dates = missing_dates
 
         if missing_dates:
-            for range_start, range_end in _collapse_consecutive_dates(missing_dates):
-                timeline_metadata = None
-                try:
-                    timeline_days, timeline_metadata = await fetch_timeline_days(
-                        location, range_start, range_end
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "❌ timeline fetch failed for %s (%s to %s): %s",
-                        location,
-                        range_start,
-                        range_end,
-                        exc,
-                    )
-                    track_missing_year(missing_years, year, "timeline_error")
-                    timeline_failed = True
-                    break
-                records_to_store: List[DailyTemperatureRecord] = []
-                for day_payload in timeline_days:
-                    dt_raw = day_payload.get("datetime") or day_payload.get("date")
-                    if not dt_raw:
-                        continue
-                    dt_text = str(dt_raw)[:10]
+            _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year)
+
+            if not coverage_ok:
+                for range_start, range_end in _collapse_consecutive_dates(missing_dates):
+                    timeline_metadata = None
                     try:
-                        record_date = datetime.strptime(dt_text, "%Y-%m-%d").date()
-                    except ValueError:
-                        continue
-                    if record_date < range_start or record_date > range_end:
-                        continue
-                    temp = _coerce_float(day_payload.get("temp"))
-                    temp_max = _coerce_float(day_payload.get("tempmax") or day_payload.get("maxt"))
-                    temp_min = _coerce_float(day_payload.get("tempmin") or day_payload.get("mint"))
-                    filtered_payload = {
-                        "datetime": record_date.isoformat(),
-                        "temp": temp,
-                        "tempmax": temp_max,
-                        "tempmin": temp_min,
-                    }
-                    records_to_store.append(
-                        DailyTemperatureRecord(
-                            date=record_date,
-                            temp_c=temp,
-                            temp_max_c=temp_max,
-                            temp_min_c=temp_min,
-                            payload=filtered_payload,
-                            source="timeline",
+                        timeline_days, timeline_metadata = await fetch_timeline_days(
+                            location, range_start, range_end
                         )
-                    )
-                if records_to_store:
-                    await store.upsert(location, records_to_store, metadata=timeline_metadata)
-                    for rec in records_to_store:
-                        cache[rec.date] = rec
+                    except Exception as exc:
+                        logger.error(
+                            "❌ timeline fetch failed for %s (%s to %s): %s",
+                            location,
+                            range_start,
+                            range_end,
+                            exc,
+                        )
+                        track_missing_year(missing_years, year, "timeline_error")
+                        timeline_failed = True
+                        break
+                    records_to_store: List[DailyTemperatureRecord] = []
+                    for day_payload in timeline_days:
+                        dt_raw = day_payload.get("datetime") or day_payload.get("date")
+                        if not dt_raw:
+                            continue
+                        dt_text = str(dt_raw)[:10]
+                        try:
+                            record_date = datetime.strptime(dt_text, "%Y-%m-%d").date()
+                        except ValueError:
+                            continue
+                        if record_date < range_start or record_date > range_end:
+                            continue
+                        temp = _coerce_float(day_payload.get("temp"))
+                        temp_max = _coerce_float(day_payload.get("tempmax") or day_payload.get("maxt"))
+                        temp_min = _coerce_float(day_payload.get("tempmin") or day_payload.get("mint"))
+                        filtered_payload = {
+                            "datetime": record_date.isoformat(),
+                            "temp": temp,
+                            "tempmax": temp_max,
+                            "tempmin": temp_min,
+                        }
+                        records_to_store.append(
+                            DailyTemperatureRecord(
+                                date=record_date,
+                                temp_c=temp,
+                                temp_max_c=temp_max,
+                                temp_min_c=temp_min,
+                                payload=filtered_payload,
+                                source="timeline",
+                            )
+                        )
+                    if records_to_store:
+                        await store.upsert(location, records_to_store, metadata=timeline_metadata)
+                        for rec in records_to_store:
+                            cache[rec.date] = rec
 
-            if timeline_failed:
-                continue
+                if timeline_failed:
+                    final_missing_dates = missing_dates
+                    coverage_ok = False
+                else:
+                    final_missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
+                    available_count = expected_days - len(final_missing_dates)
+                    coverage_ok, _ = _evaluate_coverage(period, available_count, expected_days)
+            else:
+                final_missing_dates = missing_dates
+        else:
+            final_missing_dates = []
+            coverage_ok = True
 
-            remaining_missing = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
-            if remaining_missing:
-                track_missing_year(missing_years, year, "insufficient_daily_data")
-                continue
+        if final_missing_dates and not coverage_ok:
+            track_missing_year(missing_years, year, "coverage_below_threshold")
+            continue
 
-        temps_converted = []
-        incomplete = False
-        for d in date_sequence:
-            record = cache.get(d)
-            if not record or record.temp_c is None:
-                incomplete = True
-                break
-            temps_converted.append(_convert_c_to_unit(record.temp_c, unit_group))
+        temps_converted = [
+            _convert_c_to_unit(cache[d].temp_c, unit_group)
+            for d in date_sequence
+            if d in cache and cache[d].temp_c is not None
+        ]
 
-        if incomplete or len(temps_converted) != len(date_sequence):
-            track_missing_year(missing_years, year, "insufficient_daily_data")
+        if not temps_converted:
+            track_missing_year(missing_years, year, "no_daily_data")
             continue
 
         avg_temp = sum(temps_converted) / len(temps_converted)
@@ -253,7 +310,18 @@ async def _collect_rolling_window_values(
             )
         )
 
-    return values, aggregated, missing_years
+        coverage_details.append(
+            {
+                "year": anchor.year,
+                "available_days": len(temps_converted),
+                "expected_days": expected_days,
+                "missing_days": expected_days - len(temps_converted),
+                "coverage_ratio": round(len(temps_converted) / expected_days, 4) if expected_days else 0.0,
+                "approximate": len(temps_converted) < expected_days,
+            }
+        )
+
+    return values, aggregated, missing_years, coverage_details
 
 async def get_temperature_data_v1(
     location: str,
@@ -295,6 +363,7 @@ async def get_temperature_data_v1(
     values = []
     all_temps = []
     missing_years = []
+    coverage_details: List[Dict] = []
     
     if period == "daily":
         # For daily, get data for just the specific day across all years
@@ -316,7 +385,12 @@ async def get_temperature_data_v1(
                     ))
     
     elif period in ["weekly", "monthly", "yearly"]:
-        window_values, aggregated_values, window_missing = await _collect_rolling_window_values(
+        (
+            window_values,
+            aggregated_values,
+            window_missing,
+            window_coverage,
+        ) = await _collect_rolling_window_values(
             location=location,
             period=period,  # type: ignore[arg-type]
             month=month,
@@ -327,6 +401,7 @@ async def get_temperature_data_v1(
         values.extend(window_values)
         all_temps.extend(aggregated_values)
         missing_years.extend(window_missing)
+        coverage_details.extend(window_coverage)
     
     # Calculate date range
     if values:
@@ -400,9 +475,23 @@ async def get_temperature_data_v1(
     
     # Create comprehensive metadata
     additional_metadata = {
-        "period_days": date_range_days, 
-        "end_date": end_date_obj.strftime("%Y-%m-%d")
+        "period_days": date_range_days,
+        "end_date": end_date_obj.strftime("%Y-%m-%d"),
     }
+    if coverage_details:
+        total_expected = sum(item["expected_days"] for item in coverage_details)
+        total_available = sum(item["available_days"] for item in coverage_details)
+        overall_ratio = (
+            round(total_available / total_expected, 4) if total_expected else 0.0
+        )
+        approximate_years = [item for item in coverage_details if item["approximate"]]
+        additional_metadata["coverage"] = {
+            "overall_available_days": total_available,
+            "overall_expected_days": total_expected,
+            "overall_coverage_ratio": overall_ratio,
+            "approximate_years": approximate_years,
+            "per_year": coverage_details,
+        }
     
     # Get timezone for the location
     timezone_str = None

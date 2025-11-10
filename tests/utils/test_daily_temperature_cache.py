@@ -70,7 +70,7 @@ async def test_collect_rolling_window_weekly_caches(monkeypatch):
 
     monkeypatch.setattr("routers.v1_records.fetch_timeline_days", fake_fetch)
 
-    values, aggregated, missing = await _collect_rolling_window_values(
+    values, aggregated, missing, coverage = await _collect_rolling_window_values(
         "Test City",
         "weekly",
         11,
@@ -84,10 +84,20 @@ async def test_collect_rolling_window_weekly_caches(monkeypatch):
     assert values[0].year == 2024
     assert fetched_ranges == [(date(2024, 11, 2), date(2024, 11, 8))]
     assert pytest.approx(aggregated[0], rel=1e-6) == sum(10.0 + i for i in range(7)) / 7
+    assert coverage == [
+        {
+            "year": 2024,
+            "available_days": 7,
+            "expected_days": 7,
+            "missing_days": 0,
+            "coverage_ratio": 1.0,
+            "approximate": False,
+        }
+    ]
 
     # Second call should hit the cache, avoiding new API fetches
     fetched_ranges.clear()
-    values_again, aggregated_again, missing_again = await _collect_rolling_window_values(
+    values_again, aggregated_again, missing_again, coverage_again = await _collect_rolling_window_values(
         "Test City",
         "weekly",
         11,
@@ -100,6 +110,7 @@ async def test_collect_rolling_window_weekly_caches(monkeypatch):
     assert missing_again == []
     assert values_again[0].model_dump() == values[0].model_dump()
     assert pytest.approx(aggregated_again[0], rel=1e-6) == aggregated[0]
+    assert coverage_again == coverage
 
 
 @pytest.mark.asyncio
@@ -140,7 +151,7 @@ async def test_collect_rolling_window_respects_unit_conversion(monkeypatch):
 
     monkeypatch.setattr("routers.v1_records.fetch_timeline_days", failing_fetch)
 
-    values, aggregated, missing = await _collect_rolling_window_values(
+    values, aggregated, missing, coverage = await _collect_rolling_window_values(
         "Test City",
         "weekly",
         11,
@@ -152,8 +163,69 @@ async def test_collect_rolling_window_respects_unit_conversion(monkeypatch):
     assert missing == []
     assert len(values) == 1
     assert values[0].year == 2023
+    assert coverage[0]["approximate"] is False
 
     avg_c = sum(5.0 + i for i in range(7)) / 7
     expected_f = (avg_c * 9.0 / 5.0) + 32.0
     assert pytest.approx(aggregated[0], rel=1e-6) == expected_f
+
+
+@pytest.mark.asyncio
+async def test_collect_rolling_window_allows_partial_yearly_average(monkeypatch):
+    store = InMemoryDailyTemperatureStore()
+
+    async def fake_get_store():
+        return store
+
+    monkeypatch.setattr("routers.v1_records.get_daily_temperature_store", fake_get_store)
+
+    year = 2022
+    anchor = date(year, 11, 8)
+    start_date = anchor - timedelta(days=364)
+
+    missing_days = {start_date + timedelta(days=i) for i in range(5)}
+    yearly_records = []
+    for i in range(365):
+        current_day = start_date + timedelta(days=i)
+        if current_day in missing_days:
+            continue
+        yearly_records.append(
+            DailyTemperatureRecord(
+                date=current_day,
+                temp_c=12.0,
+                temp_max_c=13.0,
+                temp_min_c=11.0,
+                payload={
+                    "datetime": current_day.isoformat(),
+                    "temp": 12.0,
+                    "tempmax": 13.0,
+                    "tempmin": 11.0,
+                },
+                source="test",
+            )
+        )
+
+    await store.upsert("Test City", yearly_records)
+
+    async def failing_fetch(*args, **kwargs):
+        raise AssertionError("Timeline fetch should not be called for tolerant coverage")
+
+    monkeypatch.setattr("routers.v1_records.fetch_timeline_days", failing_fetch)
+
+    values, aggregated, missing, coverage = await _collect_rolling_window_values(
+        "Test City",
+        "yearly",
+        11,
+        8,
+        "celsius",
+        [year],
+    )
+
+    assert missing == []
+    assert len(values) == 1
+    assert pytest.approx(values[0].temperature, rel=1e-6) == 12.0
+    assert pytest.approx(aggregated[0], rel=1e-6) == 12.0
+    assert coverage[0]["approximate"] is True
+    assert coverage[0]["missing_days"] == 5
+    assert coverage[0]["available_days"] == 360
 
