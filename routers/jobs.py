@@ -11,6 +11,11 @@ from routers.dependencies import get_redis_client
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Job diagnostics constants
+STUCK_JOB_THRESHOLD_SECONDS = 300  # 5 minutes - jobs older than this are considered stuck
+WORKER_HEARTBEAT_TIMEOUT_SECONDS = 60  # 1 minute - worker considered unhealthy if heartbeat older
+MAX_STUCK_JOBS_TO_DISPLAY = 10  # Limit number of stuck jobs shown in diagnostics
+
 
 def get_diagnostics_recommendations(worker_alive, heartbeat_age, jobs_by_status, stuck_count):
     """Generate diagnostic recommendations based on worker and job status."""
@@ -26,7 +31,7 @@ def get_diagnostics_recommendations(worker_alive, heartbeat_age, jobs_by_status,
                 "Verify Redis connection is available"
             ]
         })
-    elif heartbeat_age and heartbeat_age > 60:
+    elif heartbeat_age and heartbeat_age > WORKER_HEARTBEAT_TIMEOUT_SECONDS:
         recommendations.append({
             "severity": "warning",
             "issue": f"Worker heartbeat is stale ({int(heartbeat_age)}s old)",
@@ -207,7 +212,7 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
                         try:
                             created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
                             age = (datetime.now(timezone.utc) - created_dt).total_seconds()
-                            if age > 300:  # 5 minutes
+                            if age > STUCK_JOB_THRESHOLD_SECONDS:
                                 stuck_jobs.append({
                                     "job_id": job.get("id"),
                                     "status": status,
@@ -215,7 +220,8 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
                                     "type": job.get("type"),
                                     "params": job.get("params", {})
                                 })
-                        except:
+                        except (ValueError, TypeError, KeyError):
+                            # Skip jobs with invalid timestamps or malformed data
                             pass
             except Exception as job_error:
                 logger.warning(f"Error examining job {job_id}: {job_error}")
@@ -228,7 +234,8 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
                     heartbeat = heartbeat.decode('utf-8')
                 heartbeat_dt = datetime.fromisoformat(heartbeat.replace('Z', '+00:00'))
                 heartbeat_age = (datetime.now(timezone.utc) - heartbeat_dt).total_seconds()
-            except:
+            except (ValueError, TypeError, AttributeError):
+                # Invalid heartbeat timestamp format
                 pass
         
         return {
@@ -236,7 +243,7 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
                 "alive": worker_alive,
                 "heartbeat": heartbeat,
                 "heartbeat_age_seconds": heartbeat_age,
-                "status": "healthy" if worker_alive and (heartbeat_age is None or heartbeat_age < 60) else "unhealthy"
+                "status": "healthy" if worker_alive and (heartbeat_age is None or heartbeat_age < WORKER_HEARTBEAT_TIMEOUT_SECONDS) else "unhealthy"
             },
             "queue": {
                 "length": queue_length,
@@ -245,7 +252,7 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
             "jobs": {
                 "by_status": jobs_by_status,
                 "stuck_count": len(stuck_jobs),
-                "stuck_jobs": stuck_jobs[:10]  # Show first 10 stuck jobs
+                "stuck_jobs": stuck_jobs[:MAX_STUCK_JOBS_TO_DISPLAY]
             },
             "recommendations": get_diagnostics_recommendations(
                 worker_alive, 
@@ -314,7 +321,7 @@ async def debug_jobs_endpoint(redis_client: redis.Redis = Depends(get_redis_clie
                                 "status": status,
                                 "created_at": created
                             }
-                        except:
+                        except (json.JSONDecodeError, ValueError, TypeError, UnicodeDecodeError):
                             debug_info["job_data_status"][job_id] = {
                                 "exists": True,
                                 "error": "invalid JSON"

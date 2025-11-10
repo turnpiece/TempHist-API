@@ -18,6 +18,12 @@ from cache_utils import get_job_manager, JobStatus
 
 logger = logging.getLogger(__name__)
 
+# Job worker constants
+JOB_PROCESSING_BATCH_SIZE = 10  # Maximum jobs to process in one cycle
+WORKER_POLL_INTERVAL_SECONDS = 1  # Time between job queue polls
+WORKER_HEARTBEAT_INTERVAL_CYCLES = 60  # Update heartbeat every 60 poll cycles (60 seconds)
+WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES = 300  # Log heartbeat every 300 cycles (5 minutes)
+
 class JobWorker:
     """Background worker for processing async jobs."""
     
@@ -38,17 +44,17 @@ class JobWorker:
                 await self.process_jobs()
                 poll_count += 1
                 
-                # Update heartbeat every 60 seconds (log every 5 minutes for less noise)
-                if poll_count % 60 == 0:
+                # Update heartbeat periodically
+                if poll_count % WORKER_HEARTBEAT_INTERVAL_CYCLES == 0:
                     try:
                         self.redis.setex("worker:heartbeat", 180, datetime.now(timezone.utc).isoformat())
-                        # Only log heartbeat every 5 minutes to reduce log volume
-                        if poll_count % 300 == 0:
+                        # Only log heartbeat periodically to reduce log volume
+                        if poll_count % WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES == 0:
                             logger.info(f"💓 Worker heartbeat active (poll #{poll_count})")
                     except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
                         logger.warning(f"⚠️  Redis error updating heartbeat: {e}")
-                
-                await asyncio.sleep(1)  # Poll every second
+
+                await asyncio.sleep(WORKER_POLL_INTERVAL_SECONDS)
         except Exception as e:
             logger.error(f"❌ Job worker error: {e}")
             import traceback
@@ -125,7 +131,7 @@ class JobWorker:
             
             if queue_length > 0:
                 # Get jobs from the queue (without removing them)
-                for i in range(min(queue_length, 10)):  # Process up to 10 jobs at a time
+                for i in range(min(queue_length, JOB_PROCESSING_BATCH_SIZE)):
                     job_id = self.redis.lindex(self.job_queue_key, i)
                     if job_id:
                         # Convert byte string to string if needed

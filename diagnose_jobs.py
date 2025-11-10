@@ -105,7 +105,7 @@ def diagnose_job_system():
                             created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
                             age = (datetime.now(timezone.utc) - created_dt).total_seconds()
                             age_str = f"{age:.0f}s"
-                        except:
+                        except (ValueError, TypeError, AttributeError):
                             age_str = "unknown"
                         
                         jobs_by_status[status].append({
@@ -258,7 +258,8 @@ def clear_stuck_jobs():
                         # Remove from queue
                         r.lrem("job_queue", 1, job.get("id"))
                         stuck_count += 1
-                except:
+                except (redis.RedisError, json.JSONDecodeError, ValueError):
+                    # Skip jobs that can't be processed
                     pass
         
         print(f"✅ Cleared {stuck_count} stuck jobs")
@@ -309,7 +310,7 @@ def clear_all_jobs():
             for key in job_keys + result_keys:
                 r.delete(key)
                 count += 1
-        except:
+        except (redis.RedisError, redis.ResponseError):
             print("⚠️  Could not use KEYS command, only cleared jobs in queue")
         
         # Clear queue
