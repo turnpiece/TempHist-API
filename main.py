@@ -54,6 +54,11 @@ from cache_utils import (
 )
 from version import __version__
 
+# Import configuration and rate limiting
+from config import CORS_ORIGINS, CORS_ORIGIN_REGEX, VISUAL_CROSSING_BASE_URL, VISUAL_CROSSING_REMOTE_DATA
+from rate_limiting import ServiceTokenRateLimiter, LocationDiversityMonitor, RequestRateMonitor
+from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
+
 # Environment variables - strip whitespace/newlines from API keys
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
@@ -150,49 +155,6 @@ LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "norm
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
-
-# CORS configuration from environment variables
-def validate_cors_config():
-    """Validate CORS configuration to prevent misconfiguration."""
-    origins = os.getenv("CORS_ORIGINS", "").strip()
-    regex = os.getenv("CORS_ORIGIN_REGEX", "").strip()
-    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
-    
-    # Use _temp_logger since logger is not yet defined at module initialization time
-    # This function is called at module level before logger is initialized
-    _log = _logging.getLogger(__name__)
-    
-    # Warn about permissive configurations
-    if not origins and not regex:
-        _log.warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
-    
-    if regex:
-        # Test regex is valid and not too permissive
-        import re
-        try:
-            pattern = re.compile(regex)
-            # Warn if regex looks too permissive
-            permissive_patterns = [".*", ".+", r".*\.*"]
-            if regex in permissive_patterns or (".*" in regex and env == "production"):
-                _log.error(f"❌ CORS regex very permissive: {regex}")
-                if env == "production":
-                    raise ValueError("Overly permissive CORS regex not allowed in production")
-                else:
-                    _log.warning(f"⚠️  Permissive CORS regex in {env} environment: {regex}")
-        except re.error as e:
-            _log.error(f"❌ Invalid CORS_ORIGIN_REGEX: {e}")
-            raise ValueError(f"Invalid CORS_ORIGIN_REGEX: {e}")
-    
-    if origins == "*":
-        _log.error("❌ CORS_ORIGINS set to '*' - this is insecure!")
-        if env == "production":
-            raise ValueError("Wildcard CORS not allowed in production")
-        else:
-            _log.warning("⚠️  Wildcard CORS in non-production environment")
-    
-    return origins, regex
-
-CORS_ORIGINS, CORS_ORIGIN_REGEX = validate_cors_config()
 
 # Rate limiting configuration
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
@@ -320,321 +282,6 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
-# Service Token Rate Limiting Configuration
-# High limits for legitimate cache warming, but protection against abuse
-# Configurable via environment variables with sensible defaults
-SERVICE_TOKEN_REQUESTS_PER_HOUR = int(os.getenv("SERVICE_TOKEN_REQUESTS_PER_HOUR", "5000"))
-SERVICE_TOKEN_LOCATIONS_PER_HOUR = int(os.getenv("SERVICE_TOKEN_LOCATIONS_PER_HOUR", "500"))
-SERVICE_TOKEN_WINDOW_HOURS = int(os.getenv("SERVICE_TOKEN_WINDOW_HOURS", "1"))
-
-# Validate limits are reasonable
-if SERVICE_TOKEN_REQUESTS_PER_HOUR < 100:
-    logger.warning(f"SERVICE_TOKEN_REQUESTS_PER_HOUR is very low ({SERVICE_TOKEN_REQUESTS_PER_HOUR}). Consider increasing for cache warming.")
-elif SERVICE_TOKEN_REQUESTS_PER_HOUR > 100000:
-    logger.warning(f"SERVICE_TOKEN_REQUESTS_PER_HOUR is very high ({SERVICE_TOKEN_REQUESTS_PER_HOUR}). This may allow excessive costs.")
-
-if SERVICE_TOKEN_LOCATIONS_PER_HOUR < 10:
-    logger.warning(f"SERVICE_TOKEN_LOCATIONS_PER_HOUR is very low ({SERVICE_TOKEN_LOCATIONS_PER_HOUR}). Consider increasing for cache warming.")
-elif SERVICE_TOKEN_LOCATIONS_PER_HOUR > 10000:
-    logger.warning(f"SERVICE_TOKEN_LOCATIONS_PER_HOUR is very high ({SERVICE_TOKEN_LOCATIONS_PER_HOUR}). This may allow excessive costs.")
-
-if SERVICE_TOKEN_WINDOW_HOURS < 1:
-    logger.warning(f"SERVICE_TOKEN_WINDOW_HOURS is less than 1 ({SERVICE_TOKEN_WINDOW_HOURS}). Using minimum of 1 hour.")
-    SERVICE_TOKEN_WINDOW_HOURS = 1
-elif SERVICE_TOKEN_WINDOW_HOURS > 24:
-    logger.warning(f"SERVICE_TOKEN_WINDOW_HOURS is very high ({SERVICE_TOKEN_WINDOW_HOURS}). Consider using 1-24 hours.")
-
-SERVICE_TOKEN_RATE_LIMITS = {
-    "requests_per_hour": SERVICE_TOKEN_REQUESTS_PER_HOUR,
-    "locations_per_hour": SERVICE_TOKEN_LOCATIONS_PER_HOUR,
-    "window_hours": SERVICE_TOKEN_WINDOW_HOURS,
-}
-
-class ServiceTokenRateLimiter:
-    """Redis-based rate limiter for service tokens to prevent abuse while allowing legitimate cache warming.
-    
-    Uses Redis for distributed rate limiting across multiple worker instances.
-    """
-    
-    def __init__(self, redis_client: redis.Redis, 
-                 requests_per_hour: int = SERVICE_TOKEN_RATE_LIMITS["requests_per_hour"],
-                 locations_per_hour: int = SERVICE_TOKEN_RATE_LIMITS["locations_per_hour"],
-                 window_hours: int = SERVICE_TOKEN_RATE_LIMITS["window_hours"]):
-        self.redis = redis_client
-        self.requests_per_hour = requests_per_hour
-        self.locations_per_hour = locations_per_hour
-        self.window_seconds = window_hours * 3600
-        self.requests_key_prefix = "service_rate:requests:"
-        self.locations_key_prefix = "service_rate:locations:"
-    
-    def check_request_rate(self, client_ip: str) -> tuple[bool, str]:
-        """Check if service token request rate is within limits.
-        
-        Returns:
-            tuple: (is_allowed, reason)
-        """
-        try:
-            key = f"{self.requests_key_prefix}{client_ip}"
-            now = time.time()
-            window_start = now - self.window_seconds
-            
-            # Use Redis sorted set for sliding window
-            # Remove old entries
-            self.redis.zremrangebyscore(key, 0, window_start)
-            
-            # Count requests in window
-            count = self.redis.zcard(key)
-            
-            if count >= self.requests_per_hour:
-                return False, f"Service token rate limit exceeded: {count}/{self.requests_per_hour} requests per hour"
-            
-            # Add current request with current timestamp
-            self.redis.zadd(key, {str(now): now})
-            self.redis.expire(key, self.window_seconds)
-            
-            return True, "OK"
-        except Exception as e:
-            logger.error(f"Error checking service token request rate: {e}")
-            # Fail open - allow request if Redis fails (to prevent DoS from Redis issues)
-            return True, "OK"
-    
-    def check_location_diversity(self, client_ip: str, location: str) -> tuple[bool, str]:
-        """Check if service token location diversity is within limits.
-        
-        Returns:
-            tuple: (is_allowed, reason)
-        """
-        try:
-            key = f"{self.locations_key_prefix}{client_ip}"
-            now = time.time()
-            window_start = now - self.window_seconds
-            
-            # Use Redis sorted set for sliding window
-            # Remove old entries
-            self.redis.zremrangebyscore(key, 0, window_start)
-            
-            # Check if location already in window
-            location_exists = self.redis.zscore(key, location) is not None
-            
-            if not location_exists:
-                # Count unique locations in window
-                count = self.redis.zcard(key)
-                
-                if count >= self.locations_per_hour:
-                    return False, f"Service token location limit exceeded: {count}/{self.locations_per_hour} unique locations per hour"
-            
-            # Add/update location with current timestamp
-            self.redis.zadd(key, {location: now})
-            self.redis.expire(key, self.window_seconds)
-            
-            return True, "OK"
-        except Exception as e:
-            logger.error(f"Error checking service token location diversity: {e}")
-            # Fail open - allow request if Redis fails
-            return True, "OK"
-    
-    def get_stats(self, client_ip: str) -> Dict:
-        """Get service token rate limiting stats."""
-        try:
-            requests_key = f"{self.requests_key_prefix}{client_ip}"
-            locations_key = f"{self.locations_key_prefix}{client_ip}"
-            now = time.time()
-            window_start = now - self.window_seconds
-            
-            # Count requests
-            self.redis.zremrangebyscore(requests_key, 0, window_start)
-            request_count = self.redis.zcard(requests_key)
-            
-            # Count locations
-            self.redis.zremrangebyscore(locations_key, 0, window_start)
-            location_count = self.redis.zcard(locations_key)
-            
-            return {
-                "requests_count": request_count,
-                "requests_limit": self.requests_per_hour,
-                "locations_count": location_count,
-                "locations_limit": self.locations_per_hour,
-                "window_hours": self.window_seconds / 3600,
-                "remaining_requests": max(0, self.requests_per_hour - request_count),
-                "remaining_locations": max(0, self.locations_per_hour - location_count)
-            }
-        except Exception as e:
-            logger.error(f"Error getting service token stats: {e}")
-            return {
-                "error": str(e),
-                "requests_count": 0,
-                "requests_limit": self.requests_per_hour,
-                "locations_count": 0,
-                "locations_limit": self.locations_per_hour
-            }
-
-# Rate Limiting Classes
-class LocationDiversityMonitor:
-    """Monitor and limit location diversity per IP address to prevent API abuse."""
-    
-    def __init__(self, max_locations: int = 10, window_hours: int = 1):
-        self.max_locations = max_locations
-        self.window_hours = window_hours
-        self.window_seconds = window_hours * 3600
-        
-        # Track unique locations per IP over time windows
-        self.ip_locations: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
-        self.suspicious_ips: Set[str] = set()
-        self.last_cleanup = time.time()
-        # LOW-002: Use background task for cleanup instead of on every request
-        self.cleanup_interval = 300  # Clean up every 5 minutes
-        self._cleanup_task = None  # Background cleanup task
-        
-    def _cleanup_old_entries(self):
-        """Clean up old entries to prevent memory bloat."""
-        current_time = time.time()
-        if current_time - self.last_cleanup < self.cleanup_interval:
-            return
-            
-        window_start = current_time - self.window_seconds
-        
-        for ip_addr in list(self.ip_locations.keys()):
-            for timestamp in list(self.ip_locations[ip_addr].keys()):
-                if float(timestamp) < window_start:
-                    del self.ip_locations[ip_addr][timestamp]
-            
-            # Remove IP if no timestamps remain
-            if not self.ip_locations[ip_addr]:
-                del self.ip_locations[ip_addr]
-        
-        self.last_cleanup = current_time
-    
-    def check_location_diversity(self, ip: str, location: str) -> tuple[bool, str]:
-        """Check if IP is requesting too many different locations.
-        
-        Returns:
-            tuple: (is_allowed, reason)
-        """
-        self._cleanup_old_entries()
-        
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        # Add current request
-        timestamp_str = str(current_time)
-        self.ip_locations[ip][timestamp_str].add(location)
-        
-        # Count unique locations in time window
-        unique_locations = set()
-        for timestamp, locations in self.ip_locations[ip].items():
-            if float(timestamp) >= window_start:
-                unique_locations.update(locations)
-        
-        # Check if suspicious
-        if len(unique_locations) > self.max_locations:
-            self.suspicious_ips.add(ip)
-            return False, f"Too many different locations ({len(unique_locations)} > {self.max_locations}) in {self.window_hours} hour(s)"
-        
-        return True, "OK"
-    
-    def is_suspicious(self, ip: str) -> bool:
-        """Check if an IP has been flagged as suspicious."""
-        return ip in self.suspicious_ips
-    
-    def get_stats(self, ip: str) -> Dict:
-        """Get rate limiting stats for an IP address."""
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        unique_locations = set()
-        total_requests = 0
-        
-        for timestamp, locations in self.ip_locations[ip].items():
-            if float(timestamp) >= window_start:
-                unique_locations.update(locations)
-                total_requests += len(locations)
-        
-        return {
-            "unique_locations": len(unique_locations),
-            "total_requests": total_requests,
-            "max_locations": self.max_locations,
-            "window_hours": self.window_hours,
-            "is_suspicious": self.is_suspicious(ip)
-        }
-
-class RequestRateMonitor:
-    """Monitor and limit total request rate per IP address."""
-    
-    def __init__(self, max_requests: int = 100, window_hours: int = 1):
-        self.max_requests = max_requests
-        self.window_hours = window_hours
-        self.window_seconds = window_hours * 3600
-        
-        # Track request counts per IP over time windows
-        self.ip_requests: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        self.last_cleanup = time.time()
-        # LOW-002: Use background task for cleanup instead of on every request
-        self.cleanup_interval = 300  # Clean up every 5 minutes
-        self._cleanup_task = None  # Background cleanup task
-        
-    def _cleanup_old_entries(self):
-        """Clean up old entries to prevent memory bloat."""
-        current_time = time.time()
-        if current_time - self.last_cleanup < self.cleanup_interval:
-            return
-            
-        window_start = current_time - self.window_seconds
-        
-        for ip_addr in list(self.ip_requests.keys()):
-            for timestamp in list(self.ip_requests[ip_addr].keys()):
-                if float(timestamp) < window_start:
-                    del self.ip_requests[ip_addr][timestamp]
-            
-            # Remove IP if no timestamps remain
-            if not self.ip_requests[ip_addr]:
-                del self.ip_requests[ip_addr]
-        
-        self.last_cleanup = current_time
-    
-    def check_request_rate(self, ip: str) -> tuple[bool, str]:
-        """Check if IP is making too many requests.
-        
-        Returns:
-            tuple: (is_allowed, reason)
-        """
-        self._cleanup_old_entries()
-        
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        # Add current request
-        timestamp_str = str(int(current_time / 60) * 60)  # Round to minute for better grouping
-        self.ip_requests[ip][timestamp_str] += 1
-        
-        # Count total requests in time window
-        total_requests = sum(
-            count for timestamp, count in self.ip_requests[ip].items()
-            if float(timestamp) >= window_start
-        )
-        
-        # Check if rate limit exceeded
-        if total_requests > self.max_requests:
-            return False, f"Too many requests ({total_requests} > {self.max_requests}) in {self.window_hours} hour(s)"
-        
-        return True, "OK"
-    
-    def get_stats(self, ip: str) -> Dict:
-        """Get rate limiting stats for an IP address."""
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        total_requests = sum(
-            count for timestamp, count in self.ip_requests[ip].items()
-            if float(timestamp) >= window_start
-        )
-        
-        return {
-            "total_requests": total_requests,
-            "max_requests": self.max_requests,
-            "window_hours": self.window_hours,
-            "remaining_requests": max(0, self.max_requests - total_requests)
-        }
-
 # Usage Tracking Configuration
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
@@ -672,10 +319,9 @@ else:
         logger.info("Rate limiting disabled")
 
 # API Configuration
-VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
+# VISUAL_CROSSING_BASE_URL and VISUAL_CROSSING_REMOTE_DATA are imported from config
 VISUAL_CROSSING_UNIT_GROUP = "metric"  # Visual Crossing API still uses "metric"/"us"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
-VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 
 def clean_location_string(location: str) -> str:
     """Clean location string by removing non-printable ASCII characters."""
@@ -1279,30 +925,6 @@ except ValueError:
 except Exception as e:
     logger.error(f"❌ Error initializing Firebase: {e}")
     # Continue without Firebase - the app can still work without it
-
-def get_client_ip(request: Request) -> str:
-    """Get the client IP address from the request."""
-    # Check for forwarded headers first (for proxy/load balancer scenarios)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # Take the first IP in the chain
-        return forwarded_for.split(",")[0].strip()
-    
-    # Check for real IP header
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-    
-    # Fallback to direct connection
-    return request.client.host if request.client else "unknown"
-
-def is_ip_whitelisted(ip: str) -> bool:
-    """Check if an IP address is whitelisted (exempt from rate limiting)."""
-    return ip in IP_WHITELIST
-
-def is_ip_blacklisted(ip: str) -> bool:
-    """Check if an IP address is blacklisted (blocked entirely)."""
-    return ip in IP_BLACKLIST
 
 def verify_firebase_token(request: Request):
     """Verify Firebase authentication token."""
