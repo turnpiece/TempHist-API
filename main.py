@@ -95,8 +95,9 @@ def sanitize_url(url: str) -> str:
             parsed = parsed._replace(query=sanitized_query)
         
         return urlunparse(parsed)
-    except Exception:
+    except (ValueError, TypeError) as e:
         # If parsing fails, return a safe placeholder
+        logger.debug(f"Failed to parse URL for sanitization: {e}")
         return "[REDACTED_URL]"
 
 def sanitize_for_logging(data: str, max_length: int = 100) -> str:
@@ -596,10 +597,13 @@ class AnalyticsStorage:
                 logger.debug(f"📊 ANALYTICS STORED: {analytics_id} | Errors: {analytics_data.error_count} | Duration: {analytics_data.session_duration}s")
             
             return analytics_id
-            
-        except Exception as e:
-            logger.error(f"Failed to store analytics data: {e}")
-            raise HTTPException(status_code=500, detail="Failed to store analytics data")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error storing analytics data: {redis_error}")
+            raise HTTPException(status_code=503, detail="Storage service unavailable")
+        except (json.JSONEncodeError, TypeError) as encode_error:
+            logger.error(f"Invalid analytics data: {encode_error}")
+            raise HTTPException(status_code=400, detail="Invalid analytics data format")
     
     def _update_analytics_summary(self, analytics_record: dict):
         """Update analytics summary statistics."""
@@ -643,9 +647,13 @@ class AnalyticsStorage:
             
             # Store updated summary
             redis_client.setex(summary_key, self.retention_seconds, json.dumps(summary_data))
-            
-        except Exception as e:
-            logger.error(f"Failed to update analytics summary: {e}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error updating analytics summary: {redis_error}")
+        except (json.JSONEncodeError, json.JSONDecodeError) as json_error:
+            logger.error(f"JSON error updating analytics summary: {json_error}")
+        except (KeyError, ValueError) as data_error:
+            logger.error(f"Data error updating analytics summary: {data_error}")
     
     def get_analytics_summary(self) -> dict:
         """Get analytics summary statistics."""
@@ -665,9 +673,12 @@ class AnalyticsStorage:
                     "error_types": {},
                     "last_updated": datetime.now().isoformat()
                 }
-        except Exception as e:
-            logger.error(f"Failed to get analytics summary: {e}")
-            return {"error": "Failed to retrieve analytics summary"}
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error getting analytics summary: {redis_error}")
+            return {"error": "Storage service unavailable"}
+        except (json.JSONDecodeError, ValueError) as decode_error:
+            logger.error(f"Data error getting analytics summary: {decode_error}")
+            return {"error": "Failed to parse analytics summary"}
     
     def get_recent_analytics(self, limit: int = 100) -> List[dict]:
         """Get recent analytics records."""
@@ -699,9 +710,12 @@ class AnalyticsStorage:
                 if record.get("session_id") == session_id
             ]
             return session_analytics
-            
-        except Exception as e:
-            logger.error(f"Failed to get analytics by session: {e}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error getting analytics by session: {redis_error}")
+            return []
+        except (json.JSONDecodeError, KeyError, ValueError) as data_error:
+            logger.error(f"Data error getting analytics by session: {data_error}")
             return []
 
 
@@ -720,9 +734,12 @@ async def lifespan(app: FastAPI):
         service_token_rate_limiter = ServiceTokenRateLimiter(redis_client)
         if DEBUG:
             logger.info(f"🛡️  SERVICE TOKEN RATE LIMITING: {SERVICE_TOKEN_RATE_LIMITS['requests_per_hour']} requests/hour, {SERVICE_TOKEN_RATE_LIMITS['locations_per_hour']} locations/hour")
-    except Exception as e:
-        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Failed to initialize - {e}")
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Redis connection failed - {redis_error}")
         # Create None limiter if Redis fails - will fail open in middleware
+        service_token_rate_limiter = None
+    except ImportError as import_error:
+        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Import failed - {import_error}")
         service_token_rate_limiter = None
     
     # Initialize router dependencies (must happen after service_token_rate_limiter is created)
@@ -746,24 +763,34 @@ async def lifespan(app: FastAPI):
         
         if DEBUG:
             logger.info("✅ ROUTER DEPENDENCIES: Initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ ROUTER DEPENDENCIES: Failed to initialize - {e}")
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ ROUTER DEPENDENCIES: Redis connection failed - {redis_error}")
+    except ImportError as import_error:
+        logger.error(f"❌ ROUTER DEPENDENCIES: Import failed - {import_error}")
+    except (ValueError, TypeError) as config_error:
+        logger.error(f"❌ ROUTER DEPENDENCIES: Configuration error - {config_error}")
     
     # Initialize cache system first
     try:
         initialize_cache(redis_client)
         if DEBUG:
             logger.info("✅ CACHE SYSTEM: Initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ CACHE SYSTEM: Failed to initialize - {e}")
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ CACHE SYSTEM: Redis connection failed - {redis_error}")
+    except ImportError as import_error:
+        logger.error(f"❌ CACHE SYSTEM: Import failed - {import_error}")
     
     # Initialize preapproved locations data
     try:
         await initialize_locations_data(redis_client)
         if DEBUG:
             logger.info("✅ PREAPPROVED LOCATIONS: Data loaded and cache warmed")
-    except Exception as e:
-        logger.error(f"❌ PREAPPROVED LOCATIONS: Failed to initialize - {e}")
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ PREAPPROVED LOCATIONS: Redis connection failed - {redis_error}")
+    except (FileNotFoundError, json.JSONDecodeError) as file_error:
+        logger.error(f"❌ PREAPPROVED LOCATIONS: File error - {file_error}")
+    except (IOError, PermissionError) as io_error:
+        logger.error(f"❌ PREAPPROVED LOCATIONS: I/O error - {io_error}")
     
     if CACHE_WARMING_ENABLED and get_cache_warmer():
         # Wait a moment for the server to fully start
@@ -857,8 +884,11 @@ def create_redis_client(url: str):
         client.ping()
         if DEBUG:
             logger.info("✅ Redis connection validated successfully")
-    except Exception as e:
-        logger.error(f"❌ Redis connection failed: {e}")
+    except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
+        logger.error(f"❌ Redis connection failed: {redis_error}")
+        raise
+    except redis.AuthenticationError as auth_error:
+        logger.error(f"❌ Redis authentication failed - check password: {auth_error}")
         raise
     
     return client
@@ -921,9 +951,17 @@ try:
 except ValueError:
     # Firebase app already initialized, skip
     logger.info("Firebase app already initialized")
-    pass
+except FileNotFoundError as file_error:
+    logger.error(f"❌ Firebase credentials file not found: {file_error}")
+    # Continue without Firebase - the app can still work without it
+except json.JSONDecodeError as json_error:
+    logger.error(f"❌ Invalid Firebase credentials JSON: {json_error}")
+    # Continue without Firebase - the app can still work without it
+except (IOError, PermissionError) as io_error:
+    logger.error(f"❌ Cannot read Firebase credentials: {io_error}")
+    # Continue without Firebase - the app can still work without it
 except Exception as e:
-    logger.error(f"❌ Error initializing Firebase: {e}")
+    logger.error(f"❌ Unexpected error initializing Firebase: {e}")
     # Continue without Firebase - the app can still work without it
 
 def verify_firebase_token(request: Request):
