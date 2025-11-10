@@ -100,7 +100,7 @@ def validate_cors_config():
         # Test regex is valid and not too permissive
         import re
         try:
-            pattern = re.compile(regex)
+            re.compile(regex)
             # Warn if regex looks too permissive
             permissive_patterns = [".*", ".+", r".*\.*"]
             if regex in permissive_patterns or (".*" in regex and env == "production"):

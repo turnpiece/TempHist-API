@@ -5,8 +5,7 @@ import logging
 import os
 from pathlib import Path
 from datetime import datetime, timedelta, date as dt_date, timezone
-from typing import List, Dict, Optional, Set, Union, Literal
-from collections import defaultdict
+from typing import List, Dict, Optional, Union, Literal
 import time
 
 # Third-party imports
@@ -17,8 +16,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field
 
@@ -56,12 +53,6 @@ from cache_utils import (
     initialize_cache
 )
 
-# Import improved caching utilities
-from app.cache_utils import (
-    initialize_improved_cache,
-    cache_get,
-    cache_set
-)
 from version import __version__
 
 # Import configuration and rate limiting

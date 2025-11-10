@@ -1,6 +1,5 @@
 """Redis client creation and management."""
 import logging
-import ssl
 from urllib.parse import urlparse
 import redis
 from config import ENVIRONMENT, DEBUG

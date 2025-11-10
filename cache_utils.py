@@ -22,14 +22,11 @@ import redis
 import aiohttp
 from fastapi import Request, Response
 
-# Try to import zoneinfo (Python 3.9+) or backports.zoneinfo (Python 3.8)
+# Try to import zoneinfo (Python 3.9+). Fall back to UTC if unavailable.
 try:
     from zoneinfo import ZoneInfo
-except ImportError:
-    try:
-        from backports.zoneinfo import ZoneInfo
-    except ImportError:
-        ZoneInfo = None  # Will fall back to UTC if not available
+except ImportError:  # pragma: no cover
+    ZoneInfo = None  # Will fall back to UTC if not available
 
 logger = logging.getLogger(__name__)
 

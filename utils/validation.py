@@ -1,7 +1,6 @@
 """Input validation utilities for security."""
 import re
 from datetime import datetime
-from typing import Dict
 from urllib.parse import quote
 import logging
 from config import (

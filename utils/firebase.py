@@ -4,7 +4,6 @@ import json
 import logging
 import firebase_admin
 from firebase_admin import credentials
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,9 @@
 # routers/records_agg.py
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from typing import List, Dict, Any, Optional, Literal
-import os, aiohttp, asyncio, re
+from typing import Dict, Optional, Literal
+import os, aiohttp
 from datetime import datetime, date
-from constants import VC_BASE_URL
 from utils.visual_crossing_timeline import close_client_session as close_timeline_client
 from urllib.parse import quote
 

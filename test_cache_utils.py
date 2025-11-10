@@ -12,8 +12,8 @@ Tests cover:
 import pytest
 import json
 import redis
-from datetime import datetime, timedelta, date
-from unittest.mock import Mock, patch, AsyncMock
+from datetime import datetime
+from unittest.mock import Mock
 import asyncio
 
 # Import the modules to test
