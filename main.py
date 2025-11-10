@@ -1635,7 +1635,22 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
 async def get_summary(location: str, month_day: str, weather_data: Optional[List[Dict]] = None) -> str:
+    """Generate a text summary of temperature data for a specific location and date.
 
+    Creates a human-readable summary comparing today's temperature to historical averages
+    and identifying records.
+
+    Args:
+        location: Location name (e.g., "London, England")
+        month_day: Date in MM-DD format (e.g., "01-15")
+        weather_data: Optional pre-fetched weather data. If None, will fetch data.
+
+    Returns:
+        Human-readable summary string describing the temperature for the date
+
+    Examples:
+        "17.0°C. This is the warmest 15th January on record. It is 2.0°C warmer than average today."
+    """
     try:
         if weather_data is None:
             month, day = map(int, month_day.split("-"))
