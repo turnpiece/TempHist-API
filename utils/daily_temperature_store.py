@@ -40,6 +40,13 @@ def _register_preapproved_candidate(
     candidate: Optional[str],
     info: Dict[str, Any],
 ) -> None:
+    """Register a preapproved location candidate with normalized variations.
+
+    Args:
+        mapping: Dictionary mapping normalized names to location info
+        candidate: Location name candidate to register
+        info: Location metadata (coordinates, timezone, etc.)
+    """
     if not candidate:
         return
     normalized = normalize_location_for_cache(candidate)
@@ -53,6 +60,11 @@ def _register_preapproved_candidate(
 
 
 def _load_preapproved_location_map() -> Dict[str, Dict[str, Any]]:
+    """Load preapproved locations from JSON file and create normalized mapping.
+
+    Returns:
+        Dictionary mapping normalized location names to location metadata
+    """
     global _PREAPPROVED_LOCATION_MAP
     if _PREAPPROVED_LOCATION_MAP is not None:
         return _PREAPPROVED_LOCATION_MAP
@@ -115,6 +127,14 @@ def _load_preapproved_location_map() -> Dict[str, Dict[str, Any]]:
 
 
 def _get_preapproved_location_info(normalized_name: str) -> Optional[Dict[str, Any]]:
+    """Get preapproved location info for a normalized location name.
+
+    Args:
+        normalized_name: Normalized location string
+
+    Returns:
+        Location metadata dict if found, None otherwise
+    """
     mapping = _load_preapproved_location_map()
     return mapping.get(normalized_name)
 
@@ -123,6 +143,11 @@ class DailyTemperatureStore:
     """Persistent cache for daily temperature data backed by Postgres."""
 
     def __init__(self, dsn: Optional[str] = None):
+        """Initialize the DailyTemperatureStore with optional DSN override.
+
+        Args:
+            dsn: PostgreSQL connection string. If None, uses TEMPHIST_PG_DSN or DATABASE_URL env vars.
+        """
         self._dsn = dsn or os.getenv("TEMPHIST_PG_DSN") or os.getenv("DATABASE_URL")
         self._disabled = False
         if not self._dsn:
@@ -136,6 +161,11 @@ class DailyTemperatureStore:
         self._schema_initialized = False
 
     async def _ensure_pool(self) -> Optional[asyncpg.Pool]:
+        """Ensure the connection pool is initialized, creating it if necessary.
+
+        Returns:
+            asyncpg.Pool instance or None if disabled/failed
+        """
         if self._disabled:
             return None
         if self._pool:
@@ -157,6 +187,11 @@ class DailyTemperatureStore:
             return self._pool
 
     async def _initialize_schema(self, pool: asyncpg.Pool) -> None:
+        """Initialize database schema tables (locations, aliases, temperatures).
+
+        Args:
+            pool: asyncpg connection pool
+        """
         if self._schema_initialized or self._disabled:
             return
         async with self._schema_lock:
@@ -170,6 +205,11 @@ class DailyTemperatureStore:
             self._schema_initialized = True
 
     async def _ensure_locations_table(self, conn: asyncpg.Connection) -> None:
+        """Create locations table and indexes if they don't exist.
+
+        Args:
+            conn: asyncpg database connection
+        """
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS locations (
@@ -208,6 +248,11 @@ class DailyTemperatureStore:
         )
 
     async def _ensure_daily_temperatures_table(self, conn: asyncpg.Connection) -> None:
+        """Create daily_temperatures table or migrate from legacy schema if needed.
+
+        Args:
+            conn: asyncpg database connection
+        """
         table_exists = await conn.fetchval(
             "SELECT to_regclass('public.daily_temperatures') IS NOT NULL"
         )
@@ -235,6 +280,11 @@ class DailyTemperatureStore:
         await self._migrate_legacy_daily_temperatures(conn)
 
     async def _create_daily_temperatures_table(self, conn: asyncpg.Connection) -> None:
+        """Create the daily_temperatures table with proper schema and indexes.
+
+        Args:
+            conn: asyncpg database connection
+        """
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS daily_temperatures (
@@ -258,6 +308,11 @@ class DailyTemperatureStore:
         )
 
     async def _backfill_locations_metadata(self, conn: asyncpg.Connection) -> None:
+        """Backfill missing metadata for existing locations using preapproved data.
+
+        Args:
+            conn: asyncpg database connection
+        """
         preapproved_map = _load_preapproved_location_map()
         if not preapproved_map:
             return
@@ -294,6 +349,11 @@ class DailyTemperatureStore:
             )
 
     async def _migrate_legacy_daily_temperatures(self, conn: asyncpg.Connection) -> None:
+        """Migrate legacy daily_temperatures table to new schema with location_id foreign key.
+
+        Args:
+            conn: asyncpg database connection
+        """
         await conn.execute("ALTER TABLE daily_temperatures RENAME TO daily_temperatures_legacy")
         await self._create_daily_temperatures_table(conn)
 
@@ -401,7 +461,19 @@ class DailyTemperatureStore:
         location: str,
         dates: Iterable[date],
     ) -> Dict[date, DailyTemperatureRecord]:
-        """Fetch cached records for a location and list of dates."""
+        """Fetch cached temperature records for a location and list of dates.
+
+        Uses location aliases to resolve the canonical location_id, ensuring that
+        different location variations (e.g., nearby locations within 25km) share
+        the same cached data.
+
+        Args:
+            location: Location name string (will be normalized)
+            dates: Iterable of date objects to fetch data for
+
+        Returns:
+            Dictionary mapping dates to DailyTemperatureRecord objects
+        """
         normalized_dates: List[date] = []
         for candidate in dates:
             if isinstance(candidate, datetime):
@@ -521,7 +593,16 @@ class DailyTemperatureStore:
         records: List[DailyTemperatureRecord],
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Insert or update a batch of records for a location."""
+        """Insert or update a batch of temperature records for a location.
+
+        Automatically resolves the canonical location_id using aliases and nearby
+        location matching. Creates new locations and aliases as needed.
+
+        Args:
+            location: Location name string (will be normalized)
+            records: List of DailyTemperatureRecord objects to store
+            metadata: Optional Visual Crossing metadata (coordinates, timezone, etc.)
+        """
         if not records:
             return
 
@@ -647,6 +728,19 @@ class DailyTemperatureStore:
         has_min: bool,
         now_ts: datetime,
     ) -> Tuple[Any, ...]:
+        """Build parameter tuple for database insert based on available temperature fields.
+
+        Args:
+            location_id: Location ID foreign key
+            record: Temperature record to insert
+            has_temp: Whether temp_c field is present in dataset
+            has_max: Whether temp_max_c field is present in dataset
+            has_min: Whether temp_min_c field is present in dataset
+            now_ts: Timestamp for updated_at field
+
+        Returns:
+            Tuple of parameters for SQL insert
+        """
         params: List[Any] = [location_id, record.date]
         if has_temp:
             params.append(record.temp_c)
@@ -857,6 +951,15 @@ class DailyTemperatureStore:
         metadata: Optional[Dict[str, Any]],
         keys: List[str],
     ) -> Optional[str]:
+        """Extract a string value from metadata by trying multiple key names.
+
+        Args:
+            metadata: Metadata dictionary (e.g., from Visual Crossing API)
+            keys: List of possible key names to try in order
+
+        Returns:
+            First non-empty string value found, or None
+        """
         if not metadata:
             return None
         for key in keys:
@@ -870,6 +973,15 @@ class DailyTemperatureStore:
         metadata: Optional[Dict[str, Any]],
         keys: List[str],
     ) -> Optional[float]:
+        """Extract a numeric value from metadata by trying multiple key names.
+
+        Args:
+            metadata: Metadata dictionary (e.g., from Visual Crossing API)
+            keys: List of possible key names to try in order
+
+        Returns:
+            First numeric value found (as float), or None
+        """
         if not metadata:
             return None
         for key in keys:
