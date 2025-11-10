@@ -55,7 +55,7 @@ from cache_utils import (
 from version import __version__
 
 # Import configuration and rate limiting
-from config import CORS_ORIGINS, CORS_ORIGIN_REGEX, VISUAL_CROSSING_BASE_URL, VISUAL_CROSSING_REMOTE_DATA
+from config import CORS_ORIGINS, CORS_ORIGIN_REGEX, VISUAL_CROSSING_BASE_URL, VISUAL_CROSSING_REMOTE_DATA, SERVICE_TOKEN_RATE_LIMITS
 from rate_limiting import ServiceTokenRateLimiter, LocationDiversityMonitor, RequestRateMonitor
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 
