@@ -8,6 +8,7 @@ It runs as a background task in the FastAPI application lifecycle.
 import asyncio
 import json
 import logging
+import redis
 import signal
 import sys
 from datetime import datetime, timezone
@@ -44,8 +45,8 @@ class JobWorker:
                         # Only log heartbeat every 5 minutes to reduce log volume
                         if poll_count % 300 == 0:
                             logger.info(f"💓 Worker heartbeat active (poll #{poll_count})")
-                    except Exception as e:
-                        logger.warning(f"⚠️  Could not update heartbeat: {e}")
+                    except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+                        logger.warning(f"⚠️  Redis error updating heartbeat: {e}")
                 
                 await asyncio.sleep(1)  # Poll every second
         except Exception as e:
@@ -78,10 +79,15 @@ class JobWorker:
             
             logger.info(f"✅ Cached {data_type} for {cache_key}")
             return etag
-            
-        except Exception as cache_error:
-            logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.warning(f"Redis error storing cache for {cache_key}: {redis_error}")
             # Generate a simple ETag even if cache fails (use SHA256, not MD5)
+            etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
+            return etag
+        except (json.JSONEncodeError, TypeError) as encode_error:
+            logger.warning(f"JSON encoding error for {cache_key}: {encode_error}")
+            # Generate a simple ETag even if cache fails
             etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
             return etag
     
@@ -175,11 +181,23 @@ class JobWorker:
                     result = await self.process_cache_warming_job(params)
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
-            except Exception as compute_error:
-                logger.error(f"❌ Computation error for job {job_id}")
-                logger.error(f"❌ Error type: {type(compute_error).__name__}")
-                logger.error(f"❌ Error message: {str(compute_error)}")
-                logger.error(f"❌ Error repr: {repr(compute_error)}")
+            except (ValueError, KeyError, TypeError) as data_error:
+                logger.error(f"❌ Data error for job {job_id}: {type(data_error).__name__}")
+                logger.error(f"❌ Error message: {str(data_error)}")
+                import traceback
+                logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+                raise
+            except (redis.RedisError, json.JSONDecodeError) as cache_error:
+                logger.error(f"❌ Cache error for job {job_id}: {type(cache_error).__name__}")
+                logger.error(f"❌ Error message: {str(cache_error)}")
+                import traceback
+                logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+                raise
+            except Exception as unexpected_error:
+                # Catch any other unexpected errors but log them distinctly
+                logger.error(f"❌ Unexpected error for job {job_id}: {type(unexpected_error).__name__}")
+                logger.error(f"❌ Error message: {str(unexpected_error)}")
+                logger.error(f"❌ Error repr: {repr(unexpected_error)}")
                 import traceback
                 logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
                 raise
@@ -195,8 +213,40 @@ class JobWorker:
             # Remove job from queue after successful completion
             self.redis.lrem(self.job_queue_key, 1, job_id)
             
+        except redis.RedisError as redis_error:
+            # Redis errors - don't update job status if Redis is down
+            import traceback
+            error_traceback = traceback.format_exc()
+            logger.error(f"❌ Redis error processing job {job_id}: {type(redis_error).__name__}: {str(redis_error)}")
+            logger.error(f"❌ Full traceback:\n{error_traceback}")
+            # Cannot update job status or remove from queue if Redis is failing
+
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as data_error:
+            # Data/validation errors - store in job status
+            import traceback
+            error_traceback = traceback.format_exc()
+            error_details = {
+                "error_type": type(data_error).__name__,
+                "error_message": str(data_error),
+                "traceback": error_traceback,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+            logger.error(f"❌ Data error processing job {job_id}: {type(data_error).__name__}: {str(data_error)}")
+            logger.error(f"❌ Full traceback:\n{error_traceback}")
+
+            # Store detailed error in job status
+            job_manager.update_job_status(
+                job_id,
+                JobStatus.ERROR,
+                error=str(data_error),
+                error_details=error_details
+            )
+            # Remove failed job from queue
+            self.redis.lrem(self.job_queue_key, 1, job_id)
+
         except Exception as e:
-            # MED-006: Improved error handling with detailed logging and error storage
+            # Unexpected errors - log and store
             import traceback
             error_traceback = traceback.format_exc()
             error_details = {
@@ -205,16 +255,16 @@ class JobWorker:
                 "traceback": error_traceback,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
-            
-            logger.error(f"❌ Error processing job {job_id}: {type(e).__name__}: {str(e)}")
+
+            logger.error(f"❌ Unexpected error processing job {job_id}: {type(e).__name__}: {str(e)}")
             logger.error(f"❌ Full traceback:\n{error_traceback}")
-            
+
             # Store detailed error in job status
             job_manager.update_job_status(
-                job_id, 
-                JobStatus.ERROR, 
+                job_id,
+                JobStatus.ERROR,
                 error=str(e),
-                error_details=error_details  # Store full details for diagnostics
+                error_details=error_details
             )
             # Remove failed job from queue
             self.redis.lrem(self.job_queue_key, 1, job_id)
@@ -279,8 +329,11 @@ class JobWorker:
                 self.redis.setex(year_key, ttl, json_data)
                 self.redis.setex(etag_key, ttl, etag)
                 logger.info(f"✅ Cached per-year record: {year_key} (TTL: {ttl}s)")
-            except Exception as e:
-                logger.warning(f"Error caching per-year record {year_key}: {e}")
+            except (redis.RedisError, redis.ConnectionError) as redis_error:
+                logger.warning(f"Redis error caching per-year record {year_key}: {redis_error}")
+                raise
+            except (json.JSONEncodeError, TypeError) as serialize_error:
+                logger.warning(f"Serialization error caching per-year record {year_key}: {serialize_error}")
                 raise
             
             return {
@@ -315,8 +368,9 @@ class JobWorker:
                     json_data = json.dumps(record_data, sort_keys=True, separators=(',', ':'))
                     self.redis.setex(year_key, ttl, json_data)
                     self.redis.setex(etag_key, ttl, etag)
-                except Exception as e:
-                    logger.warning(f"Error caching year {y}: {e}")
+                except (redis.RedisError, json.JSONEncodeError, TypeError) as e:
+                    logger.warning(f"Error caching year {y}: {type(e).__name__}: {e}")
+                    # Continue with other years despite error
             
             # Return summary
             return {
@@ -400,11 +454,24 @@ class JobWorker:
             }
             
             logger.info(f"✅ Cache warming completed: {successful_locations} locations, {total_endpoints} endpoints")
-            
-        except Exception as e:
-            logger.error(f"❌ Cache warming failed: {e}")
+
+        except (ValueError, KeyError, TypeError) as data_error:
+            logger.error(f"❌ Data/validation error during cache warming: {data_error}")
             results["status"] = "failed"
-            results["error"] = str(e)
+            results["error"] = f"Data error: {str(data_error)}"
+            results["failed_at"] = datetime.now(timezone.utc).isoformat()
+            raise
+        except (redis.RedisError, redis.ConnectionError) as cache_error:
+            logger.error(f"❌ Redis error during cache warming: {cache_error}")
+            results["status"] = "failed"
+            results["error"] = f"Cache error: {str(cache_error)}"
+            results["failed_at"] = datetime.now(timezone.utc).isoformat()
+            raise
+        except Exception as e:
+            # Catch any HTTP or unexpected errors
+            logger.error(f"❌ Unexpected error during cache warming: {type(e).__name__}: {e}")
+            results["status"] = "failed"
+            results["error"] = f"Unexpected error: {str(e)}"
             results["failed_at"] = datetime.now(timezone.utc).isoformat()
             raise
         

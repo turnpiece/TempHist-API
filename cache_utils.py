@@ -374,17 +374,17 @@ class SingleFlightLock:
             # Use SET with NX and EX for atomic lock acquisition
             result = self.redis.set(lock_key, "1", nx=True, ex=self.lock_ttl)
             return result is not None
-        except Exception as e:
-            logger.warning(f"Failed to acquire lock for {key}: {e}")
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+            logger.warning(f"Redis error acquiring lock for {key}: {e}")
             return False
-    
+
     def release(self, key: str):
         """Release a lock for the given key."""
         lock_key = f"{self.lock_prefix}{key}"
         try:
             self.redis.delete(lock_key)
-        except Exception as e:
-            logger.warning(f"Failed to release lock for {key}: {e}")
+        except (redis.RedisError, redis.ConnectionError) as e:
+            logger.warning(f"Redis error releasing lock for {key}: {e}")
 
 class EnhancedCache:
     """Enhanced Redis cache with single-flight protection and metrics."""
@@ -435,10 +435,14 @@ class EnhancedCache:
             else:
                 self.misses += 1
                 return None
-                
-        except Exception as e:
+
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
             self.errors += 1
-            logger.error(f"Cache get error for {key}: {e}")
+            logger.error(f"Redis error getting cache key {key}: {redis_error}")
+            return None
+        except (json.JSONDecodeError, ValueError) as decode_error:
+            self.errors += 1
+            logger.error(f"Decode error for cache key {key}: {decode_error}")
             return None
     
     async def get_updated_timestamp(self, key: str) -> Optional[datetime]:
@@ -450,9 +454,12 @@ class EnhancedCache:
             if cached_timestamp:
                 return datetime.fromisoformat(cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp)
             return None
-                
-        except Exception as e:
-            logger.error(f"Error getting timestamp for {key}: {e}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error getting timestamp for {key}: {redis_error}")
+            return None
+        except (ValueError, TypeError) as parse_error:
+            logger.error(f"Date parsing error for timestamp {key}: {parse_error}")
             return None
     
     async def set(
@@ -485,12 +492,16 @@ class EnhancedCache:
                 "size": len(json_data)
             })
             self.redis.expire(cache_key, ttl)
-            
+
             return etag
-            
-        except Exception as e:
+
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
             self.errors += 1
-            logger.error(f"Cache set error for {key}: {e}")
+            logger.error(f"Redis error setting cache key {key}: {redis_error}")
+            raise
+        except (json.JSONEncodeError, TypeError) as encode_error:
+            self.errors += 1
+            logger.error(f"JSON encoding error for cache key {key}: {encode_error}")
             raise
     
     async def get_or_compute(
@@ -649,10 +660,18 @@ class CacheWarmer:
                 logger.info(f"📋 SAMPLE LOCATIONS: {locations[:3]}...")
             
             return locations
-            
-        except Exception as e:
+
+        except FileNotFoundError as e:
             if DEBUG:
-                logger.warning(f"⚠️  Could not load preapproved locations: {e}")
+                logger.warning(f"⚠️  Preapproved locations file not found: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            if DEBUG:
+                logger.warning(f"⚠️  Invalid JSON in preapproved locations: {e}")
+            return []
+        except (IOError, PermissionError) as e:
+            if DEBUG:
+                logger.warning(f"⚠️  Cannot read preapproved locations file: {e}")
             return []
     
     def get_dates_to_warm(self) -> List[str]:
@@ -718,8 +737,10 @@ class CacheWarmer:
                                 results["warmed_endpoints"].append("forecast")
                             else:
                                 results["errors"].append(f"forecast: {resp.status}")
-            except Exception as e:
-                results["errors"].append(f"forecast: {str(e)}")
+            except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                results["errors"].append(f"forecast: HTTP error - {str(http_error)}")
+            except asyncio.TimeoutError:
+                results["errors"].append(f"forecast: Request timeout")
             
             # Warm legacy endpoints (forecast, weather) - daily data now handled by v1 endpoints below
             month_days = self.get_month_days_to_warm()
@@ -740,8 +761,10 @@ class CacheWarmer:
                                         results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
                                     else:
                                         results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
-                    except Exception as e:
-                        results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
+                    except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                        results["errors"].append(f"v1/records/{period}/{month_day}: HTTP error - {str(http_error)}")
+                    except asyncio.TimeoutError:
+                        results["errors"].append(f"v1/records/{period}/{month_day}: Request timeout")
                     
                     # Subresource endpoints (average, trend, summary)
                     for subresource in ["average", "trend", "summary"]:
@@ -757,8 +780,10 @@ class CacheWarmer:
                                             results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}/{subresource}")
                                         else:
                                             results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {resp.status}")
-                        except Exception as e:
-                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {str(e)}")
+                        except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: HTTP error - {str(http_error)}")
+                        except asyncio.TimeoutError:
+                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: Request timeout")
             
             # Warm individual weather data for recent dates
             dates = self.get_dates_to_warm()
@@ -775,11 +800,16 @@ class CacheWarmer:
                                     results["warmed_endpoints"].append(f"weather/{date}")
                                 else:
                                     results["errors"].append(f"weather/{date}: {resp.status}")
-                except Exception as e:
-                    results["errors"].append(f"weather/{date}: {str(e)}")
-        
+                except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                    results["errors"].append(f"weather/{date}: HTTP error - {str(http_error)}")
+                except asyncio.TimeoutError:
+                    results["errors"].append(f"weather/{date}: Request timeout")
+
+        except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+            results["errors"].append(f"location_warming: HTTP error - {str(http_error)}")
         except Exception as e:
-            results["errors"].append(f"location_warming: {str(e)}")
+            results["errors"].append(f"location_warming: Unexpected error - {str(e)}")
+            logger.error(f"Unexpected error warming location {location}: {e}", exc_info=True)
         
         return results
     
@@ -794,7 +824,7 @@ class CacheWarmer:
         # Check if Redis is available before attempting to warm cache
         try:
             self.redis_client.ping()
-        except Exception as e:
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
             logger.warning(f"⚠️ Cache warming skipped - Redis not available: {e}")
             return {"status": "skipped", "message": "Redis not available", "error": str(e)}
         
