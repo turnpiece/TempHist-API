@@ -24,10 +24,18 @@ class ServiceTokenRateLimiter:
     Uses Redis for distributed rate limiting across multiple worker instances.
     """
     
-    def __init__(self, redis_client: redis.Redis, 
+    def __init__(self, redis_client: redis.Redis,
                  requests_per_hour: int = SERVICE_TOKEN_RATE_LIMITS["requests_per_hour"],
                  locations_per_hour: int = SERVICE_TOKEN_RATE_LIMITS["locations_per_hour"],
                  window_hours: int = SERVICE_TOKEN_RATE_LIMITS["window_hours"]):
+        """Initialize service token rate limiter.
+
+        Args:
+            redis_client: Redis client for distributed rate limiting
+            requests_per_hour: Maximum requests per hour per service token
+            locations_per_hour: Maximum unique locations per hour per service token
+            window_hours: Sliding window size in hours
+        """
         self.redis = redis_client
         self.requests_per_hour = requests_per_hour
         self.locations_per_hour = locations_per_hour
@@ -141,10 +149,16 @@ class LocationDiversityMonitor:
     """Monitor and limit location diversity per IP address to prevent API abuse."""
     
     def __init__(self, max_locations: int = 10, window_hours: int = 1):
+        """Initialize location diversity monitor.
+
+        Args:
+            max_locations: Maximum unique locations per IP in the time window
+            window_hours: Sliding window size in hours
+        """
         self.max_locations = max_locations
         self.window_hours = window_hours
         self.window_seconds = window_hours * 3600
-        
+
         # Track unique locations per IP over time windows
         self.ip_locations: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
         self.suspicious_ips: Set[str] = set()
@@ -230,10 +244,16 @@ class RequestRateMonitor:
     """Monitor and limit total request rate per IP address."""
     
     def __init__(self, max_requests: int = 100, window_hours: int = 1):
+        """Initialize request rate monitor.
+
+        Args:
+            max_requests: Maximum requests per IP in the time window
+            window_hours: Sliding window size in hours
+        """
         self.max_requests = max_requests
         self.window_hours = window_hours
         self.window_seconds = window_hours * 3600
-        
+
         # Track request counts per IP over time windows
         self.ip_requests: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.last_cleanup = time.time()

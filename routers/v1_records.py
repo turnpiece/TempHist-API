@@ -77,6 +77,14 @@ def _convert_unit_group_for_vc(unit_group: str) -> str:
 
 
 def _coerce_float(value) -> float | None:
+    """Coerce a value to float, returning None if conversion fails.
+
+    Args:
+        value: Value to convert to float (can be int, float, str, or None)
+
+    Returns:
+        Float value or None if conversion fails
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -90,6 +98,15 @@ def _coerce_float(value) -> float | None:
 
 
 def _convert_c_to_unit(temp_c: float, unit_group: str) -> float:
+    """Convert temperature from Celsius to the requested unit.
+
+    Args:
+        temp_c: Temperature in Celsius
+        unit_group: Target unit group ('celsius', 'metric', 'fahrenheit', or 'us')
+
+    Returns:
+        Temperature in the requested unit
+    """
     group = unit_group.lower()
     if group in ("celsius", "metric"):
         return temp_c
@@ -99,6 +116,16 @@ def _convert_c_to_unit(temp_c: float, unit_group: str) -> float:
 
 
 def _resolve_anchor_date(year: int, month: int, day: int) -> date | None:
+    """Resolve a date, adjusting for invalid dates like Feb 29 in non-leap years.
+
+    Args:
+        year: Year value
+        month: Month value (1-12)
+        day: Day value (1-31)
+
+    Returns:
+        Valid date object or None if no valid date can be resolved
+    """
     try:
         return date(year, month, day)
     except ValueError:
@@ -117,6 +144,14 @@ def _resolve_anchor_date(year: int, month: int, day: int) -> date | None:
 
 
 def _collapse_consecutive_dates(dates: List[date]) -> List[Tuple[date, date]]:
+    """Collapse a list of dates into consecutive date ranges.
+
+    Args:
+        dates: List of date objects
+
+    Returns:
+        List of tuples representing date ranges (start_date, end_date)
+    """
     if not dates:
         return []
     ordered = sorted(dates)

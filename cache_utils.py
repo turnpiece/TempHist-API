@@ -103,6 +103,12 @@ class LocationUsageTracker:
     """Track location usage patterns for analytics and cache warming."""
     
     def __init__(self, redis_client: redis.Redis, retention_days: int = 7):
+        """Initialize location usage tracker.
+
+        Args:
+            redis_client: Redis client for storing usage data
+            retention_days: Number of days to retain usage statistics (default: 7)
+        """
         self.redis_client = redis_client
         self.retention_days = retention_days
         self.retention_seconds = retention_days * 24 * 3600
@@ -360,6 +366,12 @@ class SingleFlightLock:
     """Prevent cache stampedes with Redis-based locks."""
     
     def __init__(self, redis_client: redis.Redis, lock_ttl: int = 30):
+        """Initialize single-flight lock manager.
+
+        Args:
+            redis_client: Redis client for distributed locking
+            lock_ttl: Lock time-to-live in seconds (default: 30)
+        """
         self.redis = redis_client
         self.lock_ttl = lock_ttl
         self.lock_prefix = "lock:"
@@ -387,11 +399,16 @@ class EnhancedCache:
     """Enhanced Redis cache with single-flight protection and metrics."""
     
     def __init__(self, redis_client: redis.Redis):
+        """Initialize enhanced cache with single-flight protection.
+
+        Args:
+            redis_client: Redis client for caching operations
+        """
         self.redis = redis_client
         self.lock_manager = SingleFlightLock(redis_client)
         self.cache_prefix = "cache:"
         self.metrics_prefix = "metrics:"
-        
+
         # Metrics tracking
         self.hits = 0
         self.misses = 0
@@ -570,6 +587,12 @@ class CacheWarmer:
     """Proactive cache warming for popular locations and recent dates."""
     
     def __init__(self, redis_client: redis.Redis, usage_tracker: 'LocationUsageTracker' = None):
+        """Initialize cache warmer for proactive cache population.
+
+        Args:
+            redis_client: Redis client for checking cache status
+            usage_tracker: Optional usage tracker for identifying popular locations
+        """
         self.redis_client = redis_client
         self.usage_tracker = usage_tracker
         self.warming_in_progress = False
@@ -937,6 +960,11 @@ class CacheStats:
     """Track and analyze cache performance statistics."""
     
     def __init__(self, redis_client: redis.Redis):
+        """Initialize cache statistics tracker.
+
+        Args:
+            redis_client: Redis client for storing statistics
+        """
         self.redis_client = redis_client
         self.stats_prefix = "cache_stats_"
         self.retention_seconds = CACHE_STATS_RETENTION_HOURS * 3600
@@ -1192,6 +1220,11 @@ class CacheInvalidator:
     """Manage cache invalidation with various strategies and patterns."""
     
     def __init__(self, redis_client: redis.Redis):
+        """Initialize cache invalidator for managing cache invalidation.
+
+        Args:
+            redis_client: Redis client for cache operations
+        """
         self.redis_client = redis_client
         self.invalidation_prefix = "invalidation_"
         self.batch_size = CACHE_INVALIDATION_BATCH_SIZE
@@ -1594,6 +1627,11 @@ class JobManager:
     """Manage async job processing with Redis storage."""
     
     def __init__(self, redis_client: redis.Redis):
+        """Initialize async job manager for background processing.
+
+        Args:
+            redis_client: Redis client for job storage and results
+        """
         self.redis = redis_client
         self.job_prefix = "job:"
         self.result_prefix = "result:"

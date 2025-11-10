@@ -16,6 +16,11 @@ class AnalyticsStorage:
     """Store and manage client analytics data."""
     
     def __init__(self, redis_client: redis.Redis):
+        """Initialize analytics storage.
+
+        Args:
+            redis_client: Redis client for storing analytics data
+        """
         self.redis = redis_client
         self.analytics_prefix = "analytics_"
         self.retention_seconds = 7 * 24 * 3600  # 7 days retention
@@ -68,7 +73,11 @@ class AnalyticsStorage:
             raise HTTPException(status_code=500, detail="Failed to store analytics data")
     
     def _update_analytics_summary(self, analytics_record: dict):
-        """Update analytics summary statistics."""
+        """Update analytics summary statistics.
+
+        Args:
+            analytics_record: Dictionary containing analytics data to aggregate
+        """
         try:
             # Get current summary
             summary_key = "analytics_summary"
@@ -156,7 +165,14 @@ class AnalyticsStorage:
             return []
     
     def get_analytics_by_session(self, session_id: str) -> List[dict]:
-        """Get analytics records for a specific session."""
+        """Get analytics records for a specific session.
+
+        Args:
+            session_id: Unique session identifier to search for
+
+        Returns:
+            List of analytics records matching the session ID
+        """
         try:
             # This would require a more sophisticated indexing system
             # For now, we'll search through recent analytics
