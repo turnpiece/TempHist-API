@@ -6,16 +6,15 @@ This script helps debug async job issues by testing the complete flow.
 
 import requests
 import time
-import json
 import os
 from typing import Dict, Any
 
 class AsyncJobTester:
     def __init__(self, base_url: str = "http://localhost:8000", api_token: str = None):
         if api_token is None:
-            api_token = os.getenv("TEST_TOKEN")
+            api_token = os.getenv("API_ACCESS_TOKEN")
             if not api_token:
-                raise ValueError("TEST_TOKEN environment variable must be set")
+                raise ValueError("API_ACCESS_TOKEN environment variable must be set")
         self.base_url = base_url.rstrip('/')
         self.api_token = api_token
         self.session = requests.Session()

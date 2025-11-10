@@ -13,12 +13,11 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
 import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 # Configure logging
@@ -88,8 +87,8 @@ def validate_limit(limit: int) -> bool:
     return 1 <= limit <= MAX_LIMIT
 
 def generate_etag(data: str) -> str:
-    """Generate ETag from data content."""
-    return f'"{hashlib.sha256(data.encode()).hexdigest()[:16]}"'
+    """Generate ETag from data content using SHA256 (32 chars for 128-bit security)."""
+    return f'"{hashlib.sha256(data.encode()).hexdigest()[:32]}"'
 
 def get_cache_key(country_code: Optional[str] = None, tier: Optional[str] = None) -> str:
     """Generate cache key for filtered data."""

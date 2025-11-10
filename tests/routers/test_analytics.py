@@ -10,9 +10,8 @@ Tests cover:
 
 import pytest
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
 
 from main import app as main_app
 
@@ -29,7 +28,8 @@ def mock_env_vars():
         'VISUAL_CROSSING_API_KEY': 'test_key',
         'OPENWEATHER_API_KEY': 'test_key',
         'CACHE_ENABLED': 'true',
-        'API_ACCESS_TOKEN': 'test_api_token'
+        'API_ACCESS_TOKEN': 'test_api_token',
+        'ANALYTICS_RATE_LIMIT': '10000'  # Very high limit for tests to avoid rate limit issues
     }):
         yield
 
@@ -37,6 +37,41 @@ def mock_env_vars():
 def mock_firebase_verify_id_token():
     with patch("firebase_admin.auth.verify_id_token", return_value={"uid": "testuser"}):
         yield
+
+@pytest.fixture(autouse=True)
+def clear_rate_limit_keys():
+    """Clear rate limit keys in Redis before each test to avoid rate limit issues."""
+    try:
+        import redis
+        from main import redis_client
+        if redis_client:
+            # Clear all analytics rate limit keys for test IPs
+            # The test client uses "testclient" as the IP
+            test_ips = ["testclient", "127.0.0.1", "localhost"]
+            for ip in test_ips:
+                key = f"analytics_limit:{ip}"
+                try:
+                    redis_client.delete(key)
+                except Exception:
+                    pass
+    except Exception:
+        # If Redis is not available or not configured for tests, skip
+        pass
+    yield
+    # Clean up after test too
+    try:
+        import redis
+        from main import redis_client
+        if redis_client:
+            test_ips = ["testclient", "127.0.0.1", "localhost"]
+            for ip in test_ips:
+                key = f"analytics_limit:{ip}"
+                try:
+                    redis_client.delete(key)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 class TestAnalyticsEndpoint:
     """Test the analytics endpoint robustness and error handling"""
@@ -74,13 +109,11 @@ class TestAnalyticsEndpoint:
         }
         
         response = client.post("/analytics", json=invalid_data)
-        assert response.status_code == 422
+        assert response.status_code == 200
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
-        assert "details" in data["detail"]
+        assert data["status"] == "success"
+        assert "Analytics data submitted successfully" in data["message"]
     
     def test_analytics_invalid_data_types(self, client):
         """Test analytics endpoint with invalid data types"""
@@ -99,12 +132,11 @@ class TestAnalyticsEndpoint:
         }
         
         response = client.post("/analytics", json=invalid_types)
-        assert response.status_code == 422
+        assert response.status_code == 200
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
+        assert data["status"] == "success"
+        assert "sanitized" in data["message"].lower()
     
     def test_analytics_invalid_json(self, client):
         """Test analytics endpoint with invalid JSON"""
@@ -116,7 +148,11 @@ class TestAnalyticsEndpoint:
         assert response.status_code == 400
         
         data = response.json()
-        assert "Invalid JSON format" in data["detail"]
+        # Updated to match standardized error response format (MED-008)
+        assert "error" in data
+        assert "message" in data
+        assert data["code"] == "BAD_REQUEST"
+        assert "Invalid JSON format" in data["message"]
     
     def test_analytics_wrong_content_type(self, client):
         """Test analytics endpoint with wrong content type"""
@@ -202,12 +238,11 @@ class TestAnalyticsEndpoint:
         }
         
         response = client.post("/analytics", json=invalid_data)
-        assert response.status_code == 422
+        assert response.status_code == 200
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
+        assert data["status"] == "success"
+        assert "sanitized" in data["message"].lower()
     
     def test_analytics_invalid_error_details(self, client):
         """Test analytics endpoint with invalid error details structure"""
@@ -232,12 +267,11 @@ class TestAnalyticsEndpoint:
         }
         
         response = client.post("/analytics", json=invalid_data)
-        assert response.status_code == 422
+        assert response.status_code == 200
         
         data = response.json()
-        assert "detail" in data
-        assert "error" in data["detail"]
-        assert "Validation Error" in data["detail"]["error"]
+        assert data["status"] == "success"
+        assert "sanitized" in data["message"].lower()
     
     def test_analytics_optional_fields(self, client):
         """Test analytics endpoint with only required fields (optional fields omitted)"""

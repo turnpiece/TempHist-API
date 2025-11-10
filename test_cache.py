@@ -10,18 +10,17 @@ Tests cover:
 - Performance and metrics
 """
 
-import asyncio
 import json
 import pytest
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch, AsyncMock
 
 from cache_utils import (
     CacheKeyBuilder, ETagGenerator, CacheHeaders, SingleFlightLock,
     EnhancedCache, JobManager, JobStatus, initialize_cache
 )
-from job_worker import JobWorker, initialize_worker
+from job_worker import JobWorker
 
 class TestCacheKeyBuilder:
     """Test cache key building and normalization."""
@@ -94,15 +93,14 @@ class TestCacheKeyBuilder:
     def test_build_cache_key_with_query_params(self):
         """Test cache key building with query parameters."""
         key = CacheKeyBuilder.build_cache_key(
-            "v1/records/rolling-bundle",
-            {"location": "New York", "anchor": "2024-01-15"},
-            {"unit_group": "fahrenheit", "days_back": "5"}
+            "v1/records/daily",
+            {"location": "New York", "identifier": "01-15"},
+            {"unit_group": "fahrenheit"}
         )
         
         assert "location=new_york" in key
-        assert "anchor=2024-01-15" in key
+        assert "identifier=01-15" in key
         assert "unit_group=fahrenheit" in key
-        assert "days_back=5" in key
 
 class TestETagGenerator:
     """Test ETag generation and validation."""

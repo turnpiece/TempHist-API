@@ -9,12 +9,10 @@ Tests cover:
 """
 
 import pytest
-import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
 
-from main import app as main_app, TEST_TOKEN
+from main import app as main_app, API_ACCESS_TOKEN
 
 @pytest.fixture
 def client():
@@ -62,9 +60,12 @@ class TestV1RecordsEndpoints:
     ])
     def test_v1_records_endpoint(self, client, period, location, identifier, expected_status):
         """Test the v1 records endpoint with various inputs"""
-        with patch('main.get_temperature_data_v1') as mock_get_data, \
-             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
-             patch('main.is_location_likely_invalid', return_value=False):
+        with patch('routers.v1_records.get_temperature_data_v1', new_callable=AsyncMock) as mock_get_data, \
+             patch('routers.v1_records.is_location_likely_invalid', return_value=False), \
+             patch('routers.dependencies.get_invalid_location_cache') as mock_get_cache:
+            mock_cache = MagicMock()
+            mock_cache.is_invalid_location.return_value = False
+            mock_get_cache.return_value = mock_cache
             if expected_status == 200:
                 mock_get_data.return_value = {
                     "period": period,
@@ -80,7 +81,7 @@ class TestV1RecordsEndpoints:
     
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}",
-                headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+                headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
             )
             assert response.status_code == expected_status
             
@@ -103,9 +104,12 @@ class TestV1RecordsEndpoints:
     ])
     def test_v1_subresource_endpoints(self, client, period, location, identifier, subresource):
         """Test the v1 subresource endpoints"""
-        with patch('main.get_temperature_data_v1') as mock_get_data, \
-             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
-             patch('main.is_location_likely_invalid', return_value=False):
+        with patch('routers.v1_records.get_temperature_data_v1', new_callable=AsyncMock) as mock_get_data, \
+             patch('routers.v1_records.is_location_likely_invalid', return_value=False), \
+             patch('routers.dependencies.get_invalid_location_cache') as mock_get_cache:
+            mock_cache = MagicMock()
+            mock_cache.is_invalid_location.return_value = False
+            mock_get_cache.return_value = mock_cache
             mock_data = {
                 "period": period,
                 "location": location,
@@ -122,7 +126,7 @@ class TestV1RecordsEndpoints:
     
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}/{subresource}",
-                headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+                headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
             )
             assert response.status_code == 200
             
@@ -143,7 +147,7 @@ class TestV1RecordsEndpoints:
         ]
         
         for endpoint in removed_endpoints:
-            response = client.get(endpoint, headers={"Authorization": f"Bearer {TEST_TOKEN}"})
+            response = client.get(endpoint, headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"})
             assert response.status_code == 410
             data = response.json()
             assert "error" in data
@@ -156,14 +160,14 @@ class TestV1RecordsEndpoints:
         # Test invalid period (this should be caught by FastAPI path validation)
         response = client.get(
             "/v1/records/invalid_period/london/01-15",
-            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+            headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
         )
         assert response.status_code == 422
         
         # Test that endpoints exist and handle errors gracefully
         response = client.get(
             "/v1/records/daily/london/invalid_date",
-            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
+            headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
         )
         # Should either return 400 for invalid format or 500 for other errors
         assert response.status_code in [400, 500]
@@ -176,44 +180,6 @@ class TestV1RecordsEndpoints:
         response = client.get("/v1/records/daily/london/01-15/average")
         assert response.status_code == 401
 
-class TestRollingBundleEndpoints:
-    """Test the rolling bundle endpoints from records_agg router"""
-    
-    def test_rolling_bundle_cors_test(self, client):
-        """Test the rolling bundle CORS test endpoint"""
-        response = client.get("/v1/records/rolling-bundle/test-cors")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "message" in data
-        assert "CORS is working for rolling-bundle" in data["message"]
-    
-    def test_rolling_bundle_preload_example(self, client):
-        """Test the rolling bundle preload example endpoint"""
-        response = client.get(
-            "/v1/records/rolling-bundle/preload-example",
-            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
-        )
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "data_structure" in data
-        assert "description" in data
-        assert "endpoint" in data
-    
-    def test_rolling_bundle_status(self, client):
-        """Test the rolling bundle status endpoint"""
-        response = client.get(
-            "/v1/records/rolling-bundle/london/2024-01-15/status",
-            headers={"Authorization": f"Bearer {TEST_TOKEN}"}
-        )
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "status" in data
-        assert "location" in data
-        assert "anchor" in data
-
 class TestRecordsAggIntegration:
     """Integration tests for records aggregation endpoints"""
     
@@ -225,7 +191,7 @@ class TestRecordsAggIntegration:
         import httpx
         BASE_URL = "http://localhost:8000"
         headers = {
-            "Authorization": f"Bearer {TEST_TOKEN}",
+            "Authorization": f"Bearer {API_ACCESS_TOKEN}",
             "Content-Type": "application/json"
         }
         

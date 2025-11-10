@@ -13,6 +13,7 @@ venv/
 *.svg
 profile_*.py
 *.speedscope
+.claude
 
 # Log files
 *.log

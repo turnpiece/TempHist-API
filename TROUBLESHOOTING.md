@@ -426,7 +426,6 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
    - Firebase ID token (for users)
    - API_ACCESS_TOKEN (for automated systems)
-   - TEST_TOKEN (for development)
 
 3. **Check token hasn't expired** (Firebase tokens expire after 1 hour)
 
@@ -545,11 +544,8 @@ python prewarm.py --locations 20 --days 7
 4. **Use async job endpoints** for heavy computations:
 
 ```bash
-# Instead of:
-GET /v1/records/rolling-bundle/London/2024-01-15
-
-# Use:
-POST /v1/records/rolling-bundle/London/2024-01-15/async
+# For heavy computations, use async jobs:
+POST /v1/records/daily/London/01-15/async
 # Then poll: GET /v1/jobs/{job_id}
 ```
 

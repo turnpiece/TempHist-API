@@ -10,13 +10,11 @@ Tests cover:
 - Error handling
 """
 
-import asyncio
 import json
-import os
 import pytest
 import redis
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
@@ -25,7 +23,6 @@ from fastapi import FastAPI
 from routers.locations_preapproved import (
     router,
     LocationItem,
-    PreapprovedResponse,
     initialize_locations_data,
     get_cache_key,
     validate_country_code,

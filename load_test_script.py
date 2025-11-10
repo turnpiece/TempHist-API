@@ -124,7 +124,6 @@ class LoadTester:
             "/v1/records/weekly/New York, NY/2024-01-15",
             "/v1/records/monthly/New York, NY/2024-01",
             "/v1/records/yearly/New York, NY/2024",
-            "/v1/records/rolling-bundle/New York, NY/2024-01-15",
             "/v1/records/daily/Los Angeles, CA/01-15",
             "/v1/records/daily/Chicago, IL/01-15",
             "/v1/records/daily/Houston, TX/01-15",

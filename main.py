@@ -9,43 +9,46 @@ from collections import defaultdict
 import time
 
 # Third-party imports
-import aiohttp
 import firebase_admin
 import redis
-from redis.asyncio import Redis as AsyncRedis
-import requests
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Depends, Path, Query, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from pathlib import Path as PathLib
-from datetime import date as dt_date
 
 # Load environment variables before importing routers
 # Use the directory where main.py is located to find .env file (more robust than current working directory)
 env_path = PathLib(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Import the new router
+# Import routers
 from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
 from routers.locations_preapproved import router as locations_preapproved_router, initialize_locations_data
+from routers.weather import router as weather_router
+from routers.v1_records import router as v1_records_router
+from routers.cache import router as cache_router
+from routers.jobs import router as jobs_router
+from routers.legacy import router as legacy_router
+from routers.health import router as health_router
+from routers.stats import router as stats_router
+from routers.analytics import router as analytics_router
+from routers.root import router as root_router
+from routers.dependencies import initialize_dependencies
+from exceptions import register_exception_handlers
 
 # Import enhanced caching utilities
 from cache_utils import (
     # Cache utility functions
-    get_cache_value, set_cache_value, get_weather_cache_key, generate_cache_key,
+    get_cache_value, set_cache_value, generate_cache_key,
     # Global instances
-    get_cache_stats, get_usage_tracker, get_cache_warmer, get_cache_invalidator,
+    get_cache_stats, get_usage_tracker, get_cache_warmer,
     # Cache configuration
-    CACHE_WARMING_ENABLED, CACHE_WARMING_INTERVAL_HOURS, CACHE_STATS_ENABLED, CACHE_INVALIDATION_ENABLED,
-    # Job management
-    get_job_manager, JobStatus,
+    CACHE_WARMING_ENABLED,
     # Cache warming
     scheduled_cache_warming,
     # Cache initialization
@@ -60,28 +63,108 @@ from app.cache_utils import (
 )
 from version import __version__
 
+# Import configuration and rate limiting
+from config import CORS_ORIGINS, CORS_ORIGIN_REGEX, VISUAL_CROSSING_BASE_URL, VISUAL_CROSSING_REMOTE_DATA, SERVICE_TOKEN_RATE_LIMITS
+from rate_limiting import ServiceTokenRateLimiter, LocationDiversityMonitor, RequestRateMonitor
+from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
+
 # Environment variables - strip whitespace/newlines from API keys
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 
-# Debug: Log the REDIS_URL value to diagnose connection issues
+# Debug: Log the REDIS_URL value to diagnose connection issues (sanitized)
 import logging as _logging
+from urllib.parse import urlparse, urlunparse
+
+def sanitize_url(url: str) -> str:
+    """Remove credentials and API keys from URL for logging to prevent sensitive data exposure."""
+    try:
+        from urllib.parse import parse_qs, urlencode
+        parsed = urlparse(url)
+        
+        # Redact password from netloc
+        if parsed.password:
+            username = parsed.username or ""
+            netloc = f"{username}:***@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            parsed = parsed._replace(netloc=netloc)
+        
+        # Redact API keys from query parameters
+        if parsed.query:
+            query_params = parse_qs(parsed.query, keep_blank_values=True)
+            # Redact sensitive parameters
+            sensitive_params = ['key', 'api_key', 'apikey', 'token', 'password', 'secret']
+            for param in sensitive_params:
+                if param in query_params:
+                    query_params[param] = ['[REDACTED]']
+            # Reconstruct query string
+            sanitized_query = urlencode(query_params, doseq=True)
+            parsed = parsed._replace(query=sanitized_query)
+        
+        return urlunparse(parsed)
+    except (ValueError, TypeError) as e:
+        # If parsing fails, return a safe placeholder
+        logger.debug(f"Failed to parse URL for sanitization: {e}")
+        return "[REDACTED_URL]"
+
+def sanitize_for_logging(data: str, max_length: int = 100) -> str:
+    """Sanitize user input data before logging to prevent log injection and sensitive data exposure (MED-005).
+    
+    Args:
+        data: The input string to sanitize
+        max_length: Maximum length to keep (default 100 chars)
+        
+    Returns:
+        Sanitized string safe for logging
+    """
+    if not data or not isinstance(data, str):
+        return str(data)[:max_length] if data else ""
+    
+    # Truncate to max length
+    if len(data) > max_length:
+        data = data[:max_length] + "..."
+    
+    # Remove or replace control characters that could be used for log injection
+    # Replace newlines, tabs, and other control chars with spaces
+    import re
+    data = re.sub(r'[\r\n\t\x00-\x1f\x7f-\x9f]', ' ', data)
+    
+    # Remove potential sensitive patterns
+    # Redact bearer tokens
+    data = re.sub(r'Bearer\s+\S+', 'Bearer [REDACTED]', data, flags=re.IGNORECASE)
+    # Redact API keys in URLs
+    data = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', data, flags=re.IGNORECASE)
+    data = re.sub(r'api_key=[^&\s]+', 'api_key=[REDACTED]', data, flags=re.IGNORECASE)
+    # Redact tokens
+    data = re.sub(r'token=[^&\s]+', 'token=[REDACTED]', data, flags=re.IGNORECASE)
+    
+    # Clean up multiple spaces
+    data = re.sub(r'\s+', ' ', data).strip()
+    
+    return data
+
 _temp_logger = _logging.getLogger(__name__)
-_temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {REDIS_URL}")
+_temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {sanitize_url(REDIS_URL)}")
 
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
+# LOW-008: Validate debug mode with environment check
+ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+# Prevent DEBUG mode in production
+if ENVIRONMENT == "production" and DEBUG:
+    # Use basic logging since logger not yet initialized
+    _logging.basicConfig(level=_logging.INFO)
+    _temp_logger = _logging.getLogger(__name__)
+    _temp_logger.error("❌ DEBUG mode cannot be enabled in production environment")
+    raise ValueError("DEBUG=true is forbidden in production. Set ENVIRONMENT=production and DEBUG=false")
 # Logging verbosity control - set to "minimal" to reduce Railway logging limits
 LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "normal", "verbose"
-TEST_TOKEN = os.getenv("TEST_TOKEN")
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
-
-# CORS configuration from environment variables
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "").strip()
-CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX", "").strip()
 
 # Rate limiting configuration
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
@@ -209,180 +292,22 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
 
-# Rate Limiting Classes
-class LocationDiversityMonitor:
-    """Monitor and limit location diversity per IP address to prevent API abuse."""
-    
-    def __init__(self, max_locations: int = 10, window_hours: int = 1):
-        self.max_locations = max_locations
-        self.window_hours = window_hours
-        self.window_seconds = window_hours * 3600
-        
-        # Track unique locations per IP over time windows
-        self.ip_locations: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
-        self.suspicious_ips: Set[str] = set()
-        self.last_cleanup = time.time()
-        self.cleanup_interval = 300  # Clean up every 5 minutes
-        
-    def _cleanup_old_entries(self):
-        """Clean up old entries to prevent memory bloat."""
-        current_time = time.time()
-        if current_time - self.last_cleanup < self.cleanup_interval:
-            return
-            
-        window_start = current_time - self.window_seconds
-        
-        for ip_addr in list(self.ip_locations.keys()):
-            for timestamp in list(self.ip_locations[ip_addr].keys()):
-                if float(timestamp) < window_start:
-                    del self.ip_locations[ip_addr][timestamp]
-            
-            # Remove IP if no timestamps remain
-            if not self.ip_locations[ip_addr]:
-                del self.ip_locations[ip_addr]
-        
-        self.last_cleanup = current_time
-    
-    def check_location_diversity(self, ip: str, location: str) -> tuple[bool, str]:
-        """Check if IP is requesting too many different locations.
-        
-        Returns:
-            tuple: (is_allowed, reason)
-        """
-        self._cleanup_old_entries()
-        
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        # Add current request
-        timestamp_str = str(current_time)
-        self.ip_locations[ip][timestamp_str].add(location)
-        
-        # Count unique locations in time window
-        unique_locations = set()
-        for timestamp, locations in self.ip_locations[ip].items():
-            if float(timestamp) >= window_start:
-                unique_locations.update(locations)
-        
-        # Check if suspicious
-        if len(unique_locations) > self.max_locations:
-            self.suspicious_ips.add(ip)
-            return False, f"Too many different locations ({len(unique_locations)} > {self.max_locations}) in {self.window_hours} hour(s)"
-        
-        return True, "OK"
-    
-    def is_suspicious(self, ip: str) -> bool:
-        """Check if an IP has been flagged as suspicious."""
-        return ip in self.suspicious_ips
-    
-    def get_stats(self, ip: str) -> Dict:
-        """Get rate limiting stats for an IP address."""
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        unique_locations = set()
-        total_requests = 0
-        
-        for timestamp, locations in self.ip_locations[ip].items():
-            if float(timestamp) >= window_start:
-                unique_locations.update(locations)
-                total_requests += len(locations)
-        
-        return {
-            "unique_locations": len(unique_locations),
-            "total_requests": total_requests,
-            "max_locations": self.max_locations,
-            "window_hours": self.window_hours,
-            "is_suspicious": self.is_suspicious(ip)
-        }
-
-class RequestRateMonitor:
-    """Monitor and limit total request rate per IP address."""
-    
-    def __init__(self, max_requests: int = 100, window_hours: int = 1):
-        self.max_requests = max_requests
-        self.window_hours = window_hours
-        self.window_seconds = window_hours * 3600
-        
-        # Track request counts per IP over time windows
-        self.ip_requests: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        self.last_cleanup = time.time()
-        self.cleanup_interval = 300  # Clean up every 5 minutes
-        
-    def _cleanup_old_entries(self):
-        """Clean up old entries to prevent memory bloat."""
-        current_time = time.time()
-        if current_time - self.last_cleanup < self.cleanup_interval:
-            return
-            
-        window_start = current_time - self.window_seconds
-        
-        for ip_addr in list(self.ip_requests.keys()):
-            for timestamp in list(self.ip_requests[ip_addr].keys()):
-                if float(timestamp) < window_start:
-                    del self.ip_requests[ip_addr][timestamp]
-            
-            # Remove IP if no timestamps remain
-            if not self.ip_requests[ip_addr]:
-                del self.ip_requests[ip_addr]
-        
-        self.last_cleanup = current_time
-    
-    def check_request_rate(self, ip: str) -> tuple[bool, str]:
-        """Check if IP is making too many requests.
-        
-        Returns:
-            tuple: (is_allowed, reason)
-        """
-        self._cleanup_old_entries()
-        
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        # Add current request
-        timestamp_str = str(int(current_time / 60) * 60)  # Round to minute for better grouping
-        self.ip_requests[ip][timestamp_str] += 1
-        
-        # Count total requests in time window
-        total_requests = sum(
-            count for timestamp, count in self.ip_requests[ip].items()
-            if float(timestamp) >= window_start
-        )
-        
-        # Check if rate limit exceeded
-        if total_requests > self.max_requests:
-            return False, f"Too many requests ({total_requests} > {self.max_requests}) in {self.window_hours} hour(s)"
-        
-        return True, "OK"
-    
-    def get_stats(self, ip: str) -> Dict:
-        """Get rate limiting stats for an IP address."""
-        current_time = time.time()
-        window_start = current_time - self.window_seconds
-        
-        total_requests = sum(
-            count for timestamp, count in self.ip_requests[ip].items()
-            if float(timestamp) >= window_start
-        )
-        
-        return {
-            "total_requests": total_requests,
-            "max_requests": self.max_requests,
-            "window_hours": self.window_hours,
-            "remaining_requests": max(0, self.max_requests - total_requests)
-        }
-
 # Usage Tracking Configuration
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
-DEFAULT_POPULAR_LOCATIONS = os.getenv("CACHE_WARMING_POPULAR_LOCATIONS", "london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin").split(",")
-DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCATIONS if loc.strip()]
-
-
 # Initialize rate limiting monitors
 if RATE_LIMIT_ENABLED:
     location_monitor = LocationDiversityMonitor(MAX_LOCATIONS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
     request_monitor = RequestRateMonitor(MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
+else:
+    location_monitor = None
+    request_monitor = None
+
+# Initialize service token rate limiter (Redis-based, always enabled for security)
+# Note: redis_client is initialized later, so we'll create this in the lifespan handler
+service_token_rate_limiter: Optional[ServiceTokenRateLimiter] = None
+
+if RATE_LIMIT_ENABLED:
     if DEBUG:
         logger.info(f"🛡️  RATE LIMITING INITIALIZED: {MAX_LOCATIONS_PER_HOUR} locations/hour, {MAX_REQUESTS_PER_HOUR} requests/hour, {RATE_LIMIT_WINDOW_HOURS}h window")
         if IP_WHITELIST:
@@ -404,10 +329,9 @@ else:
         logger.info("Rate limiting disabled")
 
 # API Configuration
-VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
+# VISUAL_CROSSING_BASE_URL and VISUAL_CROSSING_REMOTE_DATA are imported from config
 VISUAL_CROSSING_UNIT_GROUP = "metric"  # Visual Crossing API still uses "metric"/"us"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
-VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 
 def clean_location_string(location: str) -> str:
     """Clean location string by removing non-printable ASCII characters."""
@@ -419,23 +343,184 @@ def clean_location_string(location: str) -> str:
     cleaned = re.sub(r'\s+', ' ', cleaned)
     return cleaned.strip()
 
-def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
-    """Build Visual Crossing API URL with consistent parameters.
+def validate_location_for_ssrf(location: str) -> str:
+    """Validate location string to prevent SSRF attacks.
     
     Args:
-        location: The location to get weather data for
-        date: The date in YYYY-MM-DD format
+        location: The location string to validate
+        
+    Returns:
+        Validated location string
+        
+    Raises:
+        ValueError: If location is invalid or potentially dangerous
+    """
+    import re
+    
+    if not location or not isinstance(location, str):
+        raise ValueError("Location must be a non-empty string")
+    
+    # Length validation
+    if len(location) > 200:
+        raise ValueError(f"Location string too long (max 200 characters, got {len(location)})")
+    
+    # Check for null bytes
+    if '\x00' in location:
+        raise ValueError("Location contains null bytes")
+    
+    # Check for control characters
+    if any(ord(c) < 32 and c not in ['\t', '\n', '\r'] for c in location):
+        raise ValueError("Location contains control characters")
+    
+    # Allow printable characters (letters, numbers, spaces, common punctuation)
+    # This includes Unicode letters (accents, non-Latin scripts) which are common in location names
+    # Block only control characters and specific dangerous patterns
+    if not all(c.isprintable() or c in ['\t', '\n', '\r'] for c in location):
+        raise ValueError("Location contains non-printable or control characters")
+    
+    # Prevent path traversal attempts
+    dangerous_patterns = ['..', '/', '\\', '//']
+    for pattern in dangerous_patterns:
+        if pattern in location:
+            raise ValueError(f"Location contains dangerous pattern: {pattern}")
+    
+    # Prevent SSRF patterns - block URLs, IP addresses, and special schemes
+    location_lower = location.lower()
+    ssrf_patterns = [
+        '://',           # URL scheme
+        '@',             # URL auth separator
+        'localhost',
+        '127.0.0.1',
+        '0.0.0.0',
+        '169.254',       # Link-local
+        '10.',           # Private IP range start
+        '172.16',        # Private IP range start
+        '172.17',
+        '172.18',
+        '172.19',
+        '172.20',
+        '172.21',
+        '172.22',
+        '172.23',
+        '172.24',
+        '172.25',
+        '172.26',
+        '172.27',
+        '172.28',
+        '172.29',
+        '172.30',
+        '172.31',
+        '192.168',       # Private IP range start
+        '[::1]',         # IPv6 localhost
+        '[fc00:',        # IPv6 private range
+        '[fe80:',        # IPv6 link-local
+    ]
+    
+    for pattern in ssrf_patterns:
+        if pattern in location_lower:
+            raise ValueError(f"Location contains potentially dangerous SSRF pattern: {pattern}")
+    
+    # Additional validation: block URL-encoded dangerous characters
+    # This prevents encoding-based bypasses
+    if '%' in location:
+        # Check for encoded versions of dangerous patterns
+        encoded_patterns = [
+            '%2f',   # /
+            '%5c',   # \
+            '%2e',   # .
+            '%40',   # @
+            '%3a',   # :
+        ]
+        for enc_pattern in encoded_patterns:
+            if enc_pattern in location_lower:
+                raise ValueError(f"Location contains encoded dangerous character: {enc_pattern}")
+    
+    return location.strip()
+
+def validate_date_format(date: str) -> str:
+    """Validate date format to prevent injection attacks.
+    
+    Args:
+        date: Date string in YYYY-MM-DD format
+        
+    Returns:
+        Validated date string
+        
+    Raises:
+        ValueError: If date format is invalid
+    """
+    import re
+    
+    if not date or not isinstance(date, str):
+        raise ValueError("Date must be a non-empty string")
+    
+    # Strict date format validation
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+        raise ValueError(f"Invalid date format. Must be YYYY-MM-DD, got: {date}")
+    
+    # Validate date values are reasonable
+    try:
+        year, month, day = map(int, date.split('-'))
+        # Check year range (reasonable bounds)
+        if year < 1800 or year > 2100:
+            raise ValueError(f"Year out of range: {year}")
+        if month < 1 or month > 12:
+            raise ValueError(f"Month out of range: {month}")
+        if day < 1 or day > 31:
+            raise ValueError(f"Day out of range: {day}")
+        
+        # Try to create date to validate it's a real date
+        from datetime import datetime
+        datetime(year, month, day)
+    except ValueError as e:
+        if "out of range" in str(e):
+            raise
+        raise ValueError(f"Invalid date: {date}")
+    
+    return date
+
+def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
+    """Build Visual Crossing API URL with consistent parameters and SSRF protection.
+    
+    Args:
+        location: The location to get weather data for (will be validated)
+        date: The date in YYYY-MM-DD format (will be validated)
         remote: Whether to include remote data parameters (default: True)
+        
+    Returns:
+        URL string for Visual Crossing API
+        
+    Raises:
+        ValueError: If location or date validation fails
     """
     from urllib.parse import quote
-    # Clean and URL-encode the location to handle special characters
-    cleaned_location = clean_location_string(location)
+    
+    # Validate inputs to prevent SSRF and injection attacks
+    try:
+        validated_location = validate_location_for_ssrf(location)
+        validated_date = validate_date_format(date)
+    except ValueError as e:
+        # Log the error but don't expose the exact validation failure to prevent information disclosure
+        logger.error(f"Location or date validation failed: {str(e)}")
+        raise ValueError("Invalid location or date format") from e
+    
+    # Clean and URL-encode the validated location
+    cleaned_location = clean_location_string(validated_location)
     encoded_location = quote(cleaned_location, safe='')
+    
+    # Final validation: ensure encoded location doesn't reintroduce dangerous patterns
+    encoded_lower = encoded_location.lower()
+    dangerous_encoded = ['%2f', '%5c', '%40', '%3a%3a%2f', 'localhost', '127.0.0.1']
+    for pattern in dangerous_encoded:
+        if pattern in encoded_lower:
+            logger.error(f"Encoded location contains dangerous pattern after encoding: {pattern}")
+            raise ValueError("Invalid location format")
+    
     base_params = f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}&include={VISUAL_CROSSING_INCLUDE_PARAMS}&key={API_KEY}"
     if remote:
-        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{base_params}&{VISUAL_CROSSING_REMOTE_DATA}"
     else:
-        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{date}?{base_params}"
+        return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{base_params}"
 
 # Cache durations
 SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
@@ -521,10 +606,13 @@ class AnalyticsStorage:
                 logger.debug(f"📊 ANALYTICS STORED: {analytics_id} | Errors: {analytics_data.error_count} | Duration: {analytics_data.session_duration}s")
             
             return analytics_id
-            
-        except Exception as e:
-            logger.error(f"Failed to store analytics data: {e}")
-            raise HTTPException(status_code=500, detail="Failed to store analytics data")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error storing analytics data: {redis_error}")
+            raise HTTPException(status_code=503, detail="Storage service unavailable")
+        except (json.JSONEncodeError, TypeError) as encode_error:
+            logger.error(f"Invalid analytics data: {encode_error}")
+            raise HTTPException(status_code=400, detail="Invalid analytics data format")
     
     def _update_analytics_summary(self, analytics_record: dict):
         """Update analytics summary statistics."""
@@ -568,9 +656,13 @@ class AnalyticsStorage:
             
             # Store updated summary
             redis_client.setex(summary_key, self.retention_seconds, json.dumps(summary_data))
-            
-        except Exception as e:
-            logger.error(f"Failed to update analytics summary: {e}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error updating analytics summary: {redis_error}")
+        except (json.JSONEncodeError, json.JSONDecodeError) as json_error:
+            logger.error(f"JSON error updating analytics summary: {json_error}")
+        except (KeyError, ValueError) as data_error:
+            logger.error(f"Data error updating analytics summary: {data_error}")
     
     def get_analytics_summary(self) -> dict:
         """Get analytics summary statistics."""
@@ -590,9 +682,12 @@ class AnalyticsStorage:
                     "error_types": {},
                     "last_updated": datetime.now().isoformat()
                 }
-        except Exception as e:
-            logger.error(f"Failed to get analytics summary: {e}")
-            return {"error": "Failed to retrieve analytics summary"}
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error getting analytics summary: {redis_error}")
+            return {"error": "Storage service unavailable"}
+        except (json.JSONDecodeError, ValueError) as decode_error:
+            logger.error(f"Data error getting analytics summary: {decode_error}")
+            return {"error": "Failed to parse analytics summary"}
     
     def get_recent_analytics(self, limit: int = 100) -> List[dict]:
         """Get recent analytics records."""
@@ -624,9 +719,12 @@ class AnalyticsStorage:
                 if record.get("session_id") == session_id
             ]
             return session_analytics
-            
-        except Exception as e:
-            logger.error(f"Failed to get analytics by session: {e}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error getting analytics by session: {redis_error}")
+            return []
+        except (json.JSONDecodeError, KeyError, ValueError) as data_error:
+            logger.error(f"Data error getting analytics by session: {data_error}")
             return []
 
 
@@ -637,33 +735,71 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
+    global service_token_rate_limiter
+    
     # Startup
+    # Initialize service token rate limiter (Redis-based, always enabled for security)
+    try:
+        service_token_rate_limiter = ServiceTokenRateLimiter(redis_client)
+        if DEBUG:
+            logger.info(f"🛡️  SERVICE TOKEN RATE LIMITING: {SERVICE_TOKEN_RATE_LIMITS['requests_per_hour']} requests/hour, {SERVICE_TOKEN_RATE_LIMITS['locations_per_hour']} locations/hour")
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Redis connection failed - {redis_error}")
+        # Create None limiter if Redis fails - will fail open in middleware
+        service_token_rate_limiter = None
+    except ImportError as import_error:
+        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Import failed - {import_error}")
+        service_token_rate_limiter = None
+    
+    # Initialize router dependencies (must happen after service_token_rate_limiter is created)
+    try:
+        from utils.location_validation import InvalidLocationCache
+        from analytics_storage import AnalyticsStorage
+        
+        # Create instances needed for dependencies
+        invalid_location_cache = InvalidLocationCache(redis_client)
+        analytics_storage = AnalyticsStorage(redis_client)
+        
+        # Initialize dependencies
+        initialize_dependencies(
+            redis_client=redis_client,
+            invalid_location_cache=invalid_location_cache,
+            service_token_rate_limiter=service_token_rate_limiter,
+            location_monitor=location_monitor,
+            request_monitor=request_monitor,
+            analytics_storage=analytics_storage
+        )
+        
+        if DEBUG:
+            logger.info("✅ ROUTER DEPENDENCIES: Initialized successfully")
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ ROUTER DEPENDENCIES: Redis connection failed - {redis_error}")
+    except ImportError as import_error:
+        logger.error(f"❌ ROUTER DEPENDENCIES: Import failed - {import_error}")
+    except (ValueError, TypeError) as config_error:
+        logger.error(f"❌ ROUTER DEPENDENCIES: Configuration error - {config_error}")
+    
     # Initialize cache system first
     try:
         initialize_cache(redis_client)
         if DEBUG:
             logger.info("✅ CACHE SYSTEM: Initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ CACHE SYSTEM: Failed to initialize - {e}")
-    
-    # Initialize improved cache system with async Redis
-    global async_redis_client
-    try:
-        async_redis_client = AsyncRedis.from_url(REDIS_URL, decode_responses=False)  # Store bytes for gzip
-        await initialize_improved_cache(async_redis_client)
-        logger.info("✅ IMPROVED CACHE SYSTEM: Initialized successfully (async Redis)")
-    except Exception as e:
-        logger.error(f"❌ IMPROVED CACHE SYSTEM: Failed to initialize - {e}")
-        logger.warning("⚠️  Improved cache operations will be skipped until initialization succeeds")
-        async_redis_client = None
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ CACHE SYSTEM: Redis connection failed - {redis_error}")
+    except ImportError as import_error:
+        logger.error(f"❌ CACHE SYSTEM: Import failed - {import_error}")
     
     # Initialize preapproved locations data
     try:
         await initialize_locations_data(redis_client)
         if DEBUG:
             logger.info("✅ PREAPPROVED LOCATIONS: Data loaded and cache warmed")
-    except Exception as e:
-        logger.error(f"❌ PREAPPROVED LOCATIONS: Failed to initialize - {e}")
+    except (redis.RedisError, redis.ConnectionError) as redis_error:
+        logger.error(f"❌ PREAPPROVED LOCATIONS: Redis connection failed - {redis_error}")
+    except (FileNotFoundError, json.JSONDecodeError) as file_error:
+        logger.error(f"❌ PREAPPROVED LOCATIONS: File error - {file_error}")
+    except (IOError, PermissionError) as io_error:
+        logger.error(f"❌ PREAPPROVED LOCATIONS: I/O error - {io_error}")
     
     if CACHE_WARMING_ENABLED and get_cache_warmer():
         # Wait a moment for the server to fully start
@@ -716,73 +852,66 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Global exception handlers for better error handling
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle Pydantic validation errors with detailed error messages."""
-    client_ip = get_client_ip(request)
-    
-    # Extract detailed error information
-    error_details = []
-    for error in exc.errors():
-        field = " -> ".join(str(loc) for loc in error['loc'])
-        error_details.append({
-            "field": field,
-            "message": error['msg'],
-            "type": error['type'],
-            "input": error.get('input', 'N/A')
-        })
-    
-    logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path}")
-    
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error": "Validation Error",
-            "message": "Request data validation failed",
-            "details": error_details,
-            "path": request.url.path,
-            "method": request.method
-        }
-    )
+# Register exception handlers from exceptions module
+register_exception_handlers(app)
 
-@app.exception_handler(ValidationError)
-async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
-    """Handle Pydantic model validation errors."""
-    client_ip = get_client_ip(request)
-    
-    error_details = []
-    for error in exc.errors():
-        field = " -> ".join(str(loc) for loc in error['loc'])
-        error_details.append({
-            "field": field,
-            "message": error['msg'],
-            "type": error['type'],
-            "input": error.get('input', 'N/A')
-        })
-    
-    logger.error(f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path}")
-    
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error": "Model Validation Error",
-            "message": "Data model validation failed",
-            "details": error_details,
-            "path": request.url.path,
-            "method": request.method
-        }
-    )
-
-# Include the routers
-app.include_router(records_agg_router)
+# Include all routers
+app.include_router(root_router)
+app.include_router(health_router)
+app.include_router(weather_router)
+app.include_router(records_agg_router)  # Must come before v1_records_router
+app.include_router(v1_records_router)
 app.include_router(locations_preapproved_router)
+app.include_router(cache_router)
+app.include_router(jobs_router)
+app.include_router(legacy_router)
+app.include_router(stats_router)
+app.include_router(analytics_router)
 
-# Initialize Redis clients
-# Blocking client for legacy cache operations
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-# Async client for improved cache (non-blocking)
-async_redis_client: Optional[AsyncRedis] = None
+# Initialize Redis with security validation
+def create_redis_client(url: str):
+    """Create Redis client with security validation."""
+    import ssl
+    from urllib.parse import urlparse
+    
+    parsed = urlparse(url)
+    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    
+    # Enforce password in production
+    if env == "production" and not parsed.password:
+        logger.error("❌ Redis password required in production")
+        raise ValueError("Redis password required in production environment")
+    
+    # Enforce SSL in production
+    ssl_context = None
+    if parsed.scheme == "rediss":
+        ssl_context = ssl.create_default_context()
+    elif env == "production":
+        logger.warning("⚠️  Redis not using SSL (rediss://) in production! Consider using rediss:// for encrypted connections.")
+        # In production, warn but don't fail (some providers handle SSL at network level)
+    
+    # Create Redis client with SSL if needed
+    # Note: from_url handles SSL automatically when using rediss:// scheme
+    client = redis.from_url(
+        url,
+        decode_responses=True
+    )
+    
+    # Test connection
+    try:
+        client.ping()
+        if DEBUG:
+            logger.info("✅ Redis connection validated successfully")
+    except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
+        logger.error(f"❌ Redis connection failed: {redis_error}")
+        raise
+    except redis.AuthenticationError as auth_error:
+        logger.error(f"❌ Redis authentication failed - check password: {auth_error}")
+        raise
+    
+    return client
+
+redis_client = create_redis_client(REDIS_URL)
 
 # Note: initialize_cache() is called in the lifespan handler (line 614)
 # to ensure proper initialization order during app startup
@@ -801,9 +930,14 @@ if DEBUG:
     logger.debug("📊 ANALYTICS STORAGE INITIALIZED: 7 days retention, 50 errors per session limit")
 
 # HTTP client configuration
-HTTP_TIMEOUT = 60.0  # Increased from 30s to 60s for better reliability
-MAX_CONCURRENT_REQUESTS = int(os.getenv("VC_MAX_CONCURRENT_REQUESTS", "1"))  # Conservative default: 1 concurrent request to avoid VC rate limits
-MIN_REQUEST_INTERVAL = float(os.getenv("VC_MIN_REQUEST_INTERVAL", "1.0"))  # Minimum seconds between requests (default: 1s)
+# LOW-004: Extract magic numbers to named constants
+# HTTP Request Timeouts
+HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
+HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks
+HTTP_TIMEOUT_LONG = 120.0    # Long timeout for large data requests
+
+HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
+MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
 
 # Simple global semaphore - prevents stampeding Visual Crossing API
 # Lower concurrency reduces 429 errors by spacing out requests
@@ -839,34 +973,18 @@ try:
 except ValueError:
     # Firebase app already initialized, skip
     logger.info("Firebase app already initialized")
-    pass
-except Exception as e:
-    logger.error(f"❌ Error initializing Firebase: {e}")
+except FileNotFoundError as file_error:
+    logger.error(f"❌ Firebase credentials file not found: {file_error}")
     # Continue without Firebase - the app can still work without it
-
-def get_client_ip(request: Request) -> str:
-    """Get the client IP address from the request."""
-    # Check for forwarded headers first (for proxy/load balancer scenarios)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # Take the first IP in the chain
-        return forwarded_for.split(",")[0].strip()
-    
-    # Check for real IP header
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-    
-    # Fallback to direct connection
-    return request.client.host if request.client else "unknown"
-
-def is_ip_whitelisted(ip: str) -> bool:
-    """Check if an IP address is whitelisted (exempt from rate limiting)."""
-    return ip in IP_WHITELIST
-
-def is_ip_blacklisted(ip: str) -> bool:
-    """Check if an IP address is blacklisted (blocked entirely)."""
-    return ip in IP_BLACKLIST
+except json.JSONDecodeError as json_error:
+    logger.error(f"❌ Invalid Firebase credentials JSON: {json_error}")
+    # Continue without Firebase - the app can still work without it
+except (IOError, PermissionError) as io_error:
+    logger.error(f"❌ Cannot read Firebase credentials: {io_error}")
+    # Continue without Firebase - the app can still work without it
+except Exception as e:
+    logger.error(f"❌ Unexpected error initializing Firebase: {e}")
+    # Continue without Firebase - the app can still work without it
 
 def verify_firebase_token(request: Request):
     """Verify Firebase authentication token."""
@@ -881,6 +999,19 @@ def verify_firebase_token(request: Request):
     except Exception as e:
         raise HTTPException(status_code=403, detail="Invalid token")
 
+# LOW-003: Request ID middleware for distributed tracing
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Add request ID for distributed tracing (LOW-003)."""
+    import uuid
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    
+    return response
+
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     """Log all requests when DEBUG is enabled or verbosity is verbose."""
@@ -890,7 +1021,8 @@ async def log_requests_middleware(request: Request, call_next):
         
         # Log request details (only for non-public paths to reduce noise)
         if not request.url.path in ["/", "/docs", "/openapi.json", "/redoc", "/health", "/rate-limit-status"]:
-            logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {request.headers.get('user-agent', 'Unknown')}")
+            user_agent = request.headers.get('user-agent', 'Unknown')
+            logger.debug(f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {sanitize_for_logging(user_agent, max_length=150)}")
         
         # Process request
         response = await call_next(request)
@@ -904,6 +1036,58 @@ async def log_requests_middleware(request: Request, call_next):
     else:
         # Skip logging in production
         return await call_next(request)
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses to prevent various attacks."""
+    # Enforce HTTPS in production (MED-001)
+    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    if env == "production" and request.url.scheme != "https":
+        return JSONResponse(
+            status_code=400,
+            content={"error": "HTTPS required in production"},
+            headers={"Location": f"https://{request.url.netloc}{request.url.path}"}
+        )
+    
+    response = await call_next(request)
+    
+    # Prevent clickjacking
+    response.headers["X-Frame-Options"] = "DENY"
+    
+    # Prevent MIME sniffing
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    
+    # XSS protection (legacy browsers)
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    # Content Security Policy
+    # Note: Adjust based on your frontend requirements
+    csp_policy = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self'; "
+        "connect-src 'self' https://weather.visualcrossing.com; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["Content-Security-Policy"] = csp_policy
+    
+    # HSTS (only if using HTTPS)
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains; preload"
+        )
+    
+    # Referrer policy
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    # Permissions policy (disable unnecessary browser features)
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), microphone=(), camera=()"
+    )
+    
+    return response
 
 @app.middleware("http")
 async def request_size_middleware(request: Request, call_next):
@@ -978,7 +1162,8 @@ async def verify_token_middleware(request: Request, call_next):
         )
 
     # Public paths that don't require a token or rate limiting
-    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/rate-limit-stats", "/analytics", "/health", "/health/detailed", "/v1/records/rolling-bundle/test-cors", "/v1/jobs/diagnostics/worker-status"]
+    # Note: Stats endpoints removed - they require authentication (HIGH-012)
+    public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/analytics", "/health", "/health/detailed", "/v1/jobs/diagnostics/worker-status"]
     if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
         if DEBUG:
             logger.debug(f"[DEBUG] Middleware: Public path, allowing through")
@@ -996,13 +1181,11 @@ async def verify_token_middleware(request: Request, call_next):
 
     # Define endpoints that actually query Visual Crossing API (cost money)
     vc_api_paths = ["/weather/", "/forecast/", "/v1/records/"]
+    is_vc_api_endpoint = any(request.url.path.startswith(path) for path in vc_api_paths)
     
     # Apply rate limiting only to Visual Crossing API endpoints
     # Skip rate limiting for: whitelisted IPs, service jobs (API_ACCESS_TOKEN)
     if RATE_LIMIT_ENABLED and location_monitor and request_monitor and not is_ip_whitelisted(client_ip) and not is_service_job:
-        # Check if this endpoint queries Visual Crossing API
-        is_vc_api_endpoint = any(request.url.path.startswith(path) for path in vc_api_paths)
-        
         if is_vc_api_endpoint:
             # Check request rate first
             rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
@@ -1030,7 +1213,7 @@ async def verify_token_middleware(request: Request, call_next):
                     location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
                     if not location_allowed:
                         if DEBUG:
-                            logger.warning(f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {location_reason}")
+                            logger.warning(f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {sanitize_for_logging(location_reason)}")
                         return JSONResponse(
                             status_code=429,
                             content={
@@ -1041,7 +1224,7 @@ async def verify_token_middleware(request: Request, call_next):
                             headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)}
                         )
                     elif DEBUG:
-                        logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {location} | OK")
+                        logger.debug(f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {sanitize_for_logging(location)} | OK")
         elif DEBUG:
             logger.debug(f"ℹ️  NON-VC ENDPOINT: {client_ip} | {request.method} {request.url.path} | Rate limiting skipped")
     elif is_ip_whitelisted(client_ip) and DEBUG:
@@ -1075,13 +1258,8 @@ async def verify_token_middleware(request: Request, call_next):
 
     id_token = auth_header.split(" ")[1]
     
-    # Special bypass for testing
-    if id_token == TEST_TOKEN:
-        if DEBUG:
-            logger.debug(f"[DEBUG] Middleware: Using test token bypass")
-        request.state.user = {"uid": "testuser"}
     # Production token bypass for automated systems (cron jobs, etc.)
-    elif is_service_job:
+    if is_service_job:
         # Already verified this is API_ACCESS_TOKEN during rate limiting check
         if DEBUG:
             logger.debug(f"[DEBUG] Middleware: Using production token bypass")
@@ -1097,10 +1275,22 @@ async def verify_token_middleware(request: Request, call_next):
             logger.error(f"[DEBUG] Middleware: Firebase token verification failed: {e}")
             logger.error(f"[DEBUG] Middleware: Error type: {type(e).__name__}")
             logger.error(f"[DEBUG] Middleware: Error message: {str(e)}")
-            return JSONResponse(
-                status_code=403,
-                content={"detail": f"Invalid Firebase token: {str(e)}"}
-            )
+            # Log detailed error server-side only
+            logger.error(f"Firebase token verification failed: {e}", exc_info=True)
+            
+            # Return generic error message to client (don't expose internal details)
+            if DEBUG:
+                # In debug mode, provide more details
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"Invalid Firebase token: {str(e)}"}
+                )
+            else:
+                # In production, use generic error message
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Authentication failed"}
+                )
 
     logger.info(f"[DEBUG] Middleware: Token verified, calling next handler...")
     response = await call_next(request)
@@ -1165,431 +1355,26 @@ app.add_middleware(
     max_age=600,  # Cache preflight requests for 10 minutes
 )
 
-@app.api_route("/test-cors", methods=["GET", "OPTIONS"])
-async def test_cors():
-    """Test endpoint for CORS"""
-    return {"message": "CORS is working"}
+# Note: Endpoints have been moved to routers:
+# - /, /test-cors, /test-cors-rolling -> routers/root.py
+# - /health, /health/detailed -> routers/health.py
+# - /weather/*, /forecast/* -> routers/weather.py
+# - /v1/records/* -> routers/v1_records.py
+# - /cache-* -> routers/cache.py
+# - /v1/jobs/*, /debug/jobs -> routers/jobs.py
+# - /data/*, /average/*, /trend/*, /summary/*, /protected-endpoint -> routers/legacy.py
+# - /rate-limit-*, /usage-stats/* -> routers/stats.py
+# - /analytics/* -> routers/analytics.py
 
-@app.api_route("/test-cors-rolling", methods=["GET", "OPTIONS"])
-async def test_cors_rolling():
-    """Test endpoint for CORS with rolling-bundle path"""
-    return {"message": "CORS is working for rolling-bundle", "path": "/test-cors-rolling"}
-
-@app.api_route("/", methods=["GET", "OPTIONS"])
-async def root():
-    """Root endpoint that returns API information"""
-    return {
-        "name": "Temperature History API",
-        "version": __version__,
-        "description": "Temperature history API with v1 unified endpoints and legacy support",
-        "v1_endpoints": {
-            "records": [
-                "/v1/records/{period}/{location}/{identifier}",
-                "/v1/records/{period}/{location}/{identifier}/average",
-                "/v1/records/{period}/{location}/{identifier}/trend",
-                "/v1/records/{period}/{location}/{identifier}/summary",
-                "/v1/records/{period}/{location}/{identifier}/updated"
-            ],
-            "rolling_bundle": [
-                "/v1/records/rolling-bundle/{location}/{anchor}"
-            ],
-            "periods": ["daily", "weekly", "monthly", "yearly"],
-            "examples": [
-                "/v1/records/daily/london/01-15",
-                "/v1/records/weekly/london/01-15",
-                "/v1/records/monthly/london/01-15",
-                "/v1/records/yearly/london/01-15",
-                "/v1/records/daily/london/01-15/updated",
-                "/v1/records/rolling-bundle/london/2024-01-15"
-            ]
-        },
-        "removed_endpoints": {
-            "status": "removed",
-            "endpoints": [
-                "/data/{location}/{month_day}",
-                "/average/{location}/{month_day}",
-                "/trend/{location}/{month_day}",
-                "/summary/{location}/{month_day}"
-            ],
-            "note": "These endpoints have been removed. Please use v1 endpoints instead.",
-            "migration": "Use /v1/records/daily/{location}/{month_day} and subresources"
-        },
-        "other_endpoints": [
-            "/weather/{location}/{date}",
-            "/forecast/{location}",
-            "/rate-limit-status",
-            "/rate-limit-stats",
-            "/usage-stats",
-            "/usage-stats/{location}",
-            "/cache-warm",
-            "/cache-warm/status",
-            "/cache-warm/locations",
-            "/cache-warm/startup",
-            "/cache-warm/schedule",
-            "/cache-stats",
-            "/cache-stats/health",
-            "/cache-stats/endpoints",
-            "/cache-stats/locations",
-            "/cache-stats/hourly",
-            "/cache-stats/reset",
-            "/cache/info",
-            "/cache/invalidate/key/{cache_key}",
-            "/cache/invalidate/pattern",
-            "/cache/invalidate/endpoint/{endpoint}",
-            "/cache/invalidate/location/{location}",
-            "/cache/invalidate/date/{date}",
-            "/cache/invalidate/forecast",
-            "/cache/invalidate/today",
-            "/cache/invalidate/expired",
-            "/cache/clear"
-        ],
-        "analytics_endpoints": [
-            "/analytics",
-            "/analytics/summary", 
-            "/analytics/recent",
-            "/analytics/session/{session_id}"
-        ]
-    }
-
-# Shared async function for fetching and caching weather data for a single date
-
-async def get_weather_for_date(location: str, date_str: str) -> dict:
-    """Fetch and cache weather data for a specific date.
-    
-    Implements fallback logic for remote data:
-    1. First tries without remote data parameters
-    2. If no temperature data and year >= 2005, retries with remote data parameters
-    3. Never uses remote data for today's data
-    
-    Uses improved caching with canonicalized location keys and temporal tolerance.
-    """
-    logger.debug(f"get_weather_for_date for {location} on {date_str}")
-    
-    # Try improved cache first (for daily data with exact match)
-    if CACHE_ENABLED and async_redis_client:
-        try:
-            # Parse date string to date object
-            try:
-                end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            except ValueError:
-                # Try MM-DD format
-                month, day = map(int, date_str.split("-"))
-                end_date = datetime(datetime.now().year, month, day).date()
-            
-            cached_result = await cache_get(
-                async_redis_client,
-                agg="daily",
-                original_location=location,
-                end_date=end_date
-            )
-            if cached_result:
-                payload = cached_result["data"]
-                meta = cached_result["meta"]
-                if DEBUG:
-                    logger.debug(f"✅ SERVING IMPROVED CACHED WEATHER: {location} | Date: {date_str}")
-                    if meta["approximate"]["temporal"]:
-                        logger.debug(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
-                return payload
-        except Exception as e:
-            logger.error(f"Improved cache error for {location}:{date_str}: {e}")
-    
-    # Fallback to legacy cache
-    cache_key = get_weather_cache_key(location, date_str)
-    if CACHE_ENABLED:
-        cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
-        if cached_data:
-            if DEBUG:
-                logger.debug(f"✅ SERVING LEGACY CACHED WEATHER: {cache_key} | Location: {location} | Date: {date_str}")
-            try:
-                return json.loads(cached_data)
-            except Exception as e:
-                logger.error(f"Error decoding cached data for {cache_key}: {e}")
-
-    logger.debug(f"Cache miss: {cache_key} — fetching from API")
-    
-    # Parse the date to determine the year
-    try:
-        year, month, day = map(int, date_str.split("-")[:3])
-        is_today_date = is_today(year, month, day)
-    except Exception:
-        year = 2000  # Default fallback
-        is_today_date = False
-    
-    # First attempt: without remote data parameters
-    url = build_visual_crossing_url(location, date_str, remote=False)
-    logger.debug(f"First attempt (no remote data): {url}")
-    
-    try:
-        timeout = aiohttp.ClientTimeout(total=60)  # Increased from 30s to 60s for better reliability
-        logger.info(f"[DEBUG] Creating aiohttp session with 60-second timeout")
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Protect Visual Crossing API calls with semaphore to prevent rate limiting
-            async with visual_crossing_semaphore:
-                # Enforce minimum interval between requests
-                now = time.time()
-                time_since_last = now - _last_vc_request_time[0]
-                if time_since_last < MIN_REQUEST_INTERVAL:
-                    wait_for_interval = MIN_REQUEST_INTERVAL - time_since_last
-                    logger.debug(f"⏱️  Rate limiting: waiting {wait_for_interval:.2f}s to respect minimum interval")
-                    await asyncio.sleep(wait_for_interval)
-                
-                # Retry logic for Visual Crossing API rate limiting
-                max_retries = 3
-                first_attempt_success = False
-                
-                for attempt in range(max_retries + 1):
-                    logger.info(f"[DEBUG] Making GET request to: {url} (attempt {attempt + 1}/{max_retries + 1})")
-                    should_retry = False
-                    wait_time = 0
-                    
-                    # Record request time
-                    _last_vc_request_time[0] = time.time()
-                    
-                    async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
-                        logger.info(f"[DEBUG] Response received: status={resp.status}, content-type={resp.headers.get('Content-Type')}")
-                        
-                        # Handle 429 rate limit from Visual Crossing
-                        if resp.status == 429:
-                            if attempt < max_retries:
-                                wait_time = min(2 ** attempt, 60)  # Exponential backoff, max 60 seconds
-                                retry_after = resp.headers.get("Retry-After")
-                                if retry_after:
-                                    try:
-                                        wait_time = max(int(retry_after), wait_time)
-                                    except ValueError:
-                                        pass
-                                
-                                logger.warning(f"⚠️  Visual Crossing rate limit (429) for {location} on {date_str}, will wait {wait_time}s before retry (attempt {attempt + 1}/{max_retries + 1})")
-                                should_retry = True
-                                # Exit response context, then wait and retry
-                            else:
-                                logger.error(f"❌ Visual Crossing rate limit (429) exceeded after {max_retries + 1} attempts for {location} on {date_str}")
-                                # Fall through to try remote data
-                        
-                        if resp.status == 200 and 'application/json' in resp.headers.get('Content-Type', ''):
-                            logger.info(f"[DEBUG] Parsing JSON response...")
-                            data = await resp.json()
-                            logger.info(f"[DEBUG] JSON parsed successfully, checking for 'days' data")
-                            days = data.get('days')
-                            if days is not None and len(days) > 0:
-                                # Check if we got valid temperature data
-                                day_data = days[0]
-                                temp = day_data.get('temp')
-                                
-                                if temp is not None:
-                                    # Success! Cache and return the data
-                                    if FILTER_WEATHER_DATA:
-                                        # Filter to only essential temperature data
-                                        filtered_days = []
-                                        for day_data in days:
-                                            filtered_day = {
-                                                'datetime': day_data.get('datetime'),
-                                                'temp': day_data.get('temp'),
-                                                'tempmin': day_data.get('tempmin'),
-                                                'tempmax': day_data.get('tempmax')
-                                            }
-                                            filtered_days.append(filtered_day)
-                                        to_cache = {"days": filtered_days}
-                                    else:
-                                        # Return full data if filtering is disabled
-                                        to_cache = {"days": days}
-
-                                    if DEBUG:
-                                        logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
-
-                                    if CACHE_ENABLED:
-                                        cache_duration = SHORT_CACHE_DURATION if is_today_date else LONG_CACHE_DURATION
-                                        set_cache_value(cache_key, cache_duration, json.dumps(to_cache), redis_client)
-                                        
-                                        # Also store in improved cache
-                                        if async_redis_client:
-                                            try:
-                                                # Extract resolvedAddress from VC response if available
-                                                resolved_address = data.get("resolvedAddress")
-                                                end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                                                success = await cache_set(
-                                                    async_redis_client,
-                                                    agg="daily",
-                                                    original_location=location,
-                                                    end_date=end_date,
-                                                    payload=to_cache,
-                                                    resolved_address=resolved_address
-                                                )
-                                                if not success:
-                                                    logger.debug(f"Failed to store in improved cache (silent failure expected if cache unavailable)")
-                                            except Exception as e:
-                                                # Log at debug level since cache failures are non-critical
-                                                logger.debug(f"Improved cache storage failed (non-critical): {e}")
-                                    first_attempt_success = True
-                                    return to_cache
-                                else:
-                                    logger.debug(f"No temperature data in first attempt for {date_str}")
-                            else:
-                                logger.debug(f"No 'days' data in first attempt for {date_str}")
-                        
-                        # Mark that we got a non-429 response (even if not successful)
-                        if resp.status != 429:
-                            break  # Exit retry loop for non-429 errors
-                    
-                    # After exiting response context: handle retry if needed
-                    if should_retry and wait_time > 0:
-                        logger.warning(f"⏳ Waiting {wait_time}s before retrying Visual Crossing API request...")
-                        await asyncio.sleep(wait_time)
-                        continue  # Retry with a new request
-                
-                # If we reach here, the first attempt didn't provide valid temperature data
-                # Check if we should try with remote data parameters
-                if not is_today_date and year >= 2005:
-                    logger.info(f"[DEBUG] First attempt failed, trying remote fallback for {date_str} (year {year})")
-                    url_with_remote = build_visual_crossing_url(location, date_str, remote=True)
-                    logger.info(f"[DEBUG] Remote fallback URL: {url_with_remote}")
-                    
-                    # Retry logic for remote fallback with Visual Crossing API rate limiting
-                    max_retries_remote = 3
-                    for remote_attempt in range(max_retries_remote + 1):
-                        logger.info(f"[DEBUG] Making remote fallback request... (attempt {remote_attempt + 1}/{max_retries_remote + 1})")
-                        should_retry_remote = False
-                        wait_time_remote = 0
-                        
-                        async with session.get(url_with_remote, headers={"Accept-Encoding": "gzip"}) as remote_resp:
-                            logger.info(f"[DEBUG] Remote response received: status={remote_resp.status}, content-type={remote_resp.headers.get('Content-Type')}")
-                            
-                            # Handle 429 rate limit from Visual Crossing in remote fallback
-                            if remote_resp.status == 429:
-                                if remote_attempt < max_retries_remote:
-                                    wait_time_remote = min(2 ** remote_attempt, 60)  # Exponential backoff, max 60 seconds
-                                    retry_after = remote_resp.headers.get("Retry-After")
-                                    if retry_after:
-                                        try:
-                                            wait_time_remote = max(int(retry_after), wait_time_remote)
-                                        except ValueError:
-                                            pass
-                                    
-                                    logger.warning(f"⚠️  Visual Crossing rate limit (429) in remote fallback for {location} on {date_str}, will wait {wait_time_remote}s before retry (attempt {remote_attempt + 1}/{max_retries_remote + 1})")
-                                    should_retry_remote = True
-                                else:
-                                    logger.error(f"❌ Visual Crossing rate limit (429) exceeded after {max_retries_remote + 1} remote fallback attempts for {location} on {date_str}")
-                                    # Fall through to return error
-                            
-                            if remote_resp.status == 200 and 'application/json' in remote_resp.headers.get('Content-Type', ''):
-                                logger.info(f"[DEBUG] Parsing remote JSON response...")
-                                remote_data = await remote_resp.json()
-                                logger.info(f"[DEBUG] Remote JSON parsed successfully, checking for 'days' data")
-                                remote_days = remote_data.get('days')
-                                if remote_days is not None and len(remote_days) > 0:
-                                    remote_day_data = remote_days[0]
-                                    remote_temp = remote_day_data.get('temp')
-                                    
-                                    if remote_temp is not None:
-                                        # Success with remote data! Cache and return
-                                        logger.debug(f"Remote data fallback successful for {date_str}")
-                                        to_cache = {"days": remote_days}
-                                        if DEBUG:
-                                            logger.debug(f"🌤️ REMOTE FALLBACK RESPONSE: {location} | {date_str}")
-                                        if CACHE_ENABLED:
-                                            set_cache_value(cache_key, LONG_CACHE_DURATION, json.dumps(to_cache), redis_client)
-                                            
-                                            # Also store in improved cache
-                                            if async_redis_client:
-                                                try:
-                                                    # Extract resolvedAddress from VC response if available
-                                                    resolved_address = remote_data.get("resolvedAddress")
-                                                    end_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                                                    success = await cache_set(
-                                                        async_redis_client,
-                                                        agg="daily",
-                                                        original_location=location,
-                                                        end_date=end_date,
-                                                        payload=to_cache,
-                                                        resolved_address=resolved_address
-                                                    )
-                                                    if not success:
-                                                        logger.debug(f"Failed to store in improved cache (remote, silent failure expected)")
-                                                except Exception as e:
-                                                    # Log at debug level since cache failures are non-critical
-                                                    logger.debug(f"Improved cache storage failed (remote, non-critical): {e}")
-                                        return to_cache
-                                    else:
-                                        logger.debug(f"No temperature data in remote fallback for {date_str}")
-                                else:
-                                    logger.debug(f"No 'days' data in remote fallback for {date_str}")
-                            
-                            # Mark that we got a non-429 response (even if not successful)
-                            if remote_resp.status != 429:
-                                logger.debug(f"Remote fallback failed with status {remote_resp.status}")
-                                break  # Exit retry loop for non-429 errors
-                        
-                        # After exiting response context: handle retry if needed
-                        if should_retry_remote and wait_time_remote > 0:
-                            logger.warning(f"⏳ Waiting {wait_time_remote}s before retrying remote fallback...")
-                            await asyncio.sleep(wait_time_remote)
-                            continue  # Retry with a new request
-                
-                # If we reach here, neither attempt provided valid temperature data
-                logger.info(f"[DEBUG] Both attempts failed, returning error response")
-                return {"error": "No temperature data available", "status": "unavailable"}
-                
-    except Exception as e:
-        logger.error(f"[DEBUG] Exception occurred in get_weather_for_date for {date_str}: {str(e)}")
-        logger.error(f"[DEBUG] Exception type: {type(e).__name__}")
-        import traceback
-        logger.error(f"[DEBUG] Full traceback: {traceback.format_exc()}")
-        return {"error": str(e)}
-
-@app.get("/weather/{location}/{date}")
-def get_weather(location: str, date: str, response: Response = None):
-    """Get weather data for a specific location and date."""
-    logger.info(f"[DEBUG] Weather endpoint called with location={location}, date={date}")
-    
-    # Parse the date for cache headers
-    try:
-        req_date = dt_date.fromisoformat(date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
-    
-    cache_key = generate_cache_key("weather", location, date)
-    logger.info(f"[DEBUG] Cache key: {cache_key}")
-    
-    # Check cache first if caching is enabled
-    if CACHE_ENABLED:
-        if DEBUG:
-            logger.info(f"🔍 CACHE CHECK: {cache_key}")
-        cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
-        if cached_data:
-            if DEBUG:
-                logger.info(f"✅ SERVING CACHED DATA: {cache_key} | Location: {location} | Date: {date}")
-            result = json.loads(cached_data)
-            # Set smart cache headers for cached data too
-            set_weather_cache_headers(response, req_date=req_date, key_parts=f"{location}|{date}|metric|v1")
-            return result
-        if DEBUG:
-            logger.info(f"❌ CACHE MISS: {cache_key} — fetching from API")
-    else:
-        if DEBUG:
-            logger.info(f"⚠️  CACHING DISABLED: fetching from API")
-    
-    logger.info(f"[DEBUG] About to call get_weather_for_date...")
-    # Use the shared async function for consistency
-    # Since this is a sync endpoint, run the async function in the event loop
-    result = asyncio.run(get_weather_for_date(location, date))
-    
-    # Log the final response being returned to the client
-    if DEBUG:
-        logger.debug(f"🎯 FINAL RESPONSE TO CLIENT: {location} | {date}")
-        logger.debug(f"📄 FINAL JSON RESPONSE: {json.dumps(result, indent=2)}")
-    
-    # Set smart cache headers based on data age
-    set_weather_cache_headers(response, req_date=req_date, key_parts=f"{location}|{date}|metric|v1")
-    
-    # Only cache successful results if caching is enabled and not already cached
-    if CACHE_ENABLED and "error" not in result:
-        try:
-            year, month, day = map(int, date.split("-")[:3])
-            cache_duration = SHORT_CACHE_DURATION if is_today_or_future(year, month, day) else LONG_CACHE_DURATION
-        except Exception:
-            cache_duration = LONG_CACHE_DURATION
-        set_cache_value(cache_key, cache_duration, json.dumps(result), redis_client)
-    return result
+# Note: All endpoints have been moved to router modules:
+# - /weather/*, /forecast/* -> routers/weather.py
+# - /v1/records/* -> routers/v1_records.py  
+# - /health/* -> routers/health.py
+# - /cache/* -> routers/cache.py
+# - /v1/jobs/* -> routers/jobs.py
+# - /data/*, /average/*, /trend/*, /summary/*, /protected-endpoint -> routers/legacy.py
+# - /rate-limit-*, /usage-stats/* -> routers/stats.py
+# - /analytics/* -> routers/analytics.py
 
 def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     """
@@ -1828,14 +1613,14 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         else:
             # For daily periods, use the period context
             avg_summary = "However, " if cold_summary else ""
-            # Don't capitalize the period context when it follows "However, "
+            # Don't capitalise the period context when it follows "However, "
             if cold_summary:  # Use the same condition as above
                 # Force lowercase for period context when following "However, "
                 period_lower = period_context.lower()
                 avg_summary += f"{period_lower} {tense_context} {rounded_diff}°C warmer than average."
             else:
-                period_capitalized = period_context.capitalize()
-                avg_summary += f"{period_capitalized} {tense_context} {rounded_diff}°C warmer than average."
+                period_capitalised = period_context.capitalize()
+                avg_summary += f"{period_capitalised} {tense_context} {rounded_diff}°C warmer than average."
     else:
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
@@ -1844,14 +1629,14 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         else:
             # For daily periods, use the period context
             avg_summary = "However, " if warm_summary else ""
-            # Don't capitalize the period context when it follows "However, "
+            # Don't capitalise the period context when it follows "However, "
             if warm_summary:  # Use the same condition as above
                 # Force lowercase for period context when following "However, "
                 period_lower = period_context.lower()
                 avg_summary += f"{period_lower} {tense_context} {abs(rounded_diff)}°C cooler than average."
             else:
-                period_capitalized = period_context.capitalize()
-                avg_summary += f"{period_capitalized} {tense_context} {abs(rounded_diff)}°C cooler than average."
+                period_capitalised = period_context.capitalize()
+                avg_summary += f"{period_capitalised} {tense_context} {abs(rounded_diff)}°C cooler than average."
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
 
@@ -1927,588 +1712,21 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
     
     return round(slope_per_decade, 2)
 
-@app.get("/forecast/{location}")
-async def get_forecast(location: str):
-    """Get weather forecast for a location with time-based caching."""
-    try:
-        # Create cache key for forecast
-        cache_key = generate_cache_key("forecast", location)
-        
-        # Check cache first if caching is enabled
-        if CACHE_ENABLED:
-            cached_forecast = get_cache_value(cache_key, redis_client, "forecast", location, get_cache_stats())
-            if cached_forecast:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED FORECAST: {cache_key} | Location: {location}")
-                return JSONResponse(content=json.loads(cached_forecast), headers={"Cache-Control": "public, max-age=1800"})
-            elif DEBUG:
-                logger.debug(f"❌ FORECAST CACHE MISS: {cache_key} — fetching fresh forecast")
-        
-        # Fetch fresh forecast data
-        today = datetime.now().date()
-        result = await get_forecast_data(location, today)
-        
-        # Cache the result if caching is enabled and no error
-        if CACHE_ENABLED and "error" not in result:
-            cache_duration = get_forecast_cache_duration()
-            # Convert date object to string for JSON serialization
-            if "date" in result and hasattr(result["date"], 'strftime'):
-                result["date"] = result["date"].strftime("%Y-%m-%d")
-            set_cache_value(cache_key, cache_duration, json.dumps(result), redis_client)
-            if DEBUG:
-                current_hour = datetime.now().hour
-                time_period = "stable" if current_hour >= 18 else "active"
-                logger.debug(f"💾 CACHED FORECAST: {cache_key} | Duration: {cache_duration} | Time: {time_period}")
-        
-        # Convert date object to string for JSON response
-        if "date" in result and hasattr(result["date"], 'strftime'):
-            result["date"] = result["date"].strftime("%Y-%m-%d")
-        
-        return JSONResponse(content=result, headers={"Cache-Control": "public, max-age=1800"})
-    
-    except Exception as e:
-        logger.error(f"Error in forecast endpoint: {e}")
-        return JSONResponse(
-            content={"error": f"Forecast error: {str(e)}"},
-            status_code=500
-        )
+# Removed duplicate endpoints - now in routers:
+# - /forecast/{location} -> routers/weather.py
+# - /health, /health/detailed -> routers/health.py
 
-@app.get("/health")
-async def health_check():
-    """Simple health check endpoint for Render load balancers."""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-@app.get("/health/detailed")
-async def detailed_health_check():
-    """Comprehensive health check endpoint for debugging and monitoring."""
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0",
-        "services": {}
-    }
-    
-    overall_healthy = True
-    
-    # Check Redis connection
-    try:
-        set_cache_value("health_check", timedelta(minutes=1), "test_value", redis_client)
-        test_value = get_cache_value("health_check", redis_client, "health", "test", get_cache_stats())
-        
-        # Handle both string and bytes responses (depending on Redis client configuration)
-        if test_value:
-            if isinstance(test_value, bytes):
-                test_value_str = test_value.decode('utf-8')
-            else:
-                test_value_str = str(test_value)
-            
-            if test_value_str == "test_value":
-                health_status["services"]["redis"] = {
-                    "status": "healthy",
-                    "message": "Connection successful"
-                }
-            else:
-                health_status["services"]["redis"] = {
-                    "status": "unhealthy",
-                    "message": f"Cache test failed - expected 'test_value', got '{test_value_str}'"
-                }
-                overall_healthy = False
-        else:
-            health_status["services"]["redis"] = {
-                "status": "unhealthy",
-                "message": "Cache test failed - no value returned"
-            }
-            overall_healthy = False
-    except Exception as e:
-        health_status["services"]["redis"] = {
-            "status": "unhealthy",
-            "message": f"Connection error: {str(e)}"
-        }
-        overall_healthy = False
-    
-    # Check API keys
-    api_keys_healthy = True
-    if not API_KEY:
-        health_status["services"]["visual_crossing_api"] = {
-            "status": "unhealthy",
-            "message": "API key not configured"
-        }
-        api_keys_healthy = False
-    else:
-        health_status["services"]["visual_crossing_api"] = {
-            "status": "healthy",
-            "message": "API key configured"
-        }
-    
-    if not OPENWEATHER_API_KEY:
-        health_status["services"]["openweather_api"] = {
-            "status": "unhealthy",
-            "message": "API key not configured"
-        }
-        api_keys_healthy = False
-    else:
-        health_status["services"]["openweather_api"] = {
-            "status": "healthy",
-            "message": "API key configured"
-        }
-    
-    if not api_keys_healthy:
-        overall_healthy = False
-    
-    # Check cache statistics if available
-    try:
-        cache_stats_instance = get_cache_stats()
-        if cache_stats_instance and hasattr(cache_stats_instance, 'get_cache_health'):
-            cache_health = cache_stats_instance.get_cache_health()
-            health_status["services"]["cache"] = cache_health
-            # Only consider cache "unhealthy" status as a failure, not "degraded"
-            if cache_health.get("status") == "unhealthy":
-                overall_healthy = False
-    except Exception as e:
-        health_status["services"]["cache"] = {
-            "status": "unknown",
-            "message": f"Cache stats unavailable: {str(e)}"
-        }
-    
-    # Set overall status
-    health_status["status"] = "healthy" if overall_healthy else "unhealthy"
-    
-    # Return appropriate HTTP status code
-    status_code = 200 if overall_healthy else 503
-    
-    return JSONResponse(
-        content=health_status,
-        status_code=status_code,
-        headers={"Cache-Control": "no-cache"}
-    )
+# /test-redis endpoint moved to routers/root.py
 
-@app.get("/test-redis")
-async def test_redis():
-    """Test Redis connection."""
-    try:
-        # Try to set a test value
-        set_cache_value("test_key", timedelta(minutes=5), "test_value", redis_client)
-        # Try to get the test value
-        test_value = get_cache_value("test_key", redis_client, "test", "test", get_cache_stats())
-        if test_value and test_value.decode('utf-8') == "test_value":
-            return JSONResponse(content={"status": "success", "message": "Redis connection is working"}, headers={"Cache-Control": CACHE_CONTROL_HEADER})
-        else:
-            return JSONResponse(content={"status": "error", "message": "Redis connection test failed"}, headers={"Cache-Control": CACHE_CONTROL_HEADER})
-    except Exception as e:
-        return JSONResponse(
-    content={
-        "status": "error",
-        "message": f"Redis connection error: {str(e)}"
-    },
-    headers={"Cache-Control": CACHE_CONTROL_HEADER}
-)
+# Removed duplicate endpoints - now in routers/stats.py:
+# - /rate-limit-status -> routers/stats.py
+# - /rate-limit-stats -> routers/stats.py
+# - /usage-stats -> routers/stats.py
+# - /usage-stats/{location} -> routers/stats.py
 
-@app.get("/rate-limit-status")
-async def get_rate_limit_status(request: Request):
-    """Get rate limiting status for the current client IP."""
-    if not RATE_LIMIT_ENABLED:
-        return {"status": "disabled", "message": "Rate limiting is not enabled"}
-    
-    client_ip = get_client_ip(request)
-    
-    # Check if this is a service job using API_ACCESS_TOKEN
-    auth_header = request.headers.get("Authorization")
-    is_service_job = False
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
-            is_service_job = True
-    
-    # Check IP status
-    is_whitelisted = is_ip_whitelisted(client_ip)
-    is_blacklisted = is_ip_blacklisted(client_ip)
-    
-    # Skip stats if whitelisted or service job
-    location_stats = location_monitor.get_stats(client_ip) if location_monitor and not is_whitelisted and not is_service_job else {}
-    request_stats = request_monitor.get_stats(client_ip) if request_monitor and not is_whitelisted and not is_service_job else {}
-    
-    return {
-        "client_ip": client_ip,
-        "ip_status": {
-            "whitelisted": is_whitelisted,
-            "blacklisted": is_blacklisted,
-            "service_job": is_service_job,
-            "rate_limited": not is_whitelisted and not is_blacklisted and not is_service_job
-        },
-        "location_monitor": location_stats,
-        "request_monitor": request_stats,
-        "rate_limits": {
-            "max_locations_per_hour": MAX_LOCATIONS_PER_HOUR,
-            "max_requests_per_hour": MAX_REQUESTS_PER_HOUR,
-            "window_hours": RATE_LIMIT_WINDOW_HOURS
-        }
-    }
-
-@app.get("/rate-limit-stats")
-async def get_rate_limit_stats():
-    """Get overall rate limiting statistics (admin endpoint)."""
-    if not RATE_LIMIT_ENABLED:
-        return {"status": "disabled", "message": "Rate limiting is not enabled"}
-    
-    # Get stats for all monitored IPs
-    all_stats = {}
-    
-    if location_monitor:
-        for ip in location_monitor.ip_locations.keys():
-            all_stats[ip] = {
-                "location_stats": location_monitor.get_stats(ip),
-                "request_stats": request_monitor.get_stats(ip) if request_monitor else {},
-                "suspicious": location_monitor.is_suspicious(ip),
-                "whitelisted": is_ip_whitelisted(ip),
-                "blacklisted": is_ip_blacklisted(ip)
-            }
-    
-    return {
-        "total_monitored_ips": len(all_stats),
-        "suspicious_ips": list(location_monitor.suspicious_ips) if location_monitor else [],
-        "whitelisted_ips": IP_WHITELIST,
-        "blacklisted_ips": IP_BLACKLIST,
-        "ip_details": all_stats
-    }
-
-@app.get("/usage-stats")
-async def get_usage_stats():
-    """Get usage tracking statistics."""
-    if not USAGE_TRACKING_ENABLED or not get_usage_tracker():
-        return {"status": "disabled", "message": "Usage tracking is not enabled"}
-    
-    return {
-        "enabled": USAGE_TRACKING_ENABLED,
-        "retention_days": USAGE_RETENTION_DAYS,
-        "popular_locations_24h": get_usage_tracker().get_popular_locations(limit=10, hours=24),
-        "popular_locations_7d": get_usage_tracker().get_popular_locations(limit=10, hours=168),
-        "all_location_stats": get_usage_tracker().get_all_location_stats()
-    }
-
-@app.get("/usage-stats/{location}")
-async def get_location_usage_stats(location: str):
-    """Get usage statistics for a specific location."""
-    if not USAGE_TRACKING_ENABLED or not get_usage_tracker():
-        return {"status": "disabled", "message": "Usage tracking is not enabled"}
-    
-    stats = get_usage_tracker().get_location_stats(location)
-    if not stats:
-        return {"status": "not_found", "message": f"No usage data found for location: {location}"}
-    
-    return stats
-
-@app.post("/cache-warm")
-async def trigger_cache_warming():
-    """Trigger manual cache warming for all popular locations (legacy endpoint - now uses job system)."""
-    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
-        return {"status": "disabled", "message": "Cache warming is not enabled"}
-    
-    # Import job manager
-    from cache_utils import get_job_manager
-    job_manager = get_job_manager()
-    
-    if not job_manager:
-        return {"status": "error", "message": "Job manager not available"}
-    
-    # Create cache warming job
-    job_id = job_manager.create_job("cache_warming", {
-        "type": "all",
-        "locations": [],
-        "triggered_by": "legacy_api",
-        "triggered_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    return {
-        "status": "job_created",
-        "message": "Cache warming job created successfully (legacy endpoint)",
-        "job_id": job_id,
-        "job_status_url": f"/cache-warm/job/{job_id}",
-        "locations_to_warm": get_cache_warmer().get_locations_to_warm()
-    }
-
-@app.get("/cache-warm/status")
-async def get_cache_warming_status():
-    """Get cache warming status and statistics."""
-    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
-        return {"status": "disabled", "message": "Cache warming is not enabled"}
-    
-    return get_cache_warmer().get_warming_stats()
-
-@app.get("/cache-warm/locations")
-async def get_locations_to_warm():
-    """Get list of locations that would be warmed."""
-    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
-        return {"status": "disabled", "message": "Cache warming is not enabled"}
-    
-    return {
-        "locations": get_cache_warmer().get_locations_to_warm(),
-        "dates": get_cache_warmer().get_dates_to_warm(),
-        "month_days": get_cache_warmer().get_month_days_to_warm()
-    }
-
-@app.post("/cache-warm/startup")
-async def trigger_startup_warming():
-    """Trigger cache warming on startup (useful for deployment) - now uses job system."""
-    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
-        return {"status": "disabled", "message": "Cache warming is not enabled"}
-    
-    # Import job manager
-    from cache_utils import get_job_manager
-    job_manager = get_job_manager()
-    
-    if not job_manager:
-        return {"status": "error", "message": "Job manager not available"}
-    
-    # Create cache warming job
-    job_id = job_manager.create_job("cache_warming", {
-        "type": "all",
-        "locations": [],
-        "triggered_by": "startup_api",
-        "triggered_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    return {
-        "status": "job_created",
-        "message": "Startup cache warming job created successfully",
-        "job_id": job_id,
-        "job_status_url": f"/cache-warm/job/{job_id}",
-        "locations_to_warm": get_cache_warmer().get_locations_to_warm()
-    }
-
-@app.get("/cache-warm/schedule")
-async def get_warming_schedule():
-    """Get information about the warming schedule."""
-    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
-        return {"status": "disabled", "message": "Cache warming is not enabled"}
-    
-    return {
-        "enabled": CACHE_WARMING_ENABLED,
-        "interval_hours": CACHE_WARMING_INTERVAL_HOURS,
-        "next_warming_in_hours": CACHE_WARMING_INTERVAL_HOURS,  # Simplified - would need more complex logic for exact timing
-        "last_warming": get_cache_warmer().last_warming_time.isoformat() if get_cache_warmer().last_warming_time else None,
-        "warming_in_progress": get_cache_warmer().warming_in_progress
-    }
-
-@app.post("/cache-warm/job")
-async def trigger_cache_warming_job(
-    warming_type: str = "all",
-    locations: List[str] = None
-):
-    """Trigger cache warming as a background job."""
-    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
-        return {"status": "disabled", "message": "Cache warming is not enabled"}
-    
-    # Import job manager
-    from cache_utils import get_job_manager
-    job_manager = get_job_manager()
-    
-    if not job_manager:
-        return {"status": "error", "message": "Job manager not available"}
-    
-    # Validate warming type
-    if warming_type not in ["all", "popular", "specific"]:
-        return {"status": "error", "message": "Invalid warming type. Must be 'all', 'popular', or 'specific'"}
-    
-    # Validate locations for specific warming
-    if warming_type == "specific" and not locations:
-        return {"status": "error", "message": "Locations must be provided for specific warming"}
-    
-    # Create cache warming job
-    job_id = job_manager.create_job("cache_warming", {
-        "type": warming_type,
-        "locations": locations or [],
-        "triggered_by": "api",
-        "triggered_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    return {
-        "status": "job_created",
-        "message": "Cache warming job created successfully",
-        "job_id": job_id,
-        "warming_type": warming_type,
-        "locations": locations or [],
-        "job_status_url": f"/jobs/{job_id}"
-    }
-
-@app.get("/cache-warm/job/{job_id}")
-async def get_cache_warming_job_status(job_id: str):
-    """Get status of a cache warming job."""
-    from cache_utils import get_job_manager
-    job_manager = get_job_manager()
-    
-    if not job_manager:
-        return {"status": "error", "message": "Job manager not available"}
-    
-    job_status = job_manager.get_job_status(job_id)
-    if not job_status:
-        return {"status": "not_found", "message": "Job not found"}
-    
-    return job_status
-
-@app.get("/cache-stats")
-async def get_cache_statistics():
-    """Get comprehensive cache statistics and performance metrics."""
-    cache_stats_instance = get_cache_stats()
-    if not CACHE_STATS_ENABLED or not cache_stats_instance:
-        return {"status": "disabled", "message": "Cache statistics are not enabled"}
-    
-    return cache_stats_instance.get_comprehensive_stats()
-
-@app.get("/cache-stats/health")
-async def get_cache_health():
-    """Get cache health assessment and alerts."""
-    cache_stats_instance = get_cache_stats()
-    if not CACHE_STATS_ENABLED or not cache_stats_instance:
-        return {"status": "disabled", "message": "Cache statistics are not enabled"}
-    
-    return cache_stats_instance.get_cache_health()
-
-@app.get("/cache-stats/endpoints")
-async def get_cache_endpoint_stats():
-    """Get cache statistics broken down by endpoint."""
-    cache_stats_instance = get_cache_stats()
-    if not CACHE_STATS_ENABLED or not cache_stats_instance:
-        return {"status": "disabled", "message": "Cache statistics are not enabled"}
-    
-    return {
-        "by_endpoint": cache_stats_instance.get_endpoint_stats(),
-        "overall": {
-            "total_requests": cache_stats_instance.stats["total_requests"],
-            "hit_rate": cache_stats_instance.get_hit_rate(),
-            "error_rate": cache_stats_instance.get_error_rate()
-        }
-    }
-
-@app.get("/cache-stats/locations")
-async def get_cache_location_stats():
-    """Get cache statistics broken down by location."""
-    cache_stats_instance = get_cache_stats()
-    if not CACHE_STATS_ENABLED or not cache_stats_instance:
-        return {"status": "disabled", "message": "Cache statistics are not enabled"}
-    
-    return {
-        "by_location": cache_stats_instance.get_location_stats(),
-        "overall": {
-            "total_requests": cache_stats_instance.stats["total_requests"],
-            "hit_rate": cache_stats_instance.get_hit_rate(),
-            "error_rate": cache_stats_instance.get_error_rate()
-        }
-    }
-
-@app.get("/cache-stats/hourly")
-async def get_cache_hourly_stats(hours: int = 24):
-    """Get hourly cache statistics for the last N hours."""
-    cache_stats_instance = get_cache_stats()
-    if not CACHE_STATS_ENABLED or not cache_stats_instance:
-        return {"status": "disabled", "message": "Cache statistics are not enabled"}
-    
-    return {
-        "hourly_data": cache_stats_instance.get_hourly_stats(hours),
-        "requested_hours": hours
-    }
-
-@app.post("/cache-stats/reset")
-async def reset_cache_statistics():
-    """Reset all cache statistics (admin endpoint)."""
-    cache_stats_instance = get_cache_stats()
-    if not CACHE_STATS_ENABLED or not cache_stats_instance:
-        return {"status": "disabled", "message": "Cache statistics are not enabled"}
-    
-    cache_stats_instance.reset_stats()
-    return {
-        "status": "success",
-        "message": "Cache statistics have been reset",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.delete("/cache/invalidate/key/{cache_key:path}")
-async def invalidate_cache_key(cache_key: str, dry_run: bool = False):
-    """Invalidate a specific cache key."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_by_key(cache_key, dry_run)
-    return result
-
-@app.delete("/cache/invalidate/pattern")
-async def invalidate_by_pattern(pattern: str, dry_run: bool = False):
-    """Invalidate cache keys matching a pattern."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_by_pattern(pattern, dry_run)
-    return result
-
-@app.delete("/cache/invalidate/endpoint/{endpoint}")
-async def invalidate_by_endpoint(endpoint: str, location: str = None, dry_run: bool = False):
-    """Invalidate cache keys for a specific endpoint and optionally location."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_by_endpoint(endpoint, location, dry_run)
-    return result
-
-@app.delete("/cache/invalidate/location/{location}")
-async def invalidate_by_location(location: str, dry_run: bool = False):
-    """Invalidate all cache keys for a specific location."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_by_location(location, dry_run)
-    return result
-
-@app.delete("/cache/invalidate/date/{date}")
-async def invalidate_by_date(date: str, dry_run: bool = False):
-    """Invalidate cache keys for a specific date."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_by_date(date, dry_run)
-    return result
-
-@app.delete("/cache/invalidate/forecast")
-async def invalidate_forecast_data(dry_run: bool = False):
-    """Invalidate all forecast data."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_forecast_data(dry_run)
-    return result
-
-@app.delete("/cache/invalidate/today")
-async def invalidate_today_data(dry_run: bool = False):
-    """Invalidate all data for today."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_today_data(dry_run)
-    return result
-
-@app.delete("/cache/invalidate/expired")
-async def invalidate_expired_keys(dry_run: bool = False):
-    """Invalidate keys that have expired."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().invalidate_expired_keys(dry_run)
-    return result
-
-@app.get("/cache/info")
-async def get_cache_info():
-    """Get information about current cache state."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    return get_cache_invalidator().get_cache_info()
-
-@app.delete("/cache/clear")
-async def clear_all_cache(dry_run: bool = False):
-    """Clear all cache data (use with caution!)."""
-    if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
-        return {"status": "disabled", "message": "Cache invalidation is not enabled"}
-    
-    result = get_cache_invalidator().clear_all_cache(dry_run)
-    return result
+# Removed duplicate cache endpoints - now in routers/cache.py
+# All /cache-* endpoints moved to routers/cache.py
 
 # Helper to check if a given year, month, day is today
 def is_today(year: int, month: int, day: int) -> bool:
@@ -2571,13 +1789,19 @@ def validate_month_day(month_day: str):
     return month, day
 
 
-def is_valid_location(location: str) -> bool:
-    """Check if a location is valid by testing the API."""
+async def is_valid_location(location: str) -> bool:
+    """Check if a location is valid by testing the API (async version)."""
+    import httpx
     today = datetime.now().strftime("%Y-%m-%d")
     url = build_visual_crossing_url(location, today, remote=False)
-    response = requests.get(url)
-    if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
-        return True
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            response = await client.get(url)
+            if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
+                return True
+    except Exception:
+        # If request fails, assume location is invalid
+        pass
     return False
 
 class InvalidLocationCache:
@@ -2656,6 +1880,7 @@ def is_location_likely_invalid(location: str) -> bool:
     """
     Check if a location string looks obviously invalid.
     This is a quick check before making API calls.
+    Enhanced with security checks for SSRF prevention.
     """
     if not location or not isinstance(location, str):
         return True
@@ -2673,9 +1898,43 @@ def is_location_likely_invalid(location: str) -> bool:
     ]
     
     location_lower = location.lower().strip()
-    return any(pattern.lower() in location_lower for pattern in invalid_patterns)
+    if any(pattern.lower() in location_lower for pattern in invalid_patterns):
+        return True
+    
+    # Security checks for SSRF prevention
+    # Length check
+    if len(location) > 200:
+        return True
+    
+    # Check for dangerous patterns that could indicate SSRF attempts
+    dangerous_patterns = [
+        '://',      # URL scheme
+        '@',        # URL auth
+        'localhost',
+        '127.0.0.1',
+        '0.0.0.0',
+        '..',       # Path traversal
+        '/',        # Path separator
+        '\\',       # Windows path separator
+        '//',       # Protocol-relative
+    ]
+    
+    for pattern in dangerous_patterns:
+        if pattern in location_lower:
+            return True
+    
+    # Check for private IP ranges
+    private_ip_patterns = ['10.', '172.16', '172.17', '172.18', '172.19', '172.20',
+                          '172.21', '172.22', '172.23', '172.24', '172.25', '172.26',
+                          '172.27', '172.28', '172.29', '172.30', '172.31', '192.168']
+    
+    for pattern in private_ip_patterns:
+        if pattern in location_lower:
+            return True
+    
+    return False
 
-def get_year_range(current_year: int, years_back: int = None) -> List[int]:
+def get_year_range(current_year: int, years_back: int = 50) -> List[int]:
     """Get a list of years for historical data analysis."""
     if years_back is None:
         # Use configurable YEARS_BACK from environment (default: 20 to control costs)
@@ -2776,7 +2035,7 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
 
     # Batch fetch for all uncached years
     if uncached_date_strs:
-        batch_results = await fetch_weather_batch(location, uncached_date_strs)
+        batch_results = await fetch_weather_batch(location, uncached_date_strs, redis_client)
         for year, date_str in zip(uncached_years, uncached_date_strs):
             weather = batch_results.get(date_str)
             #logger.debug(f"get_temperature_series weather: {weather}")
@@ -2810,6 +2069,20 @@ async def get_temperature_series(location: str, month: int, day: int) -> Dict:
             logger.debug(f"Average temperature: {sum(temps)/len(temps):.1f}°C")
 
     data_list = sorted(data, key=lambda d: d['x'])
+
+    if data_list:
+        latest_year = data_list[-1]['x']
+        if isinstance(latest_year, str):
+            try:
+                latest_year = int(latest_year)
+            except ValueError:
+                latest_year = None
+        if latest_year is not None and latest_year != current_year:
+            if not any(entry.get("year") == current_year for entry in missing_years):
+                track_missing_year(missing_years, current_year, "no_data_current_year")
+    elif current_year not in [entry.get("year") for entry in missing_years]:
+        track_missing_year(missing_years, current_year, "no_data_current_year")
+
     if not data_list:
         logger.warning(f"No valid temperature data found for {location} on {month}-{day}")
         return {
@@ -2843,7 +2116,7 @@ async def get_forecast_data(location: str, date) -> Dict:
     
     try:
         url = build_visual_crossing_url(location, date_str, remote=False)
-        logger.debug(f"🔗 Built URL (first 200 chars): {url[:200]}...")
+        logger.debug(f"🔗 Built URL (sanitized): {sanitize_url(url)}")
     except Exception as url_error:
         logger.error(f"❌ Error building URL for location '{location}': {url_error}")
         raise
@@ -2867,12 +2140,14 @@ async def get_forecast_data(location: str, date) -> Dict:
             return {"error": "No days data in forecast response"}
     return {"error": response.text, "status": response.status_code}
 
-async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: int = None) -> dict:
+async def fetch_weather_batch(location: str, date_strs: list, redis_client: redis.Redis, max_concurrent: int = None) -> dict:
     """
     Fetch weather data for multiple dates in parallel using httpx with concurrency control.
     Returns a dict mapping date_str to weather data.
     Now uses caching for each date and global concurrency semaphore.
     """
+    from utils.weather_data import get_weather_for_date
+    
     logger.debug(f"fetch_weather_batch for {location}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="Visual Crossing API key not configured")
@@ -2887,7 +2162,7 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
     
     async def fetch_one(date_str):
         async with semaphore:
-            return date_str, await get_weather_for_date(location, date_str)
+            return date_str, await get_weather_for_date(location, date_str, redis_client)
     
     tasks = [fetch_one(date_str) for date_str in date_strs]
     for fut in asyncio.as_completed(tasks):
@@ -2895,1419 +2170,6 @@ async def fetch_weather_batch(location: str, date_strs: list, max_concurrent: in
         results[date_str] = result
     return results
 
-# ============================================================================
-# V1 API ENDPOINTS
-# ============================================================================
-
-def parse_identifier(period: str, identifier: str) -> tuple:
-    """Parse identifier based on period type. All periods use MM-DD format representing the end date."""
-    # All periods use MM-DD format representing the end date of the period
-    try:
-        month, day = map(int, identifier.split("-"))
-        if not (1 <= month <= 12):
-            raise ValueError("Month must be between 1 and 12")
-        if not (1 <= day <= 31):
-            raise ValueError("Day must be between 1 and 31")
-        return month, day, period
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Identifier must be in MM-DD format: {str(e)}")
-
-async def _fetch_yearly_summary(location: str, start_year: int, end_year: int, unit_group: str = "metric"):
-    """Fetch yearly summary data from Visual Crossing historysummary endpoint."""
-    from constants import VC_BASE_URL
-    url = f"{VC_BASE_URL}/weatherdata/historysummary"
-    params = {
-        "aggregateHours": 24,
-        "minYear": start_year,
-        "maxYear": end_year,
-        "chronoUnit": "years",
-        "breakBy": "years",
-        "dailySummaries": "false",
-        "contentType": "json",
-        "unitGroup": unit_group,
-        "locations": location,
-        "key": API_KEY,
-    }
-    
-    async with visual_crossing_semaphore:
-        http = await get_http_client()
-        async with http:
-            r = await http.get(url, params=params, headers={"Accept-Encoding": "gzip"})
-    r.raise_for_status()
-    data = r.json()
-    
-    # Parse the response to extract yearly temperature data
-    yearly_data = []
-    if 'locations' in data and location in data['locations']:
-        location_data = data['locations'][location]
-        if 'values' in location_data:
-            for value in location_data['values']:
-                year = value.get('year')
-                temp = value.get('temp')
-                if year and temp is not None:
-                    yearly_data.append((year, temp))
-    
-    return yearly_data
-
-async def get_temperature_data_v1(location: str, period: str, identifier: str, unit_group: str = "celsius") -> Dict:
-    """Get temperature data for v1 API with unified logic using historysummary for weekly/monthly/yearly."""
-    # Parse identifier based on period (all use MM-DD format representing end date)
-    month, day, period_type = parse_identifier(period, identifier)
-    
-    # Convert MM-DD to full date (use current year, but for monthly use last day of month)
-    current_year = datetime.now().year
-    if period == "monthly":
-        # For monthly, use the last day of the month as the anchor date
-        from dateutil.relativedelta import relativedelta
-        last_day_of_month = (datetime(current_year, month, 1) + relativedelta(months=1) - timedelta(days=1)).day
-        end_date = datetime(current_year, month, last_day_of_month).date()
-    else:
-        end_date = datetime(current_year, month, day).date()
-    
-    # Try improved cache first
-    if async_redis_client:
-        try:
-            cached_result = await cache_get(
-                async_redis_client,
-                agg=period,  # type: ignore
-                original_location=location,
-                end_date=end_date
-            )
-            if cached_result:
-                payload = cached_result["data"]
-                meta = cached_result["meta"]
-                logger.info(f"✅ SERVING IMPROVED CACHED {period.upper()}: {location} | {identifier}")
-                if meta["approximate"]["temporal"]:
-                    logger.info(f"📅 TEMPORAL APPROXIMATION: Served from {meta['served_from']['end_date']} (Δ{meta['served_from']['temporal_delta_days']}d)")
-                return payload
-        except Exception as e:
-            logger.error(f"Improved cache error for {period} {location}:{identifier}: {e}")
-    
-    # Calculate date range based on period and end date
-    from datetime import datetime, timedelta
-    
-    # Use configurable years of data (default: 20 to control costs)
-    current_year = datetime.now().year
-    years_back = int(os.getenv("YEARS_BACK", "20"))
-    start_year = current_year - years_back  # Years back + current year
-    years = get_year_range(current_year)
-    end_date = datetime(current_year, month, day)
-    
-    if period == "daily":
-        # Single day across all years
-        start_date = end_date
-        date_range_days = 1
-    elif period == "weekly":
-        # 7 days ending on the specified date
-        start_date = end_date - timedelta(days=6)
-        date_range_days = 7
-    elif period == "monthly":
-        # 30 days ending on the specified date
-        start_date = end_date - timedelta(days=29)
-        date_range_days = 30
-    elif period == "yearly":
-        # 365 days ending on the specified date
-        start_date = end_date - timedelta(days=364)
-        date_range_days = 365
-    else:
-        raise HTTPException(status_code=400, detail="Invalid period. Must be daily, weekly, monthly, or yearly")
-    
-    # Get temperature data for the date range across all years
-    values = []
-    all_temps = []
-    missing_years = []
-    
-    if period == "daily":
-        # For daily, get data for just the specific day across all years
-        weather_data = await get_temperature_series(location, month, day)
-        if weather_data and 'data' in weather_data:
-            # Extract missing years from the series metadata
-            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
-                missing_years.extend(weather_data['metadata']['missing_years'])
-            
-            for data_point in weather_data['data']:
-                year = int(data_point['x'])
-                temp = data_point['y']
-                if temp is not None:
-                    all_temps.append(temp)
-                    values.append(TemperatureValue(
-                        date=f"{year}-{month:02d}-{day:02d}",
-                        year=year,
-                        temperature=temp
-                    ))
-    
-    elif period in ["weekly", "monthly"]:
-        # Use historysummary endpoint for weekly/monthly data (much more efficient)
-        try:
-            from routers.records_agg import fetch_historysummary, _historysummary_values, _row_year, _row_mean_temp
-            
-            # Determine chrono_unit based on period
-            chrono_unit = "weeks" if period == "weekly" else "months"
-            
-            if DEBUG:
-                logger.debug(f"Fetching {period} summary for {location} from {start_year} to {current_year}")
-            
-            payload = await fetch_historysummary(
-                location, 
-                start_year, 
-                current_year, 
-                chrono_unit=chrono_unit, 
-                break_by="years"
-            )
-            
-            rows = _historysummary_values(payload)
-            if DEBUG:
-                logger.debug(f"Got {len(rows)} {period} data points")
-            
-            # For weekly, we need to match by ISO week number
-            if period == "weekly":
-                desired_week = datetime(current_year, month, day).isocalendar().week
-                for r in rows:
-                    y = _row_year(r)
-                    t = _row_mean_temp(r)
-                    if y is not None and t is not None:
-                        # Check if this row corresponds to the desired week
-                        try:
-                            # Try to extract week info from the row
-                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
-                            if period_str:
-                                row_date = datetime.strptime(period_str[:10], "%Y-%m-%d")
-                                row_week = row_date.isocalendar().week
-                                if row_week == desired_week:
-                                    all_temps.append(t)
-                                    values.append(TemperatureValue(
-                                        date=f"{y}-{month:02d}-{day:02d}",
-                                        year=y,
-                                        temperature=round(t, 1),
-                                    ))
-                        except Exception as e:
-                            if DEBUG:
-                                logger.debug(f"Error processing weekly row: {e}")
-                            continue
-            
-            # For monthly, we need to match by month
-            elif period == "monthly":
-                for r in rows:
-                    y = _row_year(r)
-                    t = _row_mean_temp(r)
-                    if y is not None and t is not None:
-                        # Check if this row corresponds to the desired month
-                        try:
-                            # Try to extract month info from the row
-                            period_str = r.get('period') or r.get('datetimeStr') or r.get('start')
-                            if period_str:
-                                row_month = int(period_str[5:7])
-                                if row_month == month:
-                                    all_temps.append(t)
-                                    values.append(TemperatureValue(
-                                        date=f"{y}-{month:02d}-{day:02d}",
-                                        year=y,
-                                        temperature=round(t, 1),
-                                    ))
-                        except Exception as e:
-                            if DEBUG:
-                                logger.debug(f"Error processing monthly row: {e}")
-                            continue
-            
-            if not values:
-                if DEBUG:
-                    logger.debug(f"No {period} data found, falling back to sampling")
-                raise Exception(f"No {period} data found")
-                
-        except Exception as e:
-            # Only log on first occurrence to reduce log noise (historysummary often fails, fallback is expected)
-            if DEBUG and "historysummary" not in str(e).lower():
-                logger.debug(f"Error fetching {period} summary: {e}, falling back to sampling")
-            # Fallback to sampling approach if historysummary fails
-            sample_days = min(date_range_days, 7)  # Sample up to 7 days for efficiency
-            step = max(1, date_range_days // sample_days)
-            
-            for year in range(start_year, current_year + 1):
-                year_temps = []
-                for day_offset in range(0, date_range_days, step):
-                    current_date = start_date.replace(year=year) + timedelta(days=day_offset)
-                    
-                    try:
-                        weather_data = await get_temperature_series(location, current_date.month, current_date.day)
-                        if weather_data and 'data' in weather_data:
-                            # Extract missing years from the series metadata
-                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
-                                for missing_year_info in weather_data['metadata']['missing_years']:
-                                    if missing_year_info['year'] == year:
-                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_sampling")
-                                        break
-                            
-                            for data_point in weather_data['data']:
-                                if int(data_point['x']) == year and data_point['y'] is not None:
-                                    year_temps.append(data_point['y'])
-                                    break
-                    except Exception as e:
-                        if DEBUG:
-                            logger.debug(f"Error getting data for {current_date}: {e}")
-                        track_missing_year(missing_years, year, "sampling_error")
-                        continue
-                
-                # Calculate average for the year (only add one value per year)
-                if year_temps:
-                    avg_temp = sum(year_temps) / len(year_temps)
-                    all_temps.append(avg_temp)  # Add to all_temps only once per year
-                    values.append(TemperatureValue(
-                        date=end_date.replace(year=year).strftime("%Y-%m-%d"),
-                        year=year,
-                        temperature=round(avg_temp, 1),
-                    ))
-                else:
-                    track_missing_year(missing_years, year, "no_data_sampling")
-    
-    elif period == "yearly":
-        # For yearly, use the Visual Crossing historysummary endpoint for efficiency
-        try:
-            if DEBUG:
-                logger.debug(f"Fetching yearly summary for {location} from {start_year} to {current_year}")
-            yearly_data = await _fetch_yearly_summary(location, start_year, current_year)
-            if DEBUG:
-                logger.debug(f"Got {len(yearly_data)} yearly data points")
-            
-            if yearly_data:
-                for year, temp in yearly_data:
-                    all_temps.append(temp)
-                    values.append(TemperatureValue(
-                        date=f"{year}-{month:02d}-{day:02d}",
-                        year=year,
-                        temperature=round(temp, 1),
-                    ))
-            else:
-                if DEBUG:
-                    logger.debug("No yearly data returned, falling back to sampling")
-                raise Exception("No yearly data returned")
-        except Exception as e:
-            # Historysummary endpoint often fails (400 errors), fallback is normal - don't log every occurrence
-            pass
-            # Fallback to simple sampling approach if historysummary fails
-            # Just sample a few representative days for each year
-            sample_dates = [
-                (1, 15), (4, 15), (7, 15), (10, 15)  # Mid-month samples for each season
-            ]
-            
-            for year in range(start_year, current_year + 1):
-                year_values = []
-                for sample_month, sample_day in sample_dates:
-                    try:
-                        weather_data = await get_temperature_series(location, sample_month, sample_day)
-                        if weather_data and 'data' in weather_data:
-                            # Extract missing years from the series metadata
-                            if 'metadata' in weather_data and 'missing_years' in weather_data['metadata']:
-                                for missing_year_info in weather_data['metadata']['missing_years']:
-                                    if missing_year_info['year'] == year:
-                                        track_missing_year(missing_years, year, f"{missing_year_info['reason']}_yearly_sampling")
-                                        break
-                            
-                            for data_point in weather_data['data']:
-                                if int(data_point['x']) == year and data_point['y'] is not None:
-                                    temp = data_point['y']
-                                    year_values.append(temp)
-                                    all_temps.append(temp)
-                                    break
-                    except Exception as e:
-                        if DEBUG:
-                            logger.debug(f"Error getting data for {year}-{sample_month:02d}-{sample_day:02d}: {e}")
-                        track_missing_year(missing_years, year, "yearly_sampling_error")
-                        continue
-                
-                # Calculate average for the year
-                if year_values:
-                    avg_temp = sum(year_values) / len(year_values)
-                    values.append(TemperatureValue(
-                        date=f"{year}-{month:02d}-{day:02d}",
-                        year=year,
-                        temperature=round(avg_temp, 1),
-                    ))
-                else:
-                    track_missing_year(missing_years, year, "no_data_yearly_sampling")
-    
-    # Calculate date range
-    if values:
-        start_year = min(v.year for v in values)
-        end_year = max(v.year for v in values)
-        range_data = DateRange(
-            start=f"{start_year}-{month:02d}-{day:02d}",
-            end=f"{end_year}-{month:02d}-{day:02d}",
-            years=end_year - start_year + 1
-        )
-    else:
-        range_data = DateRange(start="", end="", years=0)
-    
-    # Calculate average
-    if all_temps:
-        avg_data = AverageData(
-            mean=round(sum(all_temps) / len(all_temps), 1),
-            unit=unit_group,
-            data_points=len(all_temps)
-        )
-    else:
-        avg_data = AverageData(mean=0.0, unit=unit_group, data_points=0)
-    
-    # Calculate trend
-    if len(values) >= 2:
-        trend_input = [{"x": v.year, "y": v.temperature} for v in values]
-        slope = calculate_trend_slope(trend_input)
-        trend_data = TrendData(
-            slope=slope,
-            unit="°C/decade" if unit_group == "celsius" else "°F/decade",
-            data_points=len(values),
-            r_squared=None
-        )
-    else:
-        trend_data = TrendData(slope=0.0, unit="°C/decade" if unit_group == "celsius" else "°F/decade", data_points=len(values))
-    
-    # Generate summary using existing logic
-    from datetime import datetime
-    end_date = datetime(current_year, month, day)
-    
-    # Create friendly date based on period
-    if period == "daily":
-        friendly_date = get_friendly_date(end_date)
-    elif period == "weekly":
-        friendly_date = f"week ending {get_friendly_date(end_date)}"
-    elif period == "monthly":
-        friendly_date = f"month ending {get_friendly_date(end_date)}"
-    elif period == "yearly":
-        friendly_date = f"year ending {get_friendly_date(end_date)}"
-    else:
-        friendly_date = get_friendly_date(end_date)
-    
-    # Convert values to the format expected by generate_summary
-    summary_data = []
-    for value in values:
-        summary_data.append({
-            'x': value.year,
-            'y': value.temperature
-        })
-    
-    # Generate summary text
-    summary_text = generate_summary(summary_data, end_date, period)
-    
-    # Replace the friendly date in the summary with our period-specific version
-    summary_text = summary_text.replace(get_friendly_date(end_date), friendly_date)
-    
-    # Create comprehensive metadata
-    additional_metadata = {
-        "period_days": date_range_days, 
-        "end_date": end_date.strftime("%Y-%m-%d")
-    }
-    
-    result = {
-        "period": period,
-        "location": location,
-        "identifier": identifier,
-        "range": range_data.model_dump(),
-        "unit_group": unit_group,
-        "values": [v.model_dump() for v in values],
-        "average": avg_data.model_dump(),
-        "trend": trend_data.model_dump(),
-        "summary": summary_text,
-        "metadata": create_metadata(len(years), len(values), missing_years, additional_metadata)
-    }
-    
-    # Store in improved cache
-    if async_redis_client:
-        try:
-            # Use the end_date we computed earlier (with last day of month for monthly)
-            success = await cache_set(
-                async_redis_client,
-                agg=period,  # type: ignore
-                original_location=location,
-                end_date=end_date,
-                payload=result
-                # Note: No resolvedAddress available here as data comes from timeline endpoints
-            )
-            if success:
-                logger.info(f"💾 STORED IMPROVED CACHED {period.upper()}: {location} | {identifier}")
-            else:
-                logger.debug(f"Failed to store {period} data in improved cache (silent failure expected)")
-        except Exception as e:
-            # Log at debug level since cache failures are non-critical
-            logger.debug(f"Improved cache storage failed ({period}, non-critical): {e}")
-    
-    return result
-
-@app.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
-async def get_record(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
-    identifier: str = Path(..., description="Date identifier"),
-    response: Response = None
-):
-    """Get temperature record data for a specific period, location, and identifier."""
-    try:
-        # Quick validation for obviously invalid locations
-        if is_location_likely_invalid(location):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
-            )
-        
-        # Check if location is known to be invalid
-        if invalid_location_cache.is_invalid_location(location):
-            invalid_info = invalid_location_cache.get_invalid_location_info(location)
-            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
-            raise HTTPException(
-                status_code=400,
-                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
-            )
-        
-        # Parse identifier to get the end date for cache headers
-        month, day, _ = parse_identifier(period, identifier)
-        current_year = datetime.now().year
-        end_date = datetime(current_year, month, day).date()
-        
-        # Create cache key for v1 endpoint with comprehensive format
-        from cache_utils import normalize_location_for_cache
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
-        
-        # Check cache first
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 RECORD: {cache_key}")
-                data = json.loads(cached_data)
-                
-                # Validate cached data
-                is_valid, error_msg = validate_location_response(data, location)
-                if not is_valid:
-                    # Mark location as invalid and return error
-                    invalid_location_cache.mark_location_invalid(location, "no_data_cached")
-                    raise HTTPException(status_code=400, detail=error_msg)
-                
-                # Add updated timestamp for cached data
-                from cache_utils import get_cache_updated_timestamp
-                updated_timestamp = await get_cache_updated_timestamp(cache_key, redis_client)
-                if updated_timestamp:
-                    data["updated"] = updated_timestamp.isoformat()
-                
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
-                return json_response
-        
-        # Get data
-        data = await get_temperature_data_v1(location, period, identifier)
-        
-        # Validate the response data
-        is_valid, error_msg = validate_location_response(data, location)
-        if not is_valid:
-            # Mark location as invalid for future requests
-            invalid_location_cache.mark_location_invalid(location, "no_data")
-            raise HTTPException(status_code=400, detail=error_msg)
-        
-        # Add updated timestamp for newly computed data
-        current_time = datetime.now(timezone.utc)
-        data["updated"] = current_time.isoformat()
-        
-        # Cache the result
-        if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION  # Use long cache for historical data
-            set_cache_value(cache_key, cache_duration, json.dumps(data), redis_client)
-        
-        # Create response with smart cache headers
-        json_response = JSONResponse(content=data)
-        set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
-        return json_response
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in v1 records endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/v1/records/{period}/{location}/{identifier}/average", response_model=SubResourceResponse)
-async def get_record_average(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
-    identifier: str = Path(..., description="Date identifier"),
-    response: Response = None
-):
-    """Get average temperature data for a specific record."""
-    try:
-        # Quick validation for obviously invalid locations
-        if is_location_likely_invalid(location):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
-            )
-        
-        # Check if location is known to be invalid
-        if invalid_location_cache.is_invalid_location(location):
-            invalid_info = invalid_location_cache.get_invalid_location_info(location)
-            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
-            raise HTTPException(
-                status_code=400,
-                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
-            )
-        
-        # Parse identifier to get the end date for cache headers
-        month, day, _ = parse_identifier(period, identifier)
-        current_year = datetime.now().year
-        end_date = datetime(current_year, month, day).date()
-        
-        # Create cache key for subresource
-        from cache_utils import normalize_location_for_cache
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:average"
-        
-        # Check cache first
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records_average", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 AVERAGE: {cache_key}")
-                data = json.loads(cached_data)
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|average|metric|v1")
-                return json_response
-        
-        # Get full record data
-        record_data = await get_temperature_data_v1(location, period, identifier)
-        
-        # Validate the response data
-        is_valid, error_msg = validate_location_response(record_data, location)
-        if not is_valid:
-            # Mark location as invalid for future requests
-            invalid_location_cache.mark_location_invalid(location, "no_data")
-            raise HTTPException(status_code=400, detail=error_msg)
-        
-        # Extract average data
-        response_data = SubResourceResponse(
-            period=record_data["period"],
-            location=record_data["location"],
-            identifier=record_data["identifier"],
-            data=record_data["average"],
-            metadata=record_data["metadata"]
-        )
-        
-        # Cache the result
-        if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION
-            set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
-        
-        # Create response with smart cache headers
-        json_response = JSONResponse(content=response_data.model_dump())
-        set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|average|metric|v1")
-        return json_response
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in v1 records average endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/v1/records/{period}/{location}/{identifier}/trend", response_model=SubResourceResponse)
-async def get_record_trend(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
-    identifier: str = Path(..., description="Date identifier"),
-    response: Response = None
-):
-    """Get temperature trend data for a specific record."""
-    try:
-        # Quick validation for obviously invalid locations
-        if is_location_likely_invalid(location):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
-            )
-        
-        # Check if location is known to be invalid
-        if invalid_location_cache.is_invalid_location(location):
-            invalid_info = invalid_location_cache.get_invalid_location_info(location)
-            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
-            raise HTTPException(
-                status_code=400,
-                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
-            )
-        
-        # Parse identifier to get the end date for cache headers
-        month, day, _ = parse_identifier(period, identifier)
-        current_year = datetime.now().year
-        end_date = datetime(current_year, month, day).date()
-        
-        # Create cache key for subresource
-        from cache_utils import normalize_location_for_cache
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:trend"
-        
-        # Check cache first
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records_trend", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 TREND: {cache_key}")
-                data = json.loads(cached_data)
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|trend|metric|v1")
-                return json_response
-        
-        # Get full record data
-        record_data = await get_temperature_data_v1(location, period, identifier)
-        
-        # Validate the response data
-        is_valid, error_msg = validate_location_response(record_data, location)
-        if not is_valid:
-            # Mark location as invalid for future requests
-            invalid_location_cache.mark_location_invalid(location, "no_data")
-            raise HTTPException(status_code=400, detail=error_msg)
-        
-        # Extract trend data
-        response_data = SubResourceResponse(
-            period=record_data["period"],
-            location=record_data["location"],
-            identifier=record_data["identifier"],
-            data=record_data["trend"],
-            metadata=record_data["metadata"]
-        )
-        
-        # Cache the result
-        if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION
-            set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
-        
-        # Create response with smart cache headers
-        json_response = JSONResponse(content=response_data.model_dump())
-        set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|trend|metric|v1")
-        return json_response
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in v1 records trend endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/v1/records/{period}/{location}/{identifier}/summary", response_model=SubResourceResponse)
-async def get_record_summary(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
-    identifier: str = Path(..., description="Date identifier"),
-    response: Response = None
-):
-    """Get temperature summary text for a specific record."""
-    try:
-        # Quick validation for obviously invalid locations
-        if is_location_likely_invalid(location):
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid location format: '{location}'. Please provide a valid location name."
-            )
-        
-        # Check if location is known to be invalid
-        if invalid_location_cache.is_invalid_location(location):
-            invalid_info = invalid_location_cache.get_invalid_location_info(location)
-            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
-            raise HTTPException(
-                status_code=400,
-                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}"
-            )
-        
-        # Parse identifier to get the end date for cache headers
-        month, day, _ = parse_identifier(period, identifier)
-        current_year = datetime.now().year
-        end_date = datetime(current_year, month, day).date()
-        
-        # Create cache key for subresource
-        from cache_utils import normalize_location_for_cache
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:summary"
-        
-        # Check cache first
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "v1_records_summary", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(f"✅ SERVING CACHED V1 SUMMARY: {cache_key}")
-                data = json.loads(cached_data)
-                # Set smart cache headers for cached data too
-                json_response = JSONResponse(content=data)
-                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|summary|metric|v1")
-                return json_response
-        
-        # Get full record data
-        record_data = await get_temperature_data_v1(location, period, identifier)
-        
-        # Validate the response data
-        is_valid, error_msg = validate_location_response(record_data, location)
-        if not is_valid:
-            # Mark location as invalid for future requests
-            invalid_location_cache.mark_location_invalid(location, "no_data")
-            raise HTTPException(status_code=400, detail=error_msg)
-        
-        # Extract summary data
-        response_data = SubResourceResponse(
-            period=record_data["period"],
-            location=record_data["location"],
-            identifier=record_data["identifier"],
-            data=record_data["summary"],
-            metadata=record_data["metadata"]
-        )
-        
-        # Cache the result
-        if CACHE_ENABLED:
-            cache_duration = LONG_CACHE_DURATION
-            set_cache_value(cache_key, cache_duration, json.dumps(response_data.model_dump()), redis_client)
-        
-        # Create response with smart cache headers
-        json_response = JSONResponse(content=response_data.model_dump())
-        set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|summary|metric|v1")
-        return json_response
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in v1 records summary endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/v1/records/{period}/{location}/{identifier}/updated", response_model=UpdatedResponse)
-async def get_record_updated(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
-    identifier: str = Path(..., description="Date identifier")
-):
-    """
-    Get the last updated timestamp for a specific record endpoint.
-    
-    Returns when the data was last updated (cached) or null if it's never been queried.
-    This endpoint is designed for web apps that want to check if they need to refetch data.
-    """
-    try:
-        # Create the same cache key that would be used by the main endpoint
-        from cache_utils import normalize_location_for_cache
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
-        
-        # Import the cache timestamp function
-        from cache_utils import get_cache_updated_timestamp
-        
-        # Get the updated timestamp from cache
-        updated_timestamp = await get_cache_updated_timestamp(cache_key, redis_client)
-        
-        # Determine if data is cached
-        is_cached = updated_timestamp is not None
-        
-        # Format timestamp as ISO string if available
-        updated_iso = updated_timestamp.isoformat() if updated_timestamp else None
-        
-        return UpdatedResponse(
-            period=period,
-            location=location,
-            identifier=identifier,
-            updated=updated_iso,
-            cached=is_cached,
-            cache_key=cache_key
-        )
-    
-    except Exception as e:
-        logger.error(f"Error in v1 records updated endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-# ============================================================================
-# REMOVED ENDPOINTS (410 Gone)
-# ============================================================================
-
-@app.get("/data/{location}/{month_day}")
-async def removed_data_endpoint():
-    """Legacy data endpoint has been removed. Use /v1/records/daily/{location}/{month_day} instead."""
-    return JSONResponse(
-        content={
-            "error": "Endpoint removed",
-            "message": "This endpoint has been removed. Please use the v1 API instead.",
-            "new_endpoint": "/v1/records/daily/{location}/{month_day}",
-            "migration_guide": "/"
-        },
-        status_code=410,
-        headers={
-            "X-Removed": "true",
-            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}",
-            "Cache-Control": "no-cache"
-        }
-    )
-
-@app.get("/average/{location}/{month_day}")
-async def removed_average_endpoint():
-    """Legacy average endpoint has been removed. Use /v1/records/daily/{location}/{month_day}/average instead."""
-    return JSONResponse(
-        content={
-            "error": "Endpoint removed",
-            "message": "This endpoint has been removed. Please use the v1 API instead.",
-            "new_endpoint": "/v1/records/daily/{location}/{month_day}/average",
-            "migration_guide": "/"
-        },
-        status_code=410,
-        headers={
-            "X-Removed": "true",
-            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/average",
-            "Cache-Control": "no-cache"
-        }
-    )
-
-@app.get("/trend/{location}/{month_day}")
-async def removed_trend_endpoint():
-    """Legacy trend endpoint has been removed. Use /v1/records/daily/{location}/{month_day}/trend instead."""
-    return JSONResponse(
-        content={
-            "error": "Endpoint removed",
-            "message": "This endpoint has been removed. Please use the v1 API instead.",
-            "new_endpoint": "/v1/records/daily/{location}/{month_day}/trend",
-            "migration_guide": "/"
-        },
-        status_code=410,
-        headers={
-            "X-Removed": "true",
-            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/trend",
-            "Cache-Control": "no-cache"
-        }
-    )
-
-@app.get("/summary/{location}/{month_day}")
-async def removed_summary_endpoint():
-    """Legacy summary endpoint has been removed. Use /v1/records/daily/{location}/{month_day}/summary instead."""
-    return JSONResponse(
-        content={
-            "error": "Endpoint removed",
-            "message": "This endpoint has been removed. Please use the v1 API instead.",
-            "new_endpoint": "/v1/records/daily/{location}/{month_day}/summary",
-            "migration_guide": "/"
-        },
-        status_code=410,
-        headers={
-            "X-Removed": "true",
-            "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/summary",
-            "Cache-Control": "no-cache"
-        }
-    )
-
-@app.get("/protected-endpoint")
-def protected_route(user=Depends(verify_firebase_token)):
-    """Protected endpoint that requires Firebase authentication."""
-    return {"message": "You are authenticated!", "user": user}
-
-# Analytics Endpoints
-@app.post("/analytics", response_model=AnalyticsResponse)
-async def submit_analytics(request: Request):
-    """Submit client analytics data for monitoring and error tracking."""
-    client_ip = get_client_ip(request)
-    
-    try:
-        # Log request details for debugging
-        content_type = request.headers.get("content-type", "")
-        content_length = request.headers.get("content-length", "unknown")
-        
-        logger.info(f"📊 ANALYTICS REQUEST: IP={client_ip} | Content-Type={content_type} | Length={content_length}")
-        
-        # Validate content type
-        if not content_type.startswith("application/json"):
-            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-TYPE: {content_type} | IP={client_ip}")
-            raise HTTPException(
-                status_code=415, 
-                detail="Content-Type must be application/json"
-            )
-        
-        # Check content length (limit to 1MB for analytics data)
-        max_content_length = 1024 * 1024  # 1MB
-        try:
-            content_length_int = int(content_length) if content_length != "unknown" else None
-            if content_length_int and content_length_int > max_content_length:
-                logger.warning(f"⚠️  ANALYTICS REQUEST TOO LARGE: {content_length_int} bytes | IP={client_ip}")
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Request body too large. Maximum size is {max_content_length} bytes"
-                )
-        except ValueError:
-            # If we can't parse content-length, continue but log it
-            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-LENGTH: {content_length} | IP={client_ip}")
-        
-        # Read and parse request body
-        try:
-            body = await request.body()
-            if not body:
-                logger.warning(f"⚠️  ANALYTICS EMPTY BODY: IP={client_ip}")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Request body cannot be empty"
-                )
-            
-            # Check actual body size
-            if len(body) > max_content_length:
-                logger.warning(f"⚠️  ANALYTICS BODY TOO LARGE: {len(body)} bytes | IP={client_ip}")
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Request body too large. Maximum size is {max_content_length} bytes"
-                )
-            
-            # Log request body for debugging (truncated for security)
-            body_str = body.decode('utf-8')
-            body_preview = body_str[:500] + "..." if len(body_str) > 500 else body_str
-            logger.info(f"📊 ANALYTICS BODY PREVIEW: {body_preview}")
-            
-            # Parse JSON
-            try:
-                json_data = json.loads(body_str)
-            except json.JSONDecodeError as e:
-                logger.error(f"❌ ANALYTICS JSON PARSE ERROR: {e} | IP={client_ip} | Body: {body_preview}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid JSON format: {str(e)}"
-                )
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"❌ ANALYTICS BODY READ ERROR: {e} | IP={client_ip}")
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to read request body"
-            )
-        
-        # Validate data using Pydantic model
-        try:
-            analytics_data = AnalyticsData(**json_data)
-        except Exception as e:
-            logger.error(f"❌ ANALYTICS VALIDATION ERROR: {e} | IP={client_ip} | Data: {json_data}")
-            
-            # Provide detailed validation error information
-            if hasattr(e, 'errors'):
-                error_details = []
-                for error in e.errors():
-                    field = " -> ".join(str(loc) for loc in error['loc'])
-                    error_details.append(f"{field}: {error['msg']}")
-                error_message = f"Validation failed: {'; '.join(error_details)}"
-            else:
-                error_message = f"Validation failed: {str(e)}"
-            
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "Validation Error",
-                    "message": error_message,
-                    "details": str(e) if hasattr(e, 'errors') else None
-                }
-            )
-        
-        # Store analytics data
-        try:
-            analytics_id = analytics_storage.store_analytics(analytics_data, client_ip)
-            logger.info(f"📊 ANALYTICS STORED: {analytics_id} | IP={client_ip}")
-        except Exception as e:
-            logger.error(f"❌ ANALYTICS STORAGE ERROR: {e} | IP={client_ip}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to store analytics data"
-            )
-        
-        return AnalyticsResponse(
-            status="success",
-            message="Analytics data submitted successfully",
-            analytics_id=analytics_id,
-            timestamp=datetime.now().isoformat()
-        )
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions (they already have proper status codes)
-        raise
-    except Exception as e:
-        logger.error(f"❌ ANALYTICS UNEXPECTED ERROR: {e} | IP={client_ip}")
-        raise HTTPException(
-            status_code=500, 
-            detail="Internal server error while processing analytics data"
-        )
-
-@app.get("/analytics/summary")
-async def get_analytics_summary():
-    """Get analytics summary statistics."""
-    try:
-        summary = analytics_storage.get_analytics_summary()
-        return {
-            "status": "success",
-            "data": summary,
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Error getting analytics summary: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve analytics summary")
-
-@app.get("/analytics/recent")
-async def get_recent_analytics(limit: int = Query(100, ge=1, le=1000)):
-    """Get recent analytics records."""
-    try:
-        analytics_records = analytics_storage.get_recent_analytics(limit)
-        return {
-            "status": "success",
-            "data": analytics_records,
-            "count": len(analytics_records),
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Error getting recent analytics: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve recent analytics")
-
-@app.get("/analytics/session/{session_id}")
-async def get_analytics_by_session(session_id: str):
-    """Get analytics records for a specific session."""
-    try:
-        session_analytics = analytics_storage.get_analytics_by_session(session_id)
-        return {
-            "status": "success",
-            "data": session_analytics,
-            "count": len(session_analytics),
-            "session_id": session_id,
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Error getting session analytics: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve session analytics")
-
-@app.get("/debug/jobs")
-async def debug_jobs_endpoint():
-    """Debug endpoint to check job queue and job data in Redis."""
-    try:
-        debug_info = {
-            "queue_length": 0,
-            "jobs_in_queue": [],
-            "job_data_status": {},
-            "redis_connection": "unknown",
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Test Redis connection
-        try:
-            redis_client.ping()
-            debug_info["redis_connection"] = "OK"
-        except Exception as e:
-            debug_info["redis_connection"] = f"FAILED: {e}"
-            return debug_info
-        
-        # Check job queue
-        queue_key = "job_queue"
-        queue_length = redis_client.llen(queue_key)
-        debug_info["queue_length"] = queue_length
-        
-        if queue_length > 0:
-            jobs_in_queue = []
-            for i in range(min(queue_length, 10)):
-                job_id = redis_client.lindex(queue_key, i)
-                if job_id:
-                    # Convert bytes to string if needed
-                    if isinstance(job_id, bytes):
-                        job_id = job_id.decode('utf-8')
-                    
-                    jobs_in_queue.append(job_id)
-                    
-                    # Check if job data exists
-                    job_key = f"job:{job_id}"
-                    job_data = redis_client.get(job_key)
-                    
-                    if job_data:
-                        try:
-                            job = json.loads(job_data)
-                            status = job.get("status", "unknown")
-                            created = job.get("created_at", "unknown")
-                            debug_info["job_data_status"][job_id] = {
-                                "exists": True,
-                                "status": status,
-                                "created_at": created
-                            }
-                        except:
-                            debug_info["job_data_status"][job_id] = {
-                                "exists": True,
-                                "error": "invalid JSON"
-                            }
-                    else:
-                        debug_info["job_data_status"][job_id] = {
-                            "exists": False
-                        }
-            
-            debug_info["jobs_in_queue"] = jobs_in_queue
-        
-        return debug_info
-        
-    except Exception as e:
-        logger.error(f"Error in debug jobs endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"Debug failed: {str(e)}")
-
-# Async Job Endpoints for Heavy Operations
-@app.post("/v1/records/{period}/{location}/{identifier}/async")
-async def create_record_job(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name"),
-    identifier: str = Path(..., description="Date identifier"),
-    response: Response = None
-):
-    """Create an async job to compute heavy record data."""
-    try:
-        logger.info(f"Creating async job: period={period}, location={location}, identifier={identifier}")
-        job_manager = get_job_manager()
-        logger.info(f"Job manager retrieved successfully")
-        
-        # Create job
-        job_id = job_manager.create_job("record_computation", {
-            "period": period,
-            "location": location,
-            "identifier": identifier
-        })
-        logger.info(f"Job created successfully: {job_id}")
-        
-        # Return 202 Accepted with job info
-        response.status_code = 202
-        response.headers["Retry-After"] = "3"
-        
-        return {
-            "job_id": job_id,
-            "status": JobStatus.PENDING,
-            "message": "Job created successfully",
-            "retry_after": 3,
-            "status_url": f"/v1/jobs/{job_id}"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error creating record job: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
-
-@app.get("/v1/jobs/{job_id}")
-async def get_job_status(job_id: str):
-    """Get the status of an async job."""
-    try:
-        job_manager = get_job_manager()
-        job_status = job_manager.get_job_status(job_id)
-        
-        if job_status is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        
-        return job_status
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error retrieving job status: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve job status")
-
-@app.post("/v1/records/rolling-bundle/{location}/{anchor}/async")
-async def create_rolling_bundle_job(
-    location: str = Path(..., description="Location name"),
-    anchor: str = Path(..., description="Anchor date"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius"),
-    month_mode: Literal["calendar", "rolling1m", "rolling30d"] = Query("rolling1m"),
-    days_back: int = Query(7, ge=0, le=10),
-    include: str = Query(None),
-    exclude: str = Query(None),
-    response: Response = None
-):
-    """Create an async job to compute rolling bundle data."""
-    try:
-        job_manager = get_job_manager()
-        
-        # Create job
-        job_id = job_manager.create_job("rolling_bundle", {
-            "location": location,
-            "anchor": anchor,
-            "unit_group": unit_group,
-            "month_mode": month_mode,
-            "days_back": days_back,
-            "include": include,
-            "exclude": exclude
-        })
-        
-        # Return 202 Accepted with job info
-        response.status_code = 202
-        response.headers["Retry-After"] = "5"
-        
-        return {
-            "job_id": job_id,
-            "status": JobStatus.PENDING,
-            "message": "Rolling bundle job created successfully",
-            "retry_after": 5,
-            "status_url": f"/v1/jobs/{job_id}"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error creating rolling bundle job: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create job")
-
-@app.get("/v1/jobs/diagnostics/worker-status")
-async def get_worker_diagnostics():
-    """Get diagnostic information about the background worker and job queue."""
-    try:
-        # Check worker heartbeat
-        heartbeat = redis_client.get("worker:heartbeat")
-        worker_alive = heartbeat is not None
-        
-        # Get queue status
-        queue_length = redis_client.llen("job_queue")
-        
-        # Get jobs from the queue (without KEYS command)
-        # We'll examine jobs in the queue since we can't scan all keys
-        jobs_by_status = {
-            "pending": 0,
-            "processing": 0,
-            "ready": 0,
-            "error": 0
-        }
-        
-        stuck_jobs = []
-        jobs_examined = []
-        
-        # Get all job IDs from the queue
-        if queue_length > 0:
-            # Get up to 100 jobs from the queue
-            for i in range(min(queue_length, 100)):
-                job_id = redis_client.lindex("job_queue", i)
-                if job_id:
-                    if isinstance(job_id, bytes):
-                        job_id = job_id.decode('utf-8')
-                    jobs_examined.append(job_id)
-        
-        # Examine each job in the queue
-        for job_id in jobs_examined:
-            try:
-                job_key = f"job:{job_id}"
-                job_data = redis_client.get(job_key)
-                if job_data:
-                    if isinstance(job_data, bytes):
-                        job_data = job_data.decode('utf-8')
-                    job = json.loads(job_data)
-                    status = job.get("status", "unknown")
-                    
-                    if status in jobs_by_status:
-                        jobs_by_status[status] += 1
-                    
-                    # Check for stuck jobs (older than 5 minutes in pending/processing)
-                    created = job.get("created_at")
-                    if created and status in ["pending", "processing"]:
-                        try:
-                            from datetime import datetime, timezone
-                            created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
-                            age = (datetime.now(timezone.utc) - created_dt).total_seconds()
-                            if age > 300:  # 5 minutes
-                                stuck_jobs.append({
-                                    "job_id": job.get("id"),
-                                    "status": status,
-                                    "age_seconds": int(age),
-                                    "type": job.get("type"),
-                                    "params": job.get("params", {})
-                                })
-                        except:
-                            pass
-            except Exception as job_error:
-                logger.warning(f"Error examining job {job_id}: {job_error}")
-        
-        # Parse heartbeat time if available
-        heartbeat_age = None
-        if heartbeat:
-            try:
-                if isinstance(heartbeat, bytes):
-                    heartbeat = heartbeat.decode('utf-8')
-                from datetime import datetime, timezone
-                heartbeat_dt = datetime.fromisoformat(heartbeat.replace('Z', '+00:00'))
-                heartbeat_age = (datetime.now(timezone.utc) - heartbeat_dt).total_seconds()
-            except:
-                pass
-        
-        return {
-            "worker": {
-                "alive": worker_alive,
-                "heartbeat": heartbeat,
-                "heartbeat_age_seconds": heartbeat_age,
-                "status": "healthy" if worker_alive and (heartbeat_age is None or heartbeat_age < 60) else "unhealthy"
-            },
-            "queue": {
-                "length": queue_length,
-                "jobs_examined": len(jobs_examined)
-            },
-            "jobs": {
-                "by_status": jobs_by_status,
-                "stuck_count": len(stuck_jobs),
-                "stuck_jobs": stuck_jobs[:10]  # Show first 10 stuck jobs
-            },
-            "recommendations": get_diagnostics_recommendations(
-                worker_alive, 
-                heartbeat_age, 
-                queue_length, 
-                jobs_by_status,
-                len(stuck_jobs)
-            ),
-            "note": "Only examining jobs in the queue (Redis KEYS command not available)"
-        }
-    except Exception as e:
-        logger.error(f"Error getting worker diagnostics: {e}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Failed to get diagnostics: {str(e)}")
-
-def get_diagnostics_recommendations(worker_alive, heartbeat_age, queue_length, jobs_by_status, stuck_count):
-    """Generate diagnostic recommendations based on worker and job status."""
-    recommendations = []
-    
-    if not worker_alive:
-        recommendations.append({
-            "severity": "critical",
-            "issue": "Background worker is not running",
-            "actions": [
-                "Check server logs for worker startup errors",
-                "Restart the API server",
-                "Verify Redis connection is available"
-            ]
-        })
-    elif heartbeat_age and heartbeat_age > 60:
-        recommendations.append({
-            "severity": "warning",
-            "issue": f"Worker heartbeat is stale ({int(heartbeat_age)}s old)",
-            "actions": [
-                "Worker may be stuck or crashed",
-                "Check server logs for errors",
-                "Consider restarting the API server"
-            ]
-        })
-    
-    if jobs_by_status.get("pending", 0) > 0 and worker_alive:
-        recommendations.append({
-            "severity": "info",
-            "issue": f"{jobs_by_status['pending']} jobs in pending state",
-            "actions": [
-                "Jobs are waiting to be processed",
-                "Worker should process these shortly",
-                "If they remain pending for >1 minute, check worker logs"
-            ]
-        })
-    
-    if stuck_count > 0:
-        recommendations.append({
-            "severity": "warning",
-            "issue": f"{stuck_count} jobs stuck for >5 minutes",
-            "actions": [
-                "Check server logs for processing errors",
-                "These jobs may need to be manually cleared",
-                "Use diagnose_jobs.py --clear-stuck to clear them"
-            ]
-        })
-    
-    if jobs_by_status.get("error", 0) > 0:
-        recommendations.append({
-            "severity": "warning",
-            "issue": f"{jobs_by_status['error']} jobs failed with errors",
-            "actions": [
-                "Check individual job status for error details",
-                "Common causes: API errors, timeouts, invalid parameters"
-            ]
-        })
-    
-    if not recommendations:
-        recommendations.append({
-            "severity": "success",
-            "issue": "System is healthy",
-            "actions": ["No action needed"]
-        })
-    
-    return recommendations
 
 # For local testing
 if __name__ == "__main__":

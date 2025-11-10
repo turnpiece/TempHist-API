@@ -15,22 +15,57 @@ import time
 import logging
 import asyncio
 import os
-from typing import Dict, Any, Optional, Tuple, Union, List
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime, timedelta, timezone, date as dt_date
-from urllib.parse import parse_qs, urlencode
 
 import redis
 import aiohttp
 from fastapi import Request, Response
-from pydantic import BaseModel
+
+# Try to import zoneinfo (Python 3.9+) or backports.zoneinfo (Python 3.8)
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    try:
+        from backports.zoneinfo import ZoneInfo
+    except ImportError:
+        ZoneInfo = None  # Will fall back to UTC if not available
 
 logger = logging.getLogger(__name__)
 
-# Cache configuration
-CACHE_TTL_DEFAULT = 86400  # 24 hours
-CACHE_TTL_SHORT = 3600    # 1 hour  
-CACHE_TTL_LONG = 604800   # 7 days
-CACHE_TTL_JOB = 7200      # 2 hours for job results
+# Cache for preapproved locations timezone data (loaded on first use)
+_preapproved_locations_cache: Optional[List[Dict[str, Any]]] = None
+
+# Cache configuration with validation
+def validate_ttl(ttl: int, name: str, default: int) -> int:
+    """Validate cache TTL value with min/max bounds."""
+    MIN_TTL = 60  # 1 minute minimum
+    MAX_TTL = 7776000  # 90 days maximum (allows for stable historical data caching)
+    
+    if not isinstance(ttl, int):
+        logger.warning(f"{name} TTL is not integer, using default {default}s")
+        return default
+    if ttl < MIN_TTL:
+        logger.warning(f"{name} TTL {ttl}s too low (min {MIN_TTL}s), using {MIN_TTL}s")
+        return MIN_TTL
+    if ttl > MAX_TTL:
+        logger.warning(f"{name} TTL {ttl}s too high (max {MAX_TTL}s), using {MAX_TTL}s")
+        return MAX_TTL
+    return ttl
+
+# Validate TTL values (MED-012)
+CACHE_TTL_DEFAULT = validate_ttl(int(os.getenv("CACHE_TTL_DEFAULT", "86400")), "CACHE_TTL_DEFAULT", 86400)  # 24 hours
+CACHE_TTL_SHORT = validate_ttl(int(os.getenv("CACHE_TTL_SHORT", "3600")), "CACHE_TTL_SHORT", 3600)  # 1 hour  
+CACHE_TTL_LONG = validate_ttl(int(os.getenv("CACHE_TTL_LONG", "604800")), "CACHE_TTL_LONG", 604800)  # 7 days
+CACHE_TTL_JOB = validate_ttl(int(os.getenv("CACHE_TTL_JOB", "7200")), "CACHE_TTL_JOB", 7200)  # 2 hours for job results
+
+# Year-based caching TTL constants
+TTL_STABLE = validate_ttl(int(os.getenv("TTL_STABLE", "7776000")), "TTL_STABLE", 7776000)  # 90 days for past years
+TTL_CURRENT_DAILY = validate_ttl(int(os.getenv("TTL_CURRENT_DAILY", "7200")), "TTL_CURRENT_DAILY", 7200)  # 2 hours for current year daily
+TTL_CURRENT_WEEKLY = validate_ttl(int(os.getenv("TTL_CURRENT_WEEKLY", "14400")), "TTL_CURRENT_WEEKLY", 14400)  # 4 hours for current year weekly
+TTL_CURRENT_MONTHLY = validate_ttl(int(os.getenv("TTL_CURRENT_MONTHLY", "43200")), "TTL_CURRENT_MONTHLY", 43200)  # 12 hours for current year monthly
+TTL_CURRENT_YEARLY = validate_ttl(int(os.getenv("TTL_CURRENT_YEARLY", "86400")), "TTL_CURRENT_YEARLY", 86400)  # 24 hours for current year yearly
+TTL_BUNDLE = validate_ttl(int(os.getenv("TTL_BUNDLE", "900")), "TTL_BUNDLE", 900)  # 15 minutes for assembled bundle
 
 # Coordinate precision for cache key normalization
 COORD_PRECISION = 4  # 4 decimal places (~11m precision)
@@ -38,6 +73,8 @@ COORD_PRECISION = 4  # 4 decimal places (~11m precision)
 # Cache header configuration
 CACHE_CONTROL_PUBLIC = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
 CACHE_CONTROL_PRIVATE = "private, max-age=300, stale-while-revalidate=3600"
+# Shorter cache for today's daily data (uses forecast which may change)
+CACHE_CONTROL_DAILY_TODAY = "public, max-age=1800, s-maxage=3600, stale-while-revalidate=7200"
 
 # Cache Warming Configuration
 CACHE_WARMING_ENABLED = os.getenv("CACHE_WARMING_ENABLED", "true").lower() == "true"
@@ -60,16 +97,9 @@ CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
 
-# Default popular locations for cache warming (from environment variable)
-# These should be simple location names that will be expanded to multiple formats
-DEFAULT_POPULAR_LOCATIONS = os.getenv("CACHE_WARMING_POPULAR_LOCATIONS", "london,new_york,paris,tokyo,sydney,berlin,madrid,rome,amsterdam,dublin").split(",")
-DEFAULT_POPULAR_LOCATIONS = [loc.strip().lower() for loc in DEFAULT_POPULAR_LOCATIONS if loc.strip()]
-
-
 # Environment variables for cache warming
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-TEST_TOKEN = os.getenv("TEST_TOKEN")
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
 
 class LocationUsageTracker:
@@ -267,10 +297,11 @@ class ETagGenerator:
     
     @staticmethod
     def generate_etag(data: Any) -> str:
-        """Generate ETag from response data."""
+        """Generate ETag from response data using SHA256 (128-bit security)."""
         # Ensure deterministic JSON serialization
         json_str = json.dumps(data, sort_keys=True, separators=(',', ':'))
-        return f'"{hashlib.md5(json_str.encode()).hexdigest()}"'
+        # Use SHA256 with 32 characters (128-bit security) instead of broken MD5
+        return f'"{hashlib.sha256(json_str.encode()).hexdigest()[:32]}"'
     
     @staticmethod
     def parse_etag(etag: str) -> Optional[str]:
@@ -343,17 +374,17 @@ class SingleFlightLock:
             # Use SET with NX and EX for atomic lock acquisition
             result = self.redis.set(lock_key, "1", nx=True, ex=self.lock_ttl)
             return result is not None
-        except Exception as e:
-            logger.warning(f"Failed to acquire lock for {key}: {e}")
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+            logger.warning(f"Redis error acquiring lock for {key}: {e}")
             return False
-    
+
     def release(self, key: str):
         """Release a lock for the given key."""
         lock_key = f"{self.lock_prefix}{key}"
         try:
             self.redis.delete(lock_key)
-        except Exception as e:
-            logger.warning(f"Failed to release lock for {key}: {e}")
+        except (redis.RedisError, redis.ConnectionError) as e:
+            logger.warning(f"Redis error releasing lock for {key}: {e}")
 
 class EnhancedCache:
     """Enhanced Redis cache with single-flight protection and metrics."""
@@ -404,10 +435,14 @@ class EnhancedCache:
             else:
                 self.misses += 1
                 return None
-                
-        except Exception as e:
+
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
             self.errors += 1
-            logger.error(f"Cache get error for {key}: {e}")
+            logger.error(f"Redis error getting cache key {key}: {redis_error}")
+            return None
+        except (json.JSONDecodeError, ValueError) as decode_error:
+            self.errors += 1
+            logger.error(f"Decode error for cache key {key}: {decode_error}")
             return None
     
     async def get_updated_timestamp(self, key: str) -> Optional[datetime]:
@@ -419,9 +454,12 @@ class EnhancedCache:
             if cached_timestamp:
                 return datetime.fromisoformat(cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp)
             return None
-                
-        except Exception as e:
-            logger.error(f"Error getting timestamp for {key}: {e}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.error(f"Redis error getting timestamp for {key}: {redis_error}")
+            return None
+        except (ValueError, TypeError) as parse_error:
+            logger.error(f"Date parsing error for timestamp {key}: {parse_error}")
             return None
     
     async def set(
@@ -454,12 +492,16 @@ class EnhancedCache:
                 "size": len(json_data)
             })
             self.redis.expire(cache_key, ttl)
-            
+
             return etag
-            
-        except Exception as e:
+
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
             self.errors += 1
-            logger.error(f"Cache set error for {key}: {e}")
+            logger.error(f"Redis error setting cache key {key}: {redis_error}")
+            raise
+        except (json.JSONEncodeError, TypeError) as encode_error:
+            self.errors += 1
+            logger.error(f"JSON encoding error for cache key {key}: {encode_error}")
             raise
     
     async def get_or_compute(
@@ -544,31 +586,36 @@ class CacheWarmer:
     
     def get_locations_to_warm(self) -> List[str]:
         """Get list of locations to warm, prioritizing preapproved locations."""
-        locations = set()
+        locations: List[str] = []
+        seen_normalized = set()
+
+        def add_location(candidate: str) -> None:
+            if not candidate:
+                return
+            normalized = normalize_location_for_cache(candidate)
+            if normalized in seen_normalized:
+                return
+            seen_normalized.add(normalized)
+            locations.append(candidate)
         
         # Priority 1: Preapproved locations in web app format
         preapproved_locations = self.get_preapproved_locations()
         if preapproved_locations:
-            locations.update(preapproved_locations)
+            for loc in preapproved_locations:
+                add_location(loc)
             if DEBUG:
                 logger.info(f"🔥 CACHE WARMING: Added {len(preapproved_locations)} preapproved locations")
         
-        # Priority 2: Environment variable locations (simple format)
-        if DEFAULT_POPULAR_LOCATIONS:
-            locations.update(DEFAULT_POPULAR_LOCATIONS)
-            if DEBUG:
-                logger.info(f"🔥 CACHE WARMING: Added {len(DEFAULT_POPULAR_LOCATIONS)} environment variable locations")
-        
-        # Priority 3: Recently popular locations from usage tracking
+        # Priority 2: Recently popular locations from usage tracking
         if self.usage_tracker and USAGE_TRACKING_ENABLED:
             recent_popular = self.usage_tracker.get_popular_locations(limit=10, hours=24)
             for location, count in recent_popular:
-                locations.add(location)
+                add_location(location)
             if DEBUG and recent_popular:
                 logger.info(f"🔥 CACHE WARMING: Added {len(recent_popular)} usage-based locations")
         
         # Limit to max locations
-        final_locations = list(locations)[:CACHE_WARMING_MAX_LOCATIONS]
+        final_locations = locations[:CACHE_WARMING_MAX_LOCATIONS]
         
         if DEBUG:
             logger.info(f"🔥 CACHE WARMING: Total locations to warm: {len(final_locations)}")
@@ -598,20 +645,33 @@ class CacheWarmer:
             
             # Extract locations in the format: "Name, Admin1, Country Name"
             locations = []
+            seen = set()
             for item in data:
                 if 'name' in item and 'admin1' in item and 'country_name' in item:
                     full_name = f"{item['name']}, {item['admin1']}, {item['country_name']}"
-                    locations.append(full_name.lower())
+                    normalized = normalize_location_for_cache(full_name)
+                    if normalized in seen:
+                        continue
+                    seen.add(normalized)
+                    locations.append(full_name)
             
             if DEBUG:
                 logger.info(f"📋 PREAPPROVED LOCATIONS: Loaded {len(locations)} locations in web app format")
                 logger.info(f"📋 SAMPLE LOCATIONS: {locations[:3]}...")
             
             return locations
-            
-        except Exception as e:
+
+        except FileNotFoundError as e:
             if DEBUG:
-                logger.warning(f"⚠️  Could not load preapproved locations: {e}")
+                logger.warning(f"⚠️  Preapproved locations file not found: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            if DEBUG:
+                logger.warning(f"⚠️  Invalid JSON in preapproved locations: {e}")
+            return []
+        except (IOError, PermissionError) as e:
+            if DEBUG:
+                logger.warning(f"⚠️  Cannot read preapproved locations file: {e}")
             return []
     
     def get_dates_to_warm(self) -> List[str]:
@@ -667,7 +727,7 @@ class CacheWarmer:
             # Warm forecast data
             try:
                 forecast_url = f"{BASE_URL}/forecast/{location}"
-                auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                auth_token = API_ACCESS_TOKEN
                 if not auth_token:
                     results["errors"].append("forecast: No authentication token available")
                 else:
@@ -677,8 +737,10 @@ class CacheWarmer:
                                 results["warmed_endpoints"].append("forecast")
                             else:
                                 results["errors"].append(f"forecast: {resp.status}")
-            except Exception as e:
-                results["errors"].append(f"forecast: {str(e)}")
+            except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                results["errors"].append(f"forecast: HTTP error - {str(http_error)}")
+            except asyncio.TimeoutError:
+                results["errors"].append(f"forecast: Request timeout")
             
             # Warm legacy endpoints (forecast, weather) - daily data now handled by v1 endpoints below
             month_days = self.get_month_days_to_warm()
@@ -689,7 +751,7 @@ class CacheWarmer:
                     # Main record endpoint
                     try:
                         v1_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}"
-                        auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                        auth_token = API_ACCESS_TOKEN
                         if not auth_token:
                             results["errors"].append(f"v1/records/{period}/{month_day}: No authentication token available")
                         else:
@@ -699,14 +761,16 @@ class CacheWarmer:
                                         results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}")
                                     else:
                                         results["errors"].append(f"v1/records/{period}/{month_day}: {resp.status}")
-                    except Exception as e:
-                        results["errors"].append(f"v1/records/{period}/{month_day}: {str(e)}")
+                    except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                        results["errors"].append(f"v1/records/{period}/{month_day}: HTTP error - {str(http_error)}")
+                    except asyncio.TimeoutError:
+                        results["errors"].append(f"v1/records/{period}/{month_day}: Request timeout")
                     
                     # Subresource endpoints (average, trend, summary)
                     for subresource in ["average", "trend", "summary"]:
                         try:
                             sub_url = f"{BASE_URL}/v1/records/{period}/{location}/{month_day}/{subresource}"
-                            auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                            auth_token = API_ACCESS_TOKEN
                             if not auth_token:
                                 results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: No authentication token available")
                             else:
@@ -716,15 +780,17 @@ class CacheWarmer:
                                             results["warmed_endpoints"].append(f"v1/records/{period}/{month_day}/{subresource}")
                                         else:
                                             results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {resp.status}")
-                        except Exception as e:
-                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: {str(e)}")
+                        except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: HTTP error - {str(http_error)}")
+                        except asyncio.TimeoutError:
+                            results["errors"].append(f"v1/records/{period}/{month_day}/{subresource}: Request timeout")
             
             # Warm individual weather data for recent dates
             dates = self.get_dates_to_warm()
             for date in dates[:5]:  # Limit to last 5 dates to avoid too many requests
                 try:
                     weather_url = f"{BASE_URL}/weather/{location}/{date}"
-                    auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                    auth_token = API_ACCESS_TOKEN
                     if not auth_token:
                         results["errors"].append(f"weather/{date}: No authentication token available")
                     else:
@@ -734,11 +800,16 @@ class CacheWarmer:
                                     results["warmed_endpoints"].append(f"weather/{date}")
                                 else:
                                     results["errors"].append(f"weather/{date}: {resp.status}")
-                except Exception as e:
-                    results["errors"].append(f"weather/{date}: {str(e)}")
-        
+                except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+                    results["errors"].append(f"weather/{date}: HTTP error - {str(http_error)}")
+                except asyncio.TimeoutError:
+                    results["errors"].append(f"weather/{date}: Request timeout")
+
+        except (aiohttp.ClientError, aiohttp.ClientConnectorError) as http_error:
+            results["errors"].append(f"location_warming: HTTP error - {str(http_error)}")
         except Exception as e:
-            results["errors"].append(f"location_warming: {str(e)}")
+            results["errors"].append(f"location_warming: Unexpected error - {str(e)}")
+            logger.error(f"Unexpected error warming location {location}: {e}", exc_info=True)
         
         return results
     
@@ -753,7 +824,7 @@ class CacheWarmer:
         # Check if Redis is available before attempting to warm cache
         try:
             self.redis_client.ping()
-        except Exception as e:
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
             logger.warning(f"⚠️ Cache warming skipped - Redis not available: {e}")
             return {"status": "skipped", "message": "Redis not available", "error": str(e)}
         
@@ -769,7 +840,7 @@ class CacheWarmer:
             # Warm preapproved locations endpoint once
             try:
                 preapproved_url = f"{BASE_URL}/v1/locations/preapproved"
-                auth_token = API_ACCESS_TOKEN or TEST_TOKEN
+                auth_token = API_ACCESS_TOKEN
                 if auth_token:
                     # Set a reasonable timeout for the request
                     timeout = aiohttp.ClientTimeout(total=10)
@@ -1159,22 +1230,50 @@ class CacheInvalidator:
                 "error": str(e)
             }
     
-    def invalidate_by_pattern(self, pattern: str, dry_run: bool = False) -> Dict:
-        """Invalidate cache keys matching a pattern."""
+    def invalidate_by_pattern(self, pattern: str, dry_run: bool = False, max_keys: int = 10000) -> Dict:
+        """Invalidate cache keys matching a pattern (MED-010: Add DoS protection)."""
         if not CACHE_INVALIDATION_ENABLED:
             return {"status": "disabled", "message": "Cache invalidation is not enabled"}
         
+        # MED-010: Limit pattern matching to prevent DoS
+        if max_keys > 100000:
+            logger.warning(f"Cache invalidation max_keys ({max_keys}) is very high, capping at 100000")
+            max_keys = 100000
+        
         try:
-            # Try to find keys matching pattern (may fail on managed Redis)
+            # Use SCAN instead of KEYS to avoid blocking Redis (O(N) blocking operation)
+            matching_keys = []
+            cursor = 0
+            scan_max_keys = max_keys  # Use parameter limit for safety
+            
             try:
-                matching_keys = self.redis_client.keys(pattern)
+                while cursor != 0 or len(matching_keys) == 0:  # Start iteration
+                    cursor, keys = self.redis_client.scan(
+                        cursor,
+                        match=pattern,
+                        count=100  # Process in batches
+                    )
+                    matching_keys.extend(keys)
+                    
+                    # Safety limit to prevent infinite loops or excessive memory usage (MED-010)
+                    if len(matching_keys) > scan_max_keys:
+                        logger.warning(f"Pattern matches >{scan_max_keys} keys, stopping scan at {len(matching_keys)} keys")
+                        return {
+                            "status": "error",
+                            "pattern": pattern,
+                            "error": f"Pattern matches too many keys (>{scan_max_keys}). Use a more specific pattern or increase max_keys parameter."
+                        }
+                    
+                    # Prevent infinite loop (shouldn't happen, but safety check)
+                    if cursor == 0:
+                        break
             except Exception as e:
-                # Handle Redis permissions error (e.g., KEYS command not allowed)
-                if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                # Handle Redis permissions error or other issues
+                if "permissions" in str(e).lower() or "scan" in str(e).lower():
                     return {
                         "status": "error",
                         "pattern": pattern,
-                        "error": "Redis KEYS command not permitted on this instance",
+                        "error": "Redis SCAN command not permitted on this instance",
                         "message": "Cache invalidation by pattern is not available on managed Redis services"
                     }
                 else:
@@ -1300,15 +1399,33 @@ class CacheInvalidator:
             return {"status": "disabled", "message": "Cache invalidation is not enabled"}
         
         try:
-            # Try to get all keys (may fail on managed Redis)
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            all_keys = []
+            cursor = 0
+            max_keys = 100000  # Safety limit
+            
             try:
-                all_keys = self.redis_client.keys("*")
+                while cursor != 0 or len(all_keys) == 0:  # Start iteration
+                    cursor, keys = self.redis_client.scan(
+                        cursor,
+                        match="*",
+                        count=100  # Process in batches
+                    )
+                    all_keys.extend(keys)
+                    
+                    # Safety limit
+                    if len(all_keys) > max_keys:
+                        logger.warning(f"Found >{max_keys} keys, stopping scan at {len(all_keys)} keys")
+                        break
+                    
+                    if cursor == 0:
+                        break
             except Exception as e:
-                # Handle Redis permissions error (e.g., KEYS command not allowed)
-                if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                # Handle Redis permissions error
+                if "permissions" in str(e).lower() or "scan" in str(e).lower():
                     return {
                         "status": "error",
-                        "error": "Redis KEYS command not permitted on this instance",
+                        "error": "Redis SCAN command not permitted on this instance",
                         "message": "Expired key invalidation is not available on managed Redis services"
                     }
                 else:
@@ -1374,11 +1491,30 @@ class CacheInvalidator:
             pattern_counts = {}
             for name, pattern in patterns.items():
                 try:
-                    count = len(self.redis_client.keys(pattern))
-                    pattern_counts[name] = count
-                except Exception:
-                    # Handle Redis permissions error (KEYS command not allowed)
-                    pattern_counts[name] = "N/A (permissions required)"
+                    # Use SCAN instead of KEYS to avoid blocking
+                    matching_keys = []
+                    cursor = 0
+                    max_keys = 10000  # Limit for stats gathering
+                    
+                    while cursor != 0 or len(matching_keys) == 0:
+                        cursor, keys = self.redis_client.scan(
+                            cursor,
+                            match=pattern,
+                            count=100
+                        )
+                        matching_keys.extend(keys)
+                        if len(matching_keys) > max_keys:
+                            break
+                        if cursor == 0:
+                            break
+                    
+                    pattern_counts[name] = len(matching_keys)
+                except Exception as e:
+                    # Handle Redis permissions error
+                    if "permissions" in str(e).lower() or "scan" in str(e).lower():
+                        pattern_counts[name] = "N/A (permissions required)"
+                    else:
+                        pattern_counts[name] = f"N/A (error: {str(e)[:50]})"
             
             return {
                 "redis_info": {
@@ -1404,19 +1540,34 @@ class CacheInvalidator:
         
         try:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
-                # Try to count keys without deleting (may fail on managed Redis)
+                # Use SCAN to count keys without deleting (may fail on managed Redis)
                 try:
-                    all_keys = self.redis_client.keys("*")
+                    all_keys = []
+                    cursor = 0
+                    max_keys = 100000  # Safety limit
+                    
+                    while cursor != 0 or len(all_keys) == 0:
+                        cursor, keys = self.redis_client.scan(
+                            cursor,
+                            match="*",
+                            count=100
+                        )
+                        all_keys.extend(keys)
+                        if len(all_keys) > max_keys:
+                            break
+                        if cursor == 0:
+                            break
+                    
                     return {
                         "status": "dry_run",
                         "total_keys": len(all_keys),
                         "action": "would_delete_all"
                     }
                 except Exception as e:
-                    if "permissions" in str(e).lower() or "keys" in str(e).lower():
+                    if "permissions" in str(e).lower() or "scan" in str(e).lower():
                         return {
                             "status": "error",
-                            "error": "Redis KEYS command not permitted on this instance",
+                            "error": "Redis SCAN command not permitted on this instance",
                             "message": "Cannot count keys on managed Redis service for dry run"
                         }
                     else:
@@ -1454,7 +1605,7 @@ class JobManager:
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
         """Create a new job and return job ID."""
         try:
-            job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.md5(str(params).encode()).hexdigest()[:8]}"
+            job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.sha256(str(params).encode()).hexdigest()[:8]}"
             job_key = f"{self.job_prefix}{job_id}"
             
             job_data = {
@@ -1504,7 +1655,7 @@ class JobManager:
         
         return job
     
-    def update_job_status(self, job_id: str, status: str, result: Any = None, error: str = None):
+    def update_job_status(self, job_id: str, status: str, result: Any = None, error: str = None, error_details: Dict = None):
         """Update job status and optionally store result."""
         job_key = f"{self.job_prefix}{job_id}"
         job_data = self.redis.get(job_key)
@@ -1518,6 +1669,9 @@ class JobManager:
         
         if error:
             job["error"] = error
+        
+        if error_details:
+            job["error_details"] = error_details
         
         self.redis.setex(job_key, self.job_ttl, json.dumps(job))
         
@@ -1584,6 +1738,177 @@ def get_weather_cache_key(location: str, date_str: str) -> str:
     normalized_location = normalize_location_for_cache(location)
     return f"{normalized_location}_{date_str}"
 
+def _get_location_timezone_from_cache(location: str, redis_client: Optional[redis.Redis] = None) -> Optional[str]:
+    """Get timezone for a location from Redis cache (stored from Visual Crossing API responses).
+    
+    Args:
+        location: Location name
+        redis_client: Optional Redis client (will try to get global cache if not provided)
+        
+    Returns:
+        IANA timezone string (e.g., "Europe/London") or None if not found
+    """
+    try:
+        if redis_client is None:
+            # Try to get Redis client from global cache
+            try:
+                cache = get_cache()
+                redis_client = cache.redis
+            except Exception:
+                return None
+        
+        if not redis_client:
+            return None
+        
+        # Normalize location for cache key
+        normalized_location = normalize_location_for_cache(location)
+        timezone_key = f"location_timezone:{normalized_location}"
+        
+        cached_timezone = redis_client.get(timezone_key)
+        if cached_timezone:
+            timezone_str = cached_timezone.decode('utf-8') if isinstance(cached_timezone, bytes) else cached_timezone
+            return timezone_str
+        
+        return None
+    except Exception as e:
+        if DEBUG:
+            logger.debug(f"Could not get timezone from cache for location '{location}': {e}")
+        return None
+
+def store_location_timezone(location: str, timezone_str: str, redis_client: Optional[redis.Redis] = None, ttl: int = 604800) -> None:
+    """Store timezone for a location in Redis cache.
+    
+    Args:
+        location: Location name
+        timezone_str: IANA timezone string from Visual Crossing API
+        redis_client: Optional Redis client (will try to get global cache if not provided)
+        ttl: Time to live in seconds (default: 7 days)
+    """
+    try:
+        if redis_client is None:
+            # Try to get Redis client from global cache
+            try:
+                cache = get_cache()
+                redis_client = cache.redis
+            except Exception:
+                return
+        
+        if not redis_client:
+            return
+        
+        # Normalize location for cache key
+        normalized_location = normalize_location_for_cache(location)
+        timezone_key = f"location_timezone:{normalized_location}"
+        
+        # Store with long TTL (timezone doesn't change often)
+        redis_client.setex(timezone_key, ttl, timezone_str)
+        
+        if DEBUG:
+            logger.debug(f"Stored timezone for location '{location}': {timezone_str}")
+    except Exception as e:
+        if DEBUG:
+            logger.debug(f"Could not store timezone for location '{location}': {e}")
+
+def _get_location_timezone_from_preapproved(location: str) -> Optional[str]:
+    """Get timezone for a location from preapproved locations data (fallback).
+    
+    Args:
+        location: Location name (can be in various formats)
+        
+    Returns:
+        IANA timezone string (e.g., "Europe/London") or None if not found
+    """
+    global _preapproved_locations_cache
+    
+    try:
+        # Load locations data once and cache it
+        if _preapproved_locations_cache is None:
+            # Find project root by looking for pyproject.toml
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = current_dir
+            while project_root != os.path.dirname(project_root):
+                if os.path.exists(os.path.join(project_root, "pyproject.toml")):
+                    break
+                project_root = os.path.dirname(project_root)
+            
+            data_file = os.path.join(project_root, "data", "preapproved_locations.json")
+            
+            with open(data_file, 'r', encoding='utf-8') as f:
+                _preapproved_locations_cache = json.load(f)
+        
+        # Normalize location for comparison
+        location_lower = location.lower().strip()
+        
+        # Try to match by various formats
+        for item in _preapproved_locations_cache:
+            # Match by full name format: "Name, Admin1, Country Name"
+            if 'name' in item and 'admin1' in item and 'country_name' in item:
+                full_name = f"{item['name']}, {item['admin1']}, {item['country_name']}".lower()
+                if full_name == location_lower:
+                    return item.get('timezone')
+            
+            # Match by name only
+            if item.get('name', '').lower() == location_lower:
+                return item.get('timezone')
+            
+            # Match by slug
+            if item.get('slug', '').lower() == location_lower:
+                return item.get('timezone')
+        
+        return None
+    except Exception as e:
+        if DEBUG:
+            logger.debug(f"Could not get timezone from preapproved locations for '{location}': {e}")
+        return None
+
+def _get_location_timezone(location: str, redis_client: Optional[redis.Redis] = None) -> Optional[str]:
+    """Get timezone for a location, trying multiple sources in order:
+    1. Redis cache (from Visual Crossing API responses)
+    2. Preapproved locations JSON file
+    3. None (fallback to UTC)
+    
+    Args:
+        location: Location name
+        redis_client: Optional Redis client
+        
+    Returns:
+        IANA timezone string (e.g., "Europe/London") or None if not found
+    """
+    # First try Redis cache (from Visual Crossing API)
+    timezone = _get_location_timezone_from_cache(location, redis_client)
+    if timezone:
+        return timezone
+    
+    # Fallback to preapproved locations
+    return _get_location_timezone_from_preapproved(location)
+
+def _is_today_in_location_timezone(date: dt_date, location: Optional[str] = None, redis_client: Optional[redis.Redis] = None) -> bool:
+    """Check if a date is today in the location's timezone, or UTC if location not found.
+    
+    Args:
+        date: Date to check
+        location: Optional location name to look up timezone
+        redis_client: Optional Redis client for timezone cache lookup
+        
+    Returns:
+        True if date is today in location's timezone (or UTC if location not found)
+    """
+    if location and ZoneInfo:
+        timezone_str = _get_location_timezone(location, redis_client)
+        if timezone_str:
+            try:
+                tz = ZoneInfo(timezone_str)
+                today_in_tz = datetime.now(tz).date()
+                return date == today_in_tz
+            except Exception as e:
+                if DEBUG:
+                    logger.debug(f"Error using timezone {timezone_str} for location '{location}': {e}")
+                # Fall through to UTC fallback
+    
+    # Fallback to UTC if location not found or zoneinfo not available
+    today = datetime.now(timezone.utc).date()
+    return date == today
+
 def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
     """Generate standardized cache keys.
     
@@ -1605,6 +1930,224 @@ def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
     else:
         return f"{prefix}_{location}"
 
+# Year-based caching helper functions
+def rec_key(scope: str, slug: str, identifier: str, year: int) -> str:
+    """Generate cache key for a per-year record.
+    
+    Args:
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        year: Year (e.g., 1979, 2024)
+        
+    Returns:
+        str: Cache key in format records:v1:{scope}:{slug}:{identifier}:{year}
+    """
+    return f"records:v1:{scope}:{slug}:{identifier}:{year}"
+
+def bundle_key(scope: str, slug: str, identifier: str) -> str:
+    """Generate cache key for assembled bundle.
+    
+    Args:
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        
+    Returns:
+        str: Cache key in format records:v1:{scope}:{slug}:{identifier}:bundle
+    """
+    return f"records:v1:{scope}:{slug}:{identifier}:bundle"
+
+def rec_etag_key(scope: str, slug: str, identifier: str, year: int) -> str:
+    """Generate cache key for per-year ETag.
+    
+    Args:
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        year: Year (e.g., 1979, 2024)
+        
+    Returns:
+        str: ETag cache key in format records:v1:{scope}:{slug}:{identifier}:{year}:etag
+    """
+    return f"records:v1:{scope}:{slug}:{identifier}:{year}:etag"
+
+async def get_records(
+    redis_client: redis.Redis,
+    scope: str,
+    slug: str,
+    identifier: str,
+    years: List[int]
+) -> Tuple[Dict[int, Dict], List[int], bool]:
+    """Get per-year records from cache using MGET.
+    
+    Args:
+        redis_client: Redis client instance
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        years: List of years to fetch
+        
+    Returns:
+        Tuple of (year_data dict, missing_past list, missing_current bool):
+        - year_data: Dict mapping year -> record data (only for found years)
+        - missing_past: List of past years that are missing
+        - missing_current: True if current year is missing
+    """
+    if not years:
+        return {}, [], False
+    
+    current_year = datetime.now(timezone.utc).year
+    
+    # Build all keys for MGET
+    keys = [rec_key(scope, slug, identifier, year) for year in years]
+    
+    # MGET all year keys
+    try:
+        values = redis_client.mget(keys)
+    except Exception as e:
+        logger.error(f"Error in MGET for records: {e}")
+        return {}, years, current_year in years
+    
+    year_data = {}
+    missing_past = []
+    missing_current = False
+    
+    for year, value in zip(years, values):
+        if value:
+            try:
+                data = json.loads(value.decode() if isinstance(value, bytes) else value)
+                year_data[year] = data
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning(f"Error decoding cached data for year {year}: {e}")
+                if year < current_year:
+                    missing_past.append(year)
+                elif year == current_year:
+                    missing_current = True
+        else:
+            if year < current_year:
+                missing_past.append(year)
+            elif year == current_year:
+                missing_current = True
+    
+    return year_data, missing_past, missing_current
+
+async def assemble_and_cache(
+    redis_client: redis.Redis,
+    scope: str,
+    slug: str,
+    identifier: str,
+    year_data: Dict[int, Dict],
+    year_etags: Optional[Dict[int, str]] = None
+) -> Tuple[Dict, str]:
+    """Assemble final payload from per-year records and cache bundle with ETag.
+    
+    Args:
+        redis_client: Redis client instance
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        year_data: Dict mapping year -> record data
+        year_etags: Optional dict mapping year -> ETag (if not provided, will fetch)
+        
+    Returns:
+        Tuple of (payload dict, bundle_etag string)
+    """
+    # Sort records by year
+    sorted_years = sorted(year_data.keys())
+    ordered_records = [year_data[y] for y in sorted_years]
+    
+    # Build final payload
+    payload = {
+        "version": 1,
+        "count": len(ordered_records),
+        "records": ordered_records
+    }
+    
+    # Get year ETags if not provided
+    if year_etags is None:
+        year_etags = await get_year_etags(redis_client, scope, slug, identifier, sorted_years)
+    
+    # Compute bundle ETag from per-year ETags
+    bundle_etag_computed = compute_bundle_etag(year_etags)
+    
+    # Cache bundle with short TTL
+    bundle_key_str = bundle_key(scope, slug, identifier)
+    bundle_etag_key = f"{bundle_key_str}:etag"
+    try:
+        json_data = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+        redis_client.setex(bundle_key_str, TTL_BUNDLE, json_data)
+        redis_client.setex(bundle_etag_key, TTL_BUNDLE, bundle_etag_computed)
+        if DEBUG:
+            logger.debug(f"Cached bundle: {bundle_key_str} with ETag")
+    except Exception as e:
+        logger.warning(f"Error caching bundle {bundle_key_str}: {e}")
+    
+    return payload, bundle_etag_computed
+
+def compute_bundle_etag(year_etags: Dict[int, str]) -> str:
+    """Compute bundle ETag from ordered list of per-year ETags.
+    
+    Args:
+        year_etags: Dict mapping year -> ETag string
+        
+    Returns:
+        str: SHA256 hash of ordered per-year ETags (32 chars)
+    """
+    # Sort by year and extract ETag values (remove quotes if present)
+    sorted_etags = []
+    for year in sorted(year_etags.keys()):
+        etag = year_etags[year]
+        # Remove quotes if present
+        etag_clean = etag.strip('"\'')
+        sorted_etags.append(f"{year}:{etag_clean}")
+    
+    # Hash the concatenated ETags
+    etag_string = "|".join(sorted_etags)
+    return f'"{hashlib.sha256(etag_string.encode()).hexdigest()[:32]}"'
+
+async def get_year_etags(
+    redis_client: redis.Redis,
+    scope: str,
+    slug: str,
+    identifier: str,
+    years: List[int]
+) -> Dict[int, str]:
+    """Get ETags for all years using MGET.
+    
+    Args:
+        redis_client: Redis client instance
+        scope: Period scope ('daily', 'weekly', 'monthly', 'yearly')
+        slug: Location slug (normalized)
+        identifier: Date identifier (e.g., '11-06', '2025-W45')
+        years: List of years to fetch ETags for
+        
+    Returns:
+        Dict mapping year -> ETag string (empty string if not found)
+    """
+    if not years:
+        return {}
+    
+    # Build all ETag keys for MGET
+    keys = [rec_etag_key(scope, slug, identifier, year) for year in years]
+    
+    # MGET all ETag keys
+    try:
+        values = redis_client.mget(keys)
+    except Exception as e:
+        logger.error(f"Error in MGET for ETags: {e}")
+        return {year: "" for year in years}
+    
+    year_etags = {}
+    for year, value in zip(years, values):
+        if value:
+            etag = value.decode() if isinstance(value, bytes) else value
+            year_etags[year] = etag
+        else:
+            year_etags[year] = ""
+    
+    return year_etags
+
 async def cached_endpoint_response(
     request: Request,
     response: Response,
@@ -1612,11 +2155,36 @@ async def cached_endpoint_response(
     compute_func,
     ttl: int = CACHE_TTL_DEFAULT,
     cache_control: str = CACHE_CONTROL_PUBLIC,
+    period: Optional[str] = None,
+    date: Optional[dt_date] = None,
+    location: Optional[str] = None,
     *args,
     **kwargs
 ):
-    """Helper function to add caching to any endpoint."""
+    """Helper function to add caching to any endpoint.
+    
+    Args:
+        request: FastAPI request object
+        response: FastAPI response object
+        cache_key: Cache key for the data
+        compute_func: Function to compute the data if not cached
+        ttl: Cache TTL in seconds (default: CACHE_TTL_DEFAULT)
+        cache_control: Cache-Control header value (default: CACHE_CONTROL_PUBLIC)
+        period: Optional period type (e.g., "daily", "weekly", "monthly", "yearly")
+        date: Optional date object to check if it's today
+        location: Optional location name to determine timezone for "today" check
+        *args, **kwargs: Additional arguments passed to compute_func
+    """
     cache = get_cache()  # This returns EnhancedCache instance
+    
+    # If this is a daily endpoint with today's date, use shorter cache TTL
+    # since today's data uses forecast which may change
+    # Check if date is "today" in the location's timezone (or UTC if location not found)
+    if period == "daily" and date is not None:
+        if _is_today_in_location_timezone(date, location, cache.redis):
+            # Use shorter TTL for today's daily data
+            ttl = CACHE_TTL_SHORT  # 1 hour instead of default
+            cache_control = CACHE_CONTROL_DAILY_TODAY  # Shorter max-age
     
     try:
         # Try to get from cache or compute
@@ -1749,7 +2317,6 @@ def initialize_cache(redis_client: redis.Redis):
         usage_tracker = LocationUsageTracker(redis_client, USAGE_RETENTION_DAYS)
         if DEBUG:
             logger.info(f"📊 USAGE TRACKING INITIALIZED: {USAGE_RETENTION_DAYS} days retention")
-            logger.info(f"🏙️  DEFAULT POPULAR LOCATIONS: {', '.join(DEFAULT_POPULAR_LOCATIONS)}")
         else:
             logger.info(f"Usage tracking enabled: {USAGE_RETENTION_DAYS} days retention")
     else:

@@ -8,15 +8,21 @@ It runs as a background task in the FastAPI application lifecycle.
 import asyncio
 import json
 import logging
+import redis
 import signal
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from cache_utils import get_job_manager, get_cache, JobStatus
-from routers.records_agg import rolling_bundle as rolling_bundle_func
+from cache_utils import get_job_manager, JobStatus
 
 logger = logging.getLogger(__name__)
+
+# Job worker constants
+JOB_PROCESSING_BATCH_SIZE = 10  # Maximum jobs to process in one cycle
+WORKER_POLL_INTERVAL_SECONDS = 1  # Time between job queue polls
+WORKER_HEARTBEAT_INTERVAL_CYCLES = 60  # Update heartbeat every 60 poll cycles (60 seconds)
+WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES = 300  # Log heartbeat every 300 cycles (5 minutes)
 
 class JobWorker:
     """Background worker for processing async jobs."""
@@ -38,17 +44,17 @@ class JobWorker:
                 await self.process_jobs()
                 poll_count += 1
                 
-                # Update heartbeat every 60 seconds (log every 5 minutes for less noise)
-                if poll_count % 60 == 0:
+                # Update heartbeat periodically
+                if poll_count % WORKER_HEARTBEAT_INTERVAL_CYCLES == 0:
                     try:
                         self.redis.setex("worker:heartbeat", 180, datetime.now(timezone.utc).isoformat())
-                        # Only log heartbeat every 5 minutes to reduce log volume
-                        if poll_count % 300 == 0:
+                        # Only log heartbeat periodically to reduce log volume
+                        if poll_count % WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES == 0:
                             logger.info(f"💓 Worker heartbeat active (poll #{poll_count})")
-                    except Exception as e:
-                        logger.warning(f"⚠️  Could not update heartbeat: {e}")
-                
-                await asyncio.sleep(1)  # Poll every second
+                    except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+                        logger.warning(f"⚠️  Redis error updating heartbeat: {e}")
+
+                await asyncio.sleep(WORKER_POLL_INTERVAL_SECONDS)
         except Exception as e:
             logger.error(f"❌ Job worker error: {e}")
             import traceback
@@ -74,16 +80,21 @@ class JobWorker:
             # Use the same cache storage function as the main endpoints
             set_cache_value(cache_key, cache_duration, json.dumps(data), self.redis)
             
-            # Generate ETag using the same method as the main endpoints
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+            # Generate ETag using SHA256 (same as main endpoints)
+            etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
             
             logger.info(f"✅ Cached {data_type} for {cache_key}")
             return etag
-            
-        except Exception as cache_error:
-            logger.warning(f"Cache storage failed for {cache_key}: {cache_error}")
+
+        except (redis.RedisError, redis.ConnectionError) as redis_error:
+            logger.warning(f"Redis error storing cache for {cache_key}: {redis_error}")
+            # Generate a simple ETag even if cache fails (use SHA256, not MD5)
+            etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
+            return etag
+        except (json.JSONEncodeError, TypeError) as encode_error:
+            logger.warning(f"JSON encoding error for {cache_key}: {encode_error}")
             # Generate a simple ETag even if cache fails
-            etag = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+            etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
             return etag
     
     async def process_jobs(self):
@@ -91,7 +102,6 @@ class JobWorker:
         try:
             # Get all pending jobs
             job_manager = get_job_manager()
-            cache = get_cache()
             
             # Find pending jobs (this is a simple implementation)
             # In production, you might want to use Redis Streams or a proper queue
@@ -102,7 +112,7 @@ class JobWorker:
             
             for job_id in pending_jobs:
                 logger.info(f"🔄 Processing job: {job_id}")
-                await self.process_job(job_id, job_manager, cache)
+                await self.process_job(job_id, job_manager)
                 
         except Exception as e:
             logger.error(f"❌ Error processing jobs: {e}")
@@ -121,7 +131,7 @@ class JobWorker:
             
             if queue_length > 0:
                 # Get jobs from the queue (without removing them)
-                for i in range(min(queue_length, 10)):  # Process up to 10 jobs at a time
+                for i in range(min(queue_length, JOB_PROCESSING_BATCH_SIZE)):
                     job_id = self.redis.lindex(self.job_queue_key, i)
                     if job_id:
                         # Convert byte string to string if needed
@@ -147,7 +157,7 @@ class JobWorker:
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return []
     
-    async def process_job(self, job_id: str, job_manager, cache):
+    async def process_job(self, job_id: str, job_manager):
         """Process a single job."""
         start_time = datetime.now(timezone.utc)
         try:
@@ -171,20 +181,29 @@ class JobWorker:
             try:
                 if job_type == "record_computation":
                     logger.info(f"🔢 Starting record computation...")
-                    result = await self.process_record_job(params, cache)
-                elif job_type == "rolling_bundle":
-                    logger.info(f"📦 Starting rolling bundle computation...")
-                    result = await self.process_rolling_bundle_job(params, cache)
+                    result = await self.process_record_job(params)
                 elif job_type == "cache_warming":
                     logger.info(f"🔥 Starting cache warming...")
-                    result = await self.process_cache_warming_job(params, cache)
+                    result = await self.process_cache_warming_job(params)
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
-            except Exception as compute_error:
-                logger.error(f"❌ Computation error for job {job_id}")
-                logger.error(f"❌ Error type: {type(compute_error).__name__}")
-                logger.error(f"❌ Error message: {str(compute_error)}")
-                logger.error(f"❌ Error repr: {repr(compute_error)}")
+            except (ValueError, KeyError, TypeError) as data_error:
+                logger.error(f"❌ Data error for job {job_id}: {type(data_error).__name__}")
+                logger.error(f"❌ Error message: {str(data_error)}")
+                import traceback
+                logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+                raise
+            except (redis.RedisError, json.JSONDecodeError) as cache_error:
+                logger.error(f"❌ Cache error for job {job_id}: {type(cache_error).__name__}")
+                logger.error(f"❌ Error message: {str(cache_error)}")
+                import traceback
+                logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+                raise
+            except Exception as unexpected_error:
+                # Catch any other unexpected errors but log them distinctly
+                logger.error(f"❌ Unexpected error for job {job_id}: {type(unexpected_error).__name__}")
+                logger.error(f"❌ Error message: {str(unexpected_error)}")
+                logger.error(f"❌ Error repr: {repr(unexpected_error)}")
                 import traceback
                 logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
                 raise
@@ -200,85 +219,174 @@ class JobWorker:
             # Remove job from queue after successful completion
             self.redis.lrem(self.job_queue_key, 1, job_id)
             
-        except Exception as e:
-            logger.error(f"❌ Error processing job {job_id}: {e}")
+        except redis.RedisError as redis_error:
+            # Redis errors - don't update job status if Redis is down
             import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
-            job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(e))
+            error_traceback = traceback.format_exc()
+            logger.error(f"❌ Redis error processing job {job_id}: {type(redis_error).__name__}: {str(redis_error)}")
+            logger.error(f"❌ Full traceback:\n{error_traceback}")
+            # Cannot update job status or remove from queue if Redis is failing
+
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as data_error:
+            # Data/validation errors - store in job status
+            import traceback
+            error_traceback = traceback.format_exc()
+            error_details = {
+                "error_type": type(data_error).__name__,
+                "error_message": str(data_error),
+                "traceback": error_traceback,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+            logger.error(f"❌ Data error processing job {job_id}: {type(data_error).__name__}: {str(data_error)}")
+            logger.error(f"❌ Full traceback:\n{error_traceback}")
+
+            # Store detailed error in job status
+            job_manager.update_job_status(
+                job_id,
+                JobStatus.ERROR,
+                error=str(data_error),
+                error_details=error_details
+            )
+            # Remove failed job from queue
+            self.redis.lrem(self.job_queue_key, 1, job_id)
+
+        except Exception as e:
+            # Unexpected errors - log and store
+            import traceback
+            error_traceback = traceback.format_exc()
+            error_details = {
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": error_traceback,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+            logger.error(f"❌ Unexpected error processing job {job_id}: {type(e).__name__}: {str(e)}")
+            logger.error(f"❌ Full traceback:\n{error_traceback}")
+
+            # Store detailed error in job status
+            job_manager.update_job_status(
+                job_id,
+                JobStatus.ERROR,
+                error=str(e),
+                error_details=error_details
+            )
             # Remove failed job from queue
             self.redis.lrem(self.job_queue_key, 1, job_id)
     
-    async def process_record_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
-        """Process a record computation job."""
-        from main import get_temperature_data_v1
+    async def process_record_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a record computation job with per-year granularity."""
+        from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year
+        from cache_utils import (
+            normalize_location_for_cache, rec_key, rec_etag_key,
+            TTL_STABLE, ETagGenerator
+        )
         from fastapi import HTTPException
         
         logger.info(f"🔍 Processing record job with params: {params}")
-        period = params.get("period")
+        scope = params.get("scope") or params.get("period")  # Support both for backward compatibility
         location = params.get("location")
         identifier = params.get("identifier")
+        year = params.get("year")
         
-        if not all([period, location, identifier]):
-            raise ValueError(f"Missing required params - period: {period}, location: {location}, identifier: {identifier}")
+        if not all([scope, location, identifier]):
+            raise ValueError(f"Missing required params - scope: {scope}, location: {location}, identifier: {identifier}")
         
-        # Build cache key using the same format as the main endpoint
-        from cache_utils import normalize_location_for_cache
-        normalized_location = normalize_location_for_cache(location)
-        cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
+        # Normalize location to slug
+        slug = normalize_location_for_cache(location)
+        current_year = datetime.now(timezone.utc).year
         
-        # Compute the data - catch HTTPException and convert to regular exception
-        try:
-            data = await get_temperature_data_v1(location, period, identifier)
-        except HTTPException as http_err:
-            # Convert HTTPException to regular exception for job error handling
-            raise ValueError(f"{http_err.detail}") from http_err
-        
-        # Store in cache using the same utilities as the main endpoint
-        etag = self._store_cache_data(cache_key, data)
-        
-        return {
-            "cache_key": cache_key,
-            "etag": etag,
-            "data": data,
-            "computed_at": datetime.now(timezone.utc).isoformat()
-        }
+        # If year is specified, fetch only that year's data
+        if year is not None:
+            logger.info(f"📅 Fetching data for year {year} only")
+            
+            # Fetch full data (get_temperature_data_v1 fetches all years, but we'll extract just the one we need)
+            try:
+                full_data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
+            except HTTPException as http_err:
+                raise ValueError(f"{http_err.detail}") from http_err
+            
+            # Extract per-year records
+            per_year_records = _extract_per_year_records(full_data)
+            
+            if year not in per_year_records:
+                raise ValueError(f"No data found for year {year}")
+            
+            # Get the specific year's record
+            year_record = per_year_records[year]
+            
+            # Determine TTL
+            if year < current_year:
+                ttl = TTL_STABLE
+            else:
+                ttl = _get_ttl_for_current_year(scope)
+            
+            # Generate cache keys
+            year_key = rec_key(scope, slug, identifier, year)
+            etag_key = rec_etag_key(scope, slug, identifier, year)
+            
+            # Generate ETag
+            etag = ETagGenerator.generate_etag(year_record)
+            
+            # Store per-year record
+            try:
+                json_data = json.dumps(year_record, sort_keys=True, separators=(',', ':'))
+                self.redis.setex(year_key, ttl, json_data)
+                self.redis.setex(etag_key, ttl, etag)
+                logger.info(f"✅ Cached per-year record: {year_key} (TTL: {ttl}s)")
+            except (redis.RedisError, redis.ConnectionError) as redis_error:
+                logger.warning(f"Redis error caching per-year record {year_key}: {redis_error}")
+                raise
+            except (json.JSONEncodeError, TypeError) as serialize_error:
+                logger.warning(f"Serialization error caching per-year record {year_key}: {serialize_error}")
+                raise
+            
+            return {
+                "cache_key": year_key,
+                "etag": etag,
+                "year": year,
+                "data": year_record,
+                "computed_at": datetime.now(timezone.utc).isoformat()
+            }
+        else:
+            # Default behavior: if no year specified, fetch all available years for the identifier
+            logger.info("ℹ️ No year specified; returning the full historical range")
+            try:
+                data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
+            except HTTPException as http_err:
+                raise ValueError(f"{http_err.detail}") from http_err
+            
+            # Extract and store all per-year records
+            per_year_records = _extract_per_year_records(data)
+            for y, record_data in per_year_records.items():
+                year_key = rec_key(scope, slug, identifier, y)
+                etag_key = rec_etag_key(scope, slug, identifier, y)
+                
+                if y < current_year:
+                    ttl = TTL_STABLE
+                else:
+                    ttl = _get_ttl_for_current_year(scope)
+                
+                etag = ETagGenerator.generate_etag(record_data)
+                
+                try:
+                    json_data = json.dumps(record_data, sort_keys=True, separators=(',', ':'))
+                    self.redis.setex(year_key, ttl, json_data)
+                    self.redis.setex(etag_key, ttl, etag)
+                except (redis.RedisError, json.JSONEncodeError, TypeError) as e:
+                    logger.warning(f"Error caching year {y}: {type(e).__name__}: {e}")
+                    # Continue with other years despite error
+            
+            # Return summary
+            return {
+                "cache_keys": [rec_key(scope, slug, identifier, y) for y in per_year_records.keys()],
+                "years_cached": list(per_year_records.keys()),
+                "data": data,
+                "computed_at": datetime.now(timezone.utc).isoformat()
+            }
     
-    async def process_rolling_bundle_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
-        """Process a rolling bundle job."""
-        from routers.records_agg import _rolling_bundle_impl
-        from fastapi import HTTPException
-        
-        location = params["location"]
-        anchor = params["anchor"]
-        unit_group = params.get("unit_group", "celsius")
-        month_mode = params.get("month_mode", "rolling1m")
-        days_back = params.get("days_back", 7)
-        include = params.get("include")
-        exclude = params.get("exclude")
-        
-        # Compute the data - catch HTTPException and convert to regular exception
-        try:
-            data = await _rolling_bundle_impl(
-                location, anchor, unit_group, month_mode, days_back, include, exclude
-            )
-        except HTTPException as http_err:
-            # Convert HTTPException to regular exception for job error handling
-            raise ValueError(f"{http_err.detail}") from http_err
-        
-        # Build cache key using the same format as the rolling bundle endpoint
-        cache_key = f"rolling_bundle:{location}:{anchor}:{unit_group}"
-        
-        # Store in cache using the same utilities as the rolling bundle endpoint
-        etag = self._store_cache_data(cache_key, data, "rolling bundle")
-        
-        return {
-            "cache_key": cache_key,
-            "etag": etag,
-            "data": data,
-            "computed_at": datetime.now(timezone.utc).isoformat()
-        }
-    
-    async def process_cache_warming_job(self, params: Dict[str, Any], cache) -> Dict[str, Any]:
+    async def process_cache_warming_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a cache warming job."""
         from cache_utils import get_cache_warmer
         
@@ -352,11 +460,24 @@ class JobWorker:
             }
             
             logger.info(f"✅ Cache warming completed: {successful_locations} locations, {total_endpoints} endpoints")
-            
-        except Exception as e:
-            logger.error(f"❌ Cache warming failed: {e}")
+
+        except (ValueError, KeyError, TypeError) as data_error:
+            logger.error(f"❌ Data/validation error during cache warming: {data_error}")
             results["status"] = "failed"
-            results["error"] = str(e)
+            results["error"] = f"Data error: {str(data_error)}"
+            results["failed_at"] = datetime.now(timezone.utc).isoformat()
+            raise
+        except (redis.RedisError, redis.ConnectionError) as cache_error:
+            logger.error(f"❌ Redis error during cache warming: {cache_error}")
+            results["status"] = "failed"
+            results["error"] = f"Cache error: {str(cache_error)}"
+            results["failed_at"] = datetime.now(timezone.utc).isoformat()
+            raise
+        except Exception as e:
+            # Catch any HTTP or unexpected errors
+            logger.error(f"❌ Unexpected error during cache warming: {type(e).__name__}: {e}")
+            results["status"] = "failed"
+            results["error"] = f"Unexpected error: {str(e)}"
             results["failed_at"] = datetime.now(timezone.utc).isoformat()
             raise
         

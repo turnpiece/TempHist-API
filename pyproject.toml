@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "temphist-api"
-version = "1.0.4"
+version = "1.0.7"
 description = "Temperature History API with comprehensive caching and monitoring"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
