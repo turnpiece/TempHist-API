@@ -1575,7 +1575,7 @@ class JobManager:
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
         """Create a new job and return job ID."""
         try:
-            job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.md5(str(params).encode()).hexdigest()[:8]}"
+            job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.sha256(str(params).encode()).hexdigest()[:8]}"
             job_key = f"{self.job_prefix}{job_id}"
             
             job_data = {
