@@ -1,4 +1,5 @@
 import asyncio
+import asyncpg  # type: ignore[import-untyped]
 import json
 import logging
 import os
@@ -6,14 +7,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+
 def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[bool, bool, bool]:
     """Determine which temperature columns are present to build a typed insert."""
     has_temp = any(record.temp_c is not None for record in records)
     has_max = any(record.temp_max_c is not None for record in records)
     has_min = any(record.temp_min_c is not None for record in records)
     return has_temp, has_max, has_min
-
-import asyncpg  # type: ignore[import-untyped]
 
 from cache_utils import normalize_location_for_cache
 
@@ -163,6 +164,7 @@ class DailyTemperatureStore:
                 return
             async with pool.acquire() as conn:
                 await self._ensure_locations_table(conn)
+                await self._ensure_location_aliases_table(conn)
                 await self._ensure_daily_temperatures_table(conn)
                 await self._backfill_locations_metadata(conn)
             self._schema_initialized = True
@@ -187,6 +189,21 @@ class DailyTemperatureStore:
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_normalized
             ON locations (normalized_name)
+            """
+        )
+
+    async def _ensure_location_aliases_table(self, conn: asyncpg.Connection) -> None:
+        """Ensure the location_aliases table exists.
+
+        This maps incoming normalized location strings onto a canonical locations.id.
+        """
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS location_aliases (
+                alias_normalized_name TEXT PRIMARY KEY,
+                location_id BIGINT NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
             """
         )
 
@@ -419,8 +436,15 @@ class DailyTemperatureStore:
             logger.debug("Acquiring connection from pool")
             async with pool.acquire() as conn:
                 logger.debug("Connection acquired; fetching id for %s", normalized_location)
+                # Resolve location_id through aliases first, then direct lookup
                 location_row = await conn.fetchrow(
-                    "SELECT id FROM locations WHERE normalized_name = $1",
+                    """
+                    SELECT location_id as id FROM location_aliases WHERE alias_normalized_name = $1
+                    UNION ALL
+                    SELECT id FROM locations WHERE normalized_name = $1
+                        AND NOT EXISTS (SELECT 1 FROM location_aliases WHERE alias_normalized_name = $1)
+                    LIMIT 1
+                    """,
                     normalized_location,
                 )
                 if not location_row:
@@ -634,6 +658,55 @@ class DailyTemperatureStore:
         params.extend([payload_json, record.source, now_ts])
         return tuple(params)
 
+    async def _find_nearby_location(
+        self,
+        conn: asyncpg.Connection,
+        latitude: Optional[float],
+        longitude: Optional[float],
+        max_distance_km: float = 25.0,
+    ) -> Optional[asyncpg.Record]:
+        """Return closest existing location within max_distance_km km of (lat, lng), or None."""
+        if latitude is None or longitude is None:
+            return None
+
+        row = await conn.fetchrow(
+            """
+            SELECT
+                id,
+                original_name,
+                normalized_name,
+                resolved_name,
+                latitude,
+                longitude,
+                timezone,
+                (
+                    6371.0 * acos(
+                        cos(radians($1)) * cos(radians(latitude)) *
+                        cos(radians(longitude) - radians($2)) +
+                        sin(radians($1)) * sin(radians(latitude))
+                    )
+                ) AS distance_km
+            FROM locations
+            WHERE latitude IS NOT NULL
+              AND longitude IS NOT NULL
+            ORDER BY distance_km
+            LIMIT 1
+            """,
+            latitude,
+            longitude,
+        )
+        if not row:
+            return None
+
+        distance = row["distance_km"]
+        if distance is None:
+            return None
+
+        if float(distance) <= max_distance_km:
+            return row
+
+        return None
+
     async def _get_or_create_location_id(
         self,
         conn: asyncpg.Connection,
@@ -641,22 +714,93 @@ class DailyTemperatureStore:
         normalized_name: str,
         metadata: Optional[Dict[str, Any]],
     ) -> Optional[int]:
-        resolved_name = self._extract_metadata_value(metadata, ["resolvedAddress", "resolved_address"])
-        latitude = self._extract_numeric_metadata(metadata, ["latitude", "lat"])
-        longitude = self._extract_numeric_metadata(metadata, ["longitude", "lon", "lng"])
-        timezone_name = self._extract_metadata_value(metadata, ["timezone", "tz"])
+        """Resolve a location to a canonical locations.id.
 
+        Resolution order:
+        1. Existing alias in location_aliases.
+        2. Existing locations.normalized_name.
+        3. Preapproved location metadata.
+        4. Nearby existing location based on Visual Crossing coordinates.
+        5. Create a new locations row.
+        """
+
+        # 1. Alias lookup
+        row = await conn.fetchrow(
+            """
+            SELECT location_id
+            FROM location_aliases
+            WHERE alias_normalized_name = $1
+            """,
+            normalized_name,
+        )
+        if row:
+            return int(row["location_id"])
+
+        # 2. Direct locations match
+        row = await conn.fetchrow(
+            """
+            SELECT id
+            FROM locations
+            WHERE normalized_name = $1
+            """,
+            normalized_name,
+        )
+        if row:
+            location_id = int(row["id"])
+            await conn.execute(
+                """
+                INSERT INTO location_aliases (alias_normalized_name, location_id)
+                VALUES ($1, $2)
+                ON CONFLICT (alias_normalized_name) DO NOTHING
+                """,
+                normalized_name,
+                location_id,
+            )
+            return location_id
+
+        # 3. Extract Visual Crossing metadata
+        resolved_name = self._extract_metadata_value(
+            metadata, ["resolvedAddress", "resolved_address"]
+        )
+        latitude = self._extract_numeric_metadata(
+            metadata, ["latitude", "lat"]
+        )
+        longitude = self._extract_numeric_metadata(
+            metadata, ["longitude", "lon", "lng"]
+        )
+        timezone_name = self._extract_metadata_value(
+            metadata, ["timezone", "tz"]
+        )
+
+        # Apply preapproved info if available (do not remove existing logic)
         preapproved = _get_preapproved_location_info(normalized_name)
         if preapproved:
             if not resolved_name:
                 resolved_name = preapproved.get("full_name")
-            if latitude is None and preapproved.get("latitude") is not None:
+            if latitude is None:
                 latitude = preapproved.get("latitude")
-            if longitude is None and preapproved.get("longitude") is not None:
+            if longitude is None:
                 longitude = preapproved.get("longitude")
             if not timezone_name:
                 timezone_name = preapproved.get("timezone")
 
+        # 4. Try snapping to nearby existing location
+        if latitude is not None and longitude is not None:
+            nearby = await self._find_nearby_location(conn, latitude, longitude)
+            if nearby:
+                location_id = int(nearby["id"])
+                await conn.execute(
+                    """
+                    INSERT INTO location_aliases (alias_normalized_name, location_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (alias_normalized_name) DO NOTHING
+                    """,
+                    normalized_name,
+                    location_id,
+                )
+                return location_id
+
+        # 5. Fall back to creating a new canonical location
         if not resolved_name:
             resolved_name = original_name
 
@@ -664,44 +808,49 @@ class DailyTemperatureStore:
         if resolved_name and "," not in original_name:
             original_to_store = resolved_name
 
-        try:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO locations (
-                    original_name,
-                    normalized_name,
-                    resolved_name,
-                    latitude,
-                    longitude,
-                    timezone
-                )
-                VALUES ($1::text, $2::text, $3::text, $4::double precision, $5::double precision, $6::text)
-                ON CONFLICT (normalized_name) DO UPDATE SET
-                    original_name = EXCLUDED.original_name,
-                    resolved_name = COALESCE(EXCLUDED.resolved_name, locations.resolved_name),
-                    latitude = COALESCE(EXCLUDED.latitude, locations.latitude),
-                    longitude = COALESCE(EXCLUDED.longitude, locations.longitude),
-                    timezone = COALESCE(EXCLUDED.timezone, locations.timezone),
-                    updated_at = NOW()
-                RETURNING id
-                """,
-                original_to_store,
-                normalized_name,
-                resolved_name or original_to_store,
-                latitude,
-                longitude,
-                timezone_name,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to upsert location '%s' (%s): %s",
+        row = await conn.fetchrow(
+            """
+            INSERT INTO locations (
                 original_name,
                 normalized_name,
-                exc,
+                resolved_name,
+                latitude,
+                longitude,
+                timezone
             )
+            VALUES (
+                $1::text,
+                $2::text,
+                $3::text,
+                $4::double precision,
+                $5::double precision,
+                $6::text
+            )
+            RETURNING id
+            """,
+            original_to_store,
+            normalized_name,
+            resolved_name,
+            latitude,
+            longitude,
+            timezone_name,
+        )
+        if not row:
             return None
 
-        return row["id"] if row else None
+        location_id = int(row["id"])
+
+        await conn.execute(
+            """
+            INSERT INTO location_aliases (alias_normalized_name, location_id)
+            VALUES ($1, $2)
+            ON CONFLICT (alias_normalized_name) DO NOTHING
+            """,
+            normalized_name,
+            location_id,
+        )
+
+        return location_id
 
     @staticmethod
     def _extract_metadata_value(
