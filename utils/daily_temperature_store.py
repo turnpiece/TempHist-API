@@ -174,7 +174,13 @@ class DailyTemperatureStore:
             if self._pool or self._disabled:
                 return self._pool
             try:
-                pool = await asyncpg.create_pool(dsn=self._dsn, min_size=1, max_size=5)
+                pool = await asyncpg.create_pool(
+                    dsn=self._dsn,
+                    min_size=5,  # Keep 5 connections ready to avoid connection overhead
+                    max_size=20,  # Support up to 20 concurrent requests
+                    command_timeout=10.0,  # Timeout queries after 10s
+                    max_inactive_connection_lifetime=300.0  # Recycle idle connections after 5min
+                )
             except Exception as exc:  # asyncpg raises multiple subclasses
                 logger.error(
                     "DailyTemperatureStore: unable to create Postgres pool (%s). Disabling persistent cache.",
@@ -231,6 +237,15 @@ class DailyTemperatureStore:
             ON locations (normalized_name)
             """
         )
+        # Index for coordinate-based nearby location searches
+        # Only index rows with coordinates to keep index small
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_locations_coordinates
+            ON locations (latitude, longitude)
+            WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """
+        )
 
     async def _ensure_location_aliases_table(self, conn: asyncpg.Connection) -> None:
         """Ensure the location_aliases table exists.
@@ -244,6 +259,13 @@ class DailyTemperatureStore:
                 location_id BIGINT NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+            """
+        )
+        # Index for fast lookups by location_id (for finding all aliases of a location)
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_location_aliases_location_id
+            ON location_aliases (location_id)
             """
         )
 
@@ -496,11 +518,13 @@ class DailyTemperatureStore:
         normalized_location = normalize_location_for_cache(location)
         result: Dict[date, DailyTemperatureRecord] = {}
 
+        # Use = ANY() for exact date matching (more efficient than BETWEEN when dates are sparse)
+        # For large consecutive ranges, BETWEEN might be slightly faster, but = ANY() handles both well
         query = """
             SELECT day, temp_c, temp_max_c, temp_min_c, payload, source
             FROM daily_temperatures
             WHERE location_id = $1
-              AND day BETWEEN $2::date AND $3::date
+              AND day = ANY($2::date[])
         """
 
         logger.debug("Fetch cached records for a location and list of dates")
@@ -531,13 +555,11 @@ class DailyTemperatureStore:
                         query.replace("\n", " ").strip(),
                     )
                     logger.debug(
-                        "DailyTemperatureStore.fetch date range %s -> %s (requested=%s)",
-                        start_date,
-                        end_date,
+                        "DailyTemperatureStore.fetch dates requested: %s",
                         date_texts,
                     )
 
-                parameters = (location_row["id"], start_date, end_date)
+                parameters = (location_row["id"], date_list)
                 rows = await conn.fetch(query, *parameters)
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
@@ -759,9 +781,24 @@ class DailyTemperatureStore:
         longitude: Optional[float],
         max_distance_km: float = 25.0,
     ) -> Optional[asyncpg.Record]:
-        """Return closest existing location within max_distance_km km of (lat, lng), or None."""
+        """Return closest existing location within max_distance_km km of (lat, lng), or None.
+
+        Uses bounding box pre-filter for performance before calculating exact distance.
+        """
         if latitude is None or longitude is None:
             return None
+
+        # Calculate bounding box for fast pre-filtering
+        # Approximation: 1 degree latitude ≈ 111 km, longitude varies by latitude
+        import math
+        lat_delta = max_distance_km / 111.0
+        # At equator, 1 degree longitude ≈ 111 km, narrows at higher latitudes
+        lon_delta = max_distance_km / (111.0 * abs(math.cos(math.radians(latitude))))
+
+        min_lat = latitude - lat_delta
+        max_lat = latitude + lat_delta
+        min_lon = longitude - lon_delta
+        max_lon = longitude + lon_delta
 
         row = await conn.fetchrow(
             """
@@ -783,11 +820,17 @@ class DailyTemperatureStore:
             FROM locations
             WHERE latitude IS NOT NULL
               AND longitude IS NOT NULL
+              AND latitude BETWEEN $3 AND $4
+              AND longitude BETWEEN $5 AND $6
             ORDER BY distance_km
             LIMIT 1
             """,
             latitude,
             longitude,
+            min_lat,
+            max_lat,
+            min_lon,
+            max_lon,
         )
         if not row:
             return None
