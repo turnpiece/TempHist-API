@@ -227,6 +227,20 @@ TEMPHIST_PG_DSN=postgresql://user:password@host:5432/dbname
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
 
+**Current Year Handling:**
+
+The API treats the current year differently from historical years to ensure data freshness:
+
+- **Relaxed Coverage Thresholds**: Current year requires only 50% coverage (vs 90% for historical years)
+  - Weekly: 4 of 7 days (57% vs 86%)
+  - Monthly: 19 of 31 days (61% vs 90%)
+  - Yearly: 183 of 365 days (50% vs 90%)
+- **No Caching When Missing**: Responses missing the current year are not cached, forcing fresh fetches
+- **Smart Retries**: Each request retries until current year data is available
+- **Historical Gaps Preserved**: Missing historical years (e.g., 1995-2004 for some locations) are cached normally
+
+This ensures current year data appears as soon as it's available while accepting permanent gaps in historical data.
+
 #### Improved Temporal Tolerance Caching
 
 Smart caching with temporal tolerance reduces redundant API calls:

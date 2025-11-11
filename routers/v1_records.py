@@ -40,10 +40,6 @@ from utils.visual_crossing_timeline import fetch_timeline_days
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# TEMPORARY DEBUG FLAG: Set to True to raise exception when current year is skipped
-# This makes debugging easier by immediately showing the issue in console
-DEBUG_CURRENT_YEAR_FAILURES = False
-
 
 def parse_identifier(period: str, identifier: str) -> tuple:
     """Parse identifier based on period type. All periods use MM-DD format representing the end date."""
@@ -265,13 +261,7 @@ async def _collect_rolling_window_values(
     window_days = WINDOW_DAYS[period]
 
     for year in years:
-        # TEMPORARY DEBUG: Print to console immediately
         current_year_now = datetime.now().year
-        if year == current_year_now and DEBUG_CURRENT_YEAR_FAILURES:
-            print(f"\n{'='*80}")
-            print(f"🔍 PROCESSING CURRENT YEAR {year} for {location} - {period}")
-            print(f"{'='*80}\n")
-
         anchor = _resolve_anchor_date(year, month, day)
         if anchor is None:
             track_missing_year(missing_years, year, "invalid_anchor_date")
@@ -288,81 +278,29 @@ async def _collect_rolling_window_values(
         timeline_failed = False
         final_missing_dates = missing_dates
 
-        # Debug logging for current year
-        if year == current_year_now:
-            debug_msg = (
-                f"🔍 CURRENT YEAR DEBUG [{year}]: {location} | Period: {period} | "
-                f"Anchor: {anchor.strftime('%Y-%m-%d')} | "
-                f"Date range: {start_date.strftime('%Y-%m-%d')} to {date_sequence[-1].strftime('%Y-%m-%d')} | "
-                f"Expected: {expected_days} days | Available: {available_count} days | "
-                f"Missing: {len(missing_dates)} days | Coverage: {coverage_ratio:.1%} | "
-                f"Coverage OK: {coverage_ok}"
+        # Log current year coverage for monitoring
+        if year == current_year_now and missing_dates:
+            logger.info(
+                f"Current year [{year}] coverage for {location}: "
+                f"{available_count}/{expected_days} days ({coverage_ratio:.1%})"
             )
-            logger.warning(debug_msg)
-            if DEBUG_CURRENT_YEAR_FAILURES:
-                print(debug_msg)
-
-            if missing_dates and len(missing_dates) <= 10:
-                missing_msg = f"🔍 Missing dates: {[d.strftime('%Y-%m-%d') for d in missing_dates]}"
-                logger.warning(missing_msg)
-                if DEBUG_CURRENT_YEAR_FAILURES:
-                    print(missing_msg)
-            elif missing_dates:
-                missing_msg = f"🔍 Missing dates (first 10): {[d.strftime('%Y-%m-%d') for d in missing_dates[:10]]}"
-                logger.warning(missing_msg)
-                if DEBUG_CURRENT_YEAR_FAILURES:
-                    print(missing_msg)
 
         if missing_dates:
             _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year)
 
             if not coverage_ok:
-                if year == current_year_now:
-                    fetch_msg = f"🔍 CURRENT YEAR [{year}]: Coverage below threshold, fetching from Visual Crossing API..."
-                    logger.warning(fetch_msg)
-                    if DEBUG_CURRENT_YEAR_FAILURES:
-                        print(fetch_msg)
-
                 for range_start, range_end in _collapse_consecutive_dates(missing_dates):
                     timeline_metadata = None
-                    if year == current_year_now:
-                        logger.warning(
-                            f"🔍 CURRENT YEAR [{year}]: Fetching timeline {range_start.strftime('%Y-%m-%d')} to {range_end.strftime('%Y-%m-%d')}"
-                        )
                     try:
                         timeline_days, timeline_metadata = await fetch_timeline_days(
                             location, range_start, range_end
                         )
-                        if year == current_year_now:
-                            logger.warning(
-                                f"🔍 CURRENT YEAR [{year}]: Timeline fetch succeeded, got {len(timeline_days)} days"
-                            )
                     except Exception as exc:
                         error_detail = (
                             f"❌ timeline fetch failed for {location} "
                             f"({range_start.strftime('%Y-%m-%d')} to {range_end.strftime('%Y-%m-%d')}): {exc}"
                         )
                         logger.error(error_detail)
-
-                        if year == current_year_now:
-                            full_error_msg = (
-                                f"❌ CURRENT YEAR [{year}] TIMELINE FETCH FAILED FOR {location.upper()}!\n\n"
-                                f"Period: {period}\n"
-                                f"Requested Range: {range_start.strftime('%Y-%m-%d')} to {range_end.strftime('%Y-%m-%d')}\n"
-                                f"Error: {type(exc).__name__}: {str(exc)}\n"
-                                f"Initial Missing Days: {len(missing_dates)}\n"
-                                f"Initial Coverage: {((expected_days - len(missing_dates))/expected_days)*100:.1f}%\n\n"
-                                f"This Visual Crossing API failure is preventing current year data from being included.\n"
-                                f"Check: API key validity, rate limits, network connectivity, location name."
-                            )
-                            logger.error(full_error_msg)
-
-                            if DEBUG_CURRENT_YEAR_FAILURES:
-                                raise HTTPException(
-                                    status_code=500,
-                                    detail=full_error_msg.replace('\n', ' | ')
-                                )
-
                         track_missing_year(missing_years, year, "timeline_error")
                         timeline_failed = True
                         break
@@ -408,16 +346,7 @@ async def _collect_rolling_window_values(
                 else:
                     final_missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
                     available_count = expected_days - len(final_missing_dates)
-                    coverage_ok, coverage_ratio_after = _evaluate_coverage(period, available_count, expected_days, year=year)
-
-                    if year == current_year_now:
-                        logger.warning(
-                            f"🔍 CURRENT YEAR [{year}]: After timeline fetch - "
-                            f"Available: {available_count}/{expected_days} days | "
-                            f"Missing: {len(final_missing_dates)} | "
-                            f"Coverage: {coverage_ratio_after:.1%} | "
-                            f"Coverage OK: {coverage_ok}"
-                        )
+                    coverage_ok, _ = _evaluate_coverage(period, available_count, expected_days, year=year)
             else:
                 final_missing_dates = missing_dates
         else:
@@ -427,35 +356,11 @@ async def _collect_rolling_window_values(
         if final_missing_dates and not coverage_ok:
             if year == current_year_now:
                 available_days = expected_days - len(final_missing_dates)
-                required_threshold = COVERAGE_TOLERANCE.get(period, {})
-
-                error_msg = (
-                    f"❌ CURRENT YEAR [{year}] SKIPPED FOR {location.upper()}!\n\n"
-                    f"Period: {period}\n"
-                    f"Anchor Date: {anchor.strftime('%Y-%m-%d')}\n"
-                    f"Date Range: {start_date.strftime('%Y-%m-%d')} to {date_sequence[-1].strftime('%Y-%m-%d')}\n"
-                    f"Expected Days: {expected_days}\n"
-                    f"Available Days: {available_days}\n"
-                    f"Missing Days: {len(final_missing_dates)}\n"
-                    f"Coverage: {(available_days/expected_days)*100:.1f}%\n"
-                    f"Required: {required_threshold.get('min_ratio', 1.0)*100:.0f}% ({required_threshold.get('min_days', expected_days)} days)\n"
-                    f"Timeline Failed: {timeline_failed}\n"
+                logger.warning(
+                    f"Current year [{year}] skipped for {location}: "
+                    f"Coverage {available_days}/{expected_days} days ({(available_days/expected_days)*100:.1f}%) "
+                    f"below threshold"
                 )
-
-                if len(final_missing_dates) <= 30:
-                    missing_dates_str = ', '.join([d.strftime('%Y-%m-%d') for d in sorted(final_missing_dates)])
-                    error_msg += f"\nMissing Dates:\n{missing_dates_str}\n"
-                else:
-                    missing_dates_str = ', '.join([d.strftime('%Y-%m-%d') for d in sorted(final_missing_dates)[:30]])
-                    error_msg += f"\nMissing Dates (first 30):\n{missing_dates_str}\n... and {len(final_missing_dates)-30} more\n"
-
-                logger.error(error_msg)
-
-                if DEBUG_CURRENT_YEAR_FAILURES:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=error_msg.replace('\n', ' | ')
-                    )
 
             track_missing_year(missing_years, year, "coverage_below_threshold")
             continue
@@ -481,13 +386,10 @@ async def _collect_rolling_window_values(
         )
 
         if year == current_year_now:
-            success_msg = (
-                f"✅ CURRENT YEAR [{year}] INCLUDED: {len(temps_converted)}/{expected_days} days | "
-                f"Average temp: {round(avg_temp, 1)}°C"
+            logger.info(
+                f"Current year [{year}] included for {location}: "
+                f"{len(temps_converted)}/{expected_days} days"
             )
-            logger.warning(success_msg)
-            if DEBUG_CURRENT_YEAR_FAILURES:
-                print(success_msg)
 
         coverage_details.append(
             {
@@ -1263,12 +1165,11 @@ async def get_record(
                     )
 
                 if current_year_missing:
-                    # Don't cache incomplete data
-                    if DEBUG or DEBUG_CURRENT_YEAR_FAILURES:
-                        logger.warning(
-                            f"⚠️  NOT CACHING: Current year {current_year} is missing from {location} {period}/{identifier}"
+                    # Don't cache incomplete data - prevents serving stale responses missing current year
+                    if DEBUG:
+                        logger.debug(
+                            f"Not caching: Current year {current_year} is missing from {location} {period}/{identifier}"
                         )
-                        print(f"⚠️  NOT CACHING: Current year {current_year} is missing from response")
                     bundle_etag_computed = None  # Skip ETag to prevent 304 responses
                 else:
                     # Assemble bundle with ETag only if current year is present
