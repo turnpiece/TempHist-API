@@ -1000,10 +1000,34 @@ async def request_id_middleware(request: Request, call_next):
     import uuid
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
-    
+
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
-    
+
+    return response
+
+@app.middleware("http")
+async def performance_timing_middleware(request: Request, call_next):
+    """Add X-Response-Time header and log slow requests for performance monitoring."""
+    start_time = time.perf_counter()
+
+    # Process request
+    response = await call_next(request)
+
+    # Calculate total time in milliseconds
+    total_time_ms = (time.perf_counter() - start_time) * 1000
+
+    # Add header with response time in milliseconds
+    response.headers["X-Response-Time"] = f"{total_time_ms:.2f}ms"
+
+    # Log slow requests (>1000ms)
+    if total_time_ms > 1000:
+        client_ip = get_client_ip(request)
+        logger.warning(
+            f"⚠️  SLOW REQUEST: {request.method} {request.url.path} "
+            f"took {total_time_ms:.0f}ms | IP={client_ip}"
+        )
+
     return response
 
 @app.middleware("http")

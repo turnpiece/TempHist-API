@@ -123,6 +123,28 @@ max_size=20  # Increase if seeing "pool is full" errors
 
 ---
 
+## 5. ✅ Performance Timing Middleware
+
+**File**: `main.py:1009-1031`
+
+**Change**: Added middleware to track and log request performance
+
+**Features**:
+- Adds `X-Response-Time` header to all responses (in milliseconds)
+- Logs slow requests (>1000ms) with warning level
+- Uses `time.perf_counter()` for high-precision timing
+- Tracks end-to-end request time including all middleware
+
+**Example Headers**:
+```
+X-Response-Time: 245.32ms
+X-Request-ID: f47ac10b-58cc-4372-a567-0e02b2c3d479
+```
+
+**Expected Impact**: Visibility into performance issues, easy identification of slow endpoints
+
+---
+
 ## Additional Recommendations (Not Yet Implemented)
 
 ### Medium Impact:
@@ -131,24 +153,7 @@ max_size=20  # Increase if seeing "pool is full" errors
 3. **Request timeout** configuration for Visual Crossing API
 
 ### Low Impact:
-4. **Performance logging middleware** to identify bottlenecks
-5. **Partial indexes** for current year queries
-
-### To Profile:
-Use the timing middleware to identify actual bottlenecks in production:
-```python
-@app.middleware("http")
-async def performance_logging_middleware(request: Request, call_next):
-    start = time.perf_counter()
-    response = await call_next(request)
-    total_time = time.perf_counter() - start
-
-    if total_time > 1.0:
-        logger.warning(f"SLOW REQUEST: {request.method} {request.url.path} took {total_time:.2f}s")
-
-    response.headers["X-Response-Time"] = f"{total_time:.3f}"
-    return response
-```
+4. **Partial indexes** for current year queries
 
 ---
 
@@ -164,6 +169,15 @@ psql $DATABASE_URL -c "\di"
 
 # Test query performance
 psql $DATABASE_URL -c "EXPLAIN ANALYZE SELECT * FROM daily_temperatures WHERE location_id = 1 AND day = ANY(ARRAY['2024-01-01'::date, '2024-01-02'::date]);"
+```
+
+### Test Response Times:
+```bash
+# Check X-Response-Time header
+curl -i "http://localhost:8000/api/v1/records/daily/london/01-15" 2>&1 | grep "X-Response-Time"
+
+# Full timing breakdown
+curl -w "\nTotal: %{time_total}s\n" -s -D - "http://localhost:8000/api/v1/records/daily/london/01-15" | grep -E "(X-Response-Time|Total)"
 ```
 
 ### Load Testing:
