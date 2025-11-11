@@ -296,6 +296,25 @@ class DailyTemperatureStore:
                 ON daily_temperatures (location_id, day)
                 """
             )
+
+            # Drop old indexes with non-immutable predicates (if they exist)
+            await conn.execute("DROP INDEX IF EXISTS idx_daily_temperatures_current_year")
+
+            # Partial indexes for optimized recent data queries
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
+                ON daily_temperatures (location_id, day)
+                WHERE day >= '2020-01-01'::date
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
+                ON daily_temperatures (location_id, day DESC)
+                WHERE day >= '2020-01-01'::date
+                """
+            )
             return
 
         logger.info("Migrating legacy daily_temperatures schema to use location_id.")
@@ -326,6 +345,30 @@ class DailyTemperatureStore:
             """
             CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
             ON daily_temperatures (location_id, day)
+            """
+        )
+
+        # Drop old indexes with non-immutable predicates (if they exist)
+        await conn.execute("DROP INDEX IF EXISTS idx_daily_temperatures_current_year")
+
+        # Partial index for recent queries (2020 onwards)
+        # This smaller index improves performance for recent data lookups
+        # Using fixed year instead of CURRENT_DATE to satisfy IMMUTABLE requirement
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
+            ON daily_temperatures (location_id, day)
+            WHERE day >= '2020-01-01'::date
+            """
+        )
+
+        # Index with descending order for recent data queries
+        # Optimizes queries that fetch latest data first
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
+            ON daily_temperatures (location_id, day DESC)
+            WHERE day >= '2020-01-01'::date
             """
         )
 

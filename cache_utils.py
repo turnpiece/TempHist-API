@@ -58,11 +58,41 @@ CACHE_TTL_JOB = validate_ttl(int(os.getenv("CACHE_TTL_JOB", "7200")), "CACHE_TTL
 
 # Year-based caching TTL constants
 TTL_STABLE = validate_ttl(int(os.getenv("TTL_STABLE", "7776000")), "TTL_STABLE", 7776000)  # 90 days for past years
+TTL_HISTORICAL = validate_ttl(int(os.getenv("TTL_HISTORICAL", "31536000")), "TTL_HISTORICAL", 31536000)  # 365 days for very old data (7+ years)
 TTL_CURRENT_DAILY = validate_ttl(int(os.getenv("TTL_CURRENT_DAILY", "7200")), "TTL_CURRENT_DAILY", 7200)  # 2 hours for current year daily
 TTL_CURRENT_WEEKLY = validate_ttl(int(os.getenv("TTL_CURRENT_WEEKLY", "14400")), "TTL_CURRENT_WEEKLY", 14400)  # 4 hours for current year weekly
 TTL_CURRENT_MONTHLY = validate_ttl(int(os.getenv("TTL_CURRENT_MONTHLY", "43200")), "TTL_CURRENT_MONTHLY", 43200)  # 12 hours for current year monthly
 TTL_CURRENT_YEARLY = validate_ttl(int(os.getenv("TTL_CURRENT_YEARLY", "86400")), "TTL_CURRENT_YEARLY", 86400)  # 24 hours for current year yearly
 TTL_BUNDLE = validate_ttl(int(os.getenv("TTL_BUNDLE", "900")), "TTL_BUNDLE", 900)  # 15 minutes for assembled bundle
+
+def get_ttl_for_year(year: int) -> int:
+    """
+    Get appropriate cache TTL based on how old the data is.
+
+    Args:
+        year: The year of the data
+
+    Returns:
+        TTL in seconds
+
+    Strategy:
+        - Historical data (7+ years old): 365 days (won't change)
+        - Stable data (past years < 7 years): 90 days (rarely changes)
+        - Current year: Determined by period-specific logic elsewhere
+    """
+    from datetime import datetime
+    current_year = datetime.now().year
+    age = current_year - year
+
+    if age >= 7:
+        # Very old historical data - cache for 1 year
+        return TTL_HISTORICAL
+    elif age > 0:
+        # Recent past years - cache for 90 days
+        return TTL_STABLE
+    else:
+        # Current year - use period-specific logic (handled by caller)
+        return TTL_STABLE
 
 # Coordinate precision for cache key normalization
 COORD_PRECISION = 4  # 4 decimal places (~11m precision)
@@ -517,7 +547,120 @@ class EnhancedCache:
             self.errors += 1
             logger.error(f"JSON encoding error for cache key {key}: {encode_error}")
             raise
-    
+
+    async def mset(
+        self,
+        items: List[Tuple[str, Any, int, Optional[str]]],
+    ) -> List[str]:
+        """
+        Set multiple cache values using Redis pipeline for better performance.
+
+        Args:
+            items: List of tuples (key, data, ttl, optional_etag)
+
+        Returns:
+            List of ETags for each item
+        """
+        if not items:
+            return []
+
+        try:
+            pipeline = self.redis.pipeline()
+            etags = []
+            last_modified = datetime.now(timezone.utc)
+
+            for key, data, ttl, etag in items:
+                cache_key = self._get_cache_key(key)
+                etag_key = self._get_etag_key(key)
+
+                if etag is None:
+                    etag = ETagGenerator.generate_etag(data)
+                etags.append(etag)
+
+                # Add operations to pipeline
+                json_data = json.dumps(data, sort_keys=True, separators=(',', ':'))
+                pipeline.setex(cache_key, ttl, json_data)
+                pipeline.setex(etag_key, ttl, etag)
+                pipeline.hset(cache_key, mapping={
+                    "timestamp": last_modified.isoformat(),
+                    "ttl": ttl,
+                    "size": len(json_data)
+                })
+                pipeline.expire(cache_key, ttl)
+
+            # Execute all operations in a single round trip
+            pipeline.execute()
+            return etags
+
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
+            self.errors += len(items)
+            logger.error(f"Redis error in batch set: {redis_error}")
+            raise
+        except (json.JSONEncodeError, TypeError) as encode_error:
+            self.errors += len(items)
+            logger.error(f"JSON encoding error in batch set: {encode_error}")
+            raise
+
+    async def mget(self, keys: List[str]) -> Dict[str, Optional[Tuple[Any, str, datetime]]]:
+        """
+        Get multiple cache values using Redis pipeline for better performance.
+
+        Args:
+            keys: List of cache keys to fetch
+
+        Returns:
+            Dictionary mapping keys to (data, etag, last_modified) tuples or None if not found
+        """
+        if not keys:
+            return {}
+
+        try:
+            pipeline = self.redis.pipeline()
+
+            # Build pipeline for all gets
+            for key in keys:
+                cache_key = self._get_cache_key(key)
+                etag_key = self._get_etag_key(key)
+
+                pipeline.get(cache_key)
+                pipeline.get(etag_key)
+                pipeline.hget(cache_key, "timestamp")
+
+            # Execute all operations in a single round trip
+            results = pipeline.execute()
+
+            # Parse results (every 3 results = data, etag, timestamp for one key)
+            parsed_results = {}
+            for i, key in enumerate(keys):
+                idx = i * 3
+                cached_data = results[idx]
+                cached_etag = results[idx + 1]
+                cached_timestamp = results[idx + 2]
+
+                if cached_data and cached_etag and cached_timestamp:
+                    try:
+                        data = json.loads(cached_data)
+                        etag = cached_etag.decode() if isinstance(cached_etag, bytes) else cached_etag
+                        last_modified = datetime.fromisoformat(
+                            cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp
+                        )
+                        parsed_results[key] = (data, etag, last_modified)
+                        self.hits += 1
+                    except (json.JSONDecodeError, ValueError) as parse_error:
+                        logger.warning(f"Parse error for key {key}: {parse_error}")
+                        parsed_results[key] = None
+                        self.errors += 1
+                else:
+                    parsed_results[key] = None
+                    self.misses += 1
+
+            return parsed_results
+
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
+            self.errors += len(keys)
+            logger.error(f"Redis error in batch get: {redis_error}")
+            return {key: None for key in keys}
+
     async def get_or_compute(
         self,
         key: str,

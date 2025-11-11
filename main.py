@@ -929,6 +929,7 @@ if DEBUG:
 HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
 HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks
 HTTP_TIMEOUT_LONG = 120.0    # Long timeout for large data requests
+HTTP_TIMEOUT_VISUAL_CROSSING = float(os.getenv("HTTP_TIMEOUT_VISUAL_CROSSING", "30.0"))  # Visual Crossing API timeout
 
 HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
@@ -2154,7 +2155,7 @@ async def get_forecast_data(location: str, date) -> Dict:
         logger.error(f"❌ Error building URL for location '{location}': {url_error}")
         raise
     
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_VISUAL_CROSSING) as client:
         response = await client.get(url, headers={"Accept-Encoding": "gzip"})
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         data = response.json()

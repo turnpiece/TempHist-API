@@ -280,7 +280,7 @@ class JobWorker:
         from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year
         from cache_utils import (
             normalize_location_for_cache, rec_key, rec_etag_key,
-            TTL_STABLE, ETagGenerator
+            get_ttl_for_year, ETagGenerator
         )
         from fastapi import HTTPException
         
@@ -316,9 +316,9 @@ class JobWorker:
             # Get the specific year's record
             year_record = per_year_records[year]
             
-            # Determine TTL
+            # Determine TTL based on data age
             if year < current_year:
-                ttl = TTL_STABLE
+                ttl = get_ttl_for_year(year)
             else:
                 ttl = _get_ttl_for_current_year(scope)
             
@@ -357,26 +357,35 @@ class JobWorker:
             except HTTPException as http_err:
                 raise ValueError(f"{http_err.detail}") from http_err
             
-            # Extract and store all per-year records
+            # Extract and store all per-year records using Redis pipeline for better performance
             per_year_records = _extract_per_year_records(data)
-            for y, record_data in per_year_records.items():
-                year_key = rec_key(scope, slug, identifier, y)
-                etag_key = rec_etag_key(scope, slug, identifier, y)
-                
-                if y < current_year:
-                    ttl = TTL_STABLE
-                else:
-                    ttl = _get_ttl_for_current_year(scope)
-                
-                etag = ETagGenerator.generate_etag(record_data)
-                
-                try:
+
+            try:
+                # Use pipeline to batch all cache operations
+                pipeline = self.redis.pipeline()
+
+                for y, record_data in per_year_records.items():
+                    year_key = rec_key(scope, slug, identifier, y)
+                    etag_key = rec_etag_key(scope, slug, identifier, y)
+
+                    if y < current_year:
+                        ttl = get_ttl_for_year(y)
+                    else:
+                        ttl = _get_ttl_for_current_year(scope)
+
+                    etag = ETagGenerator.generate_etag(record_data)
                     json_data = json.dumps(record_data, sort_keys=True, separators=(',', ':'))
-                    self.redis.setex(year_key, ttl, json_data)
-                    self.redis.setex(etag_key, ttl, etag)
-                except (redis.RedisError, json.JSONEncodeError, TypeError) as e:
-                    logger.warning(f"Error caching year {y}: {type(e).__name__}: {e}")
-                    # Continue with other years despite error
+
+                    # Add to pipeline instead of executing immediately
+                    pipeline.setex(year_key, ttl, json_data)
+                    pipeline.setex(etag_key, ttl, etag)
+
+                # Execute all operations in a single round trip
+                pipeline.execute()
+                logger.info(f"✅ Cached {len(per_year_records)} years using pipeline")
+
+            except (redis.RedisError, json.JSONEncodeError, TypeError) as e:
+                logger.warning(f"Error caching years with pipeline: {type(e).__name__}: {e}")
             
             # Return summary
             return {

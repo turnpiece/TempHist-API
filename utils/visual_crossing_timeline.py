@@ -16,6 +16,9 @@ from typing import Optional
 
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 
+# Visual Crossing API timeout configuration
+VC_TIMEOUT = float(os.getenv("HTTP_TIMEOUT_VISUAL_CROSSING", "30.0"))
+
 _client: Optional[aiohttp.ClientSession] = None
 _client_lock = asyncio.Lock()
 _sem = asyncio.Semaphore(2)
@@ -29,7 +32,12 @@ async def _get_client() -> aiohttp.ClientSession:
         return _client
     async with _client_lock:
         if _client is None or _client.closed:
-            timeout = aiohttp.ClientTimeout(total=120, connect=30, sock_read=90)
+            # Use configurable timeout for Visual Crossing API
+            timeout = aiohttp.ClientTimeout(
+                total=VC_TIMEOUT,
+                connect=min(10, VC_TIMEOUT / 3),  # Connect timeout is 1/3 of total, max 10s
+                sock_read=min(VC_TIMEOUT - 5, VC_TIMEOUT * 0.8)  # Read timeout slightly less than total
+            )
             _client = aiohttp.ClientSession(timeout=timeout)
         return _client
 

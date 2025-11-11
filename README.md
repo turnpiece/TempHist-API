@@ -1066,6 +1066,17 @@ cProfile.run('calculate_historical_average([{\"x\": 2020, \"y\": 15.5}])')
 - **Trend Calculation**: ~23K operations/second
 - **Memory Usage**: Minimal impact
 
+### Key Performance Optimizations
+
+- **PostgreSQL Pool Tuning** (`utils/daily_temperature_store.py`): raises `min_size`/`max_size`, adds timeouts, and recycles idle connections for faster, more reliable queries.
+- **Targeted Date Queries** (`utils/daily_temperature_store.py`): switches `BETWEEN` scans to `= ANY($2::date[])`, improving index usage when fetching sparse days.
+- **Database Index Suite** (`utils/daily_temperature_store.py`): adds indexes for location aliases, coordinate lookups, and current-year slices to keep hot data efficient.
+- **Geospatial Prefiltering** (`utils/daily_temperature_store.py`): applies latitude/longitude bounding boxes before haversine checks, shrinking candidate sets for nearby-location matching.
+- **Response-Timing Middleware** (`main.py`): emits `X-Response-Time` headers and logs requests slower than 1 s to surface bottlenecks early.
+- **Redis Pipelining** (`cache_utils.py`, `job_worker.py`): batches multi-year cache writes/reads to cut network round trips and latency.
+- **Tiered Cache TTLs** (`cache_utils.py`, `job_worker.py`): extends TTL for older years (up to 365 days) while keeping recent data fresh.
+- **Visual Crossing Timeout Control** (`main.py`, `config.py`, `utils/visual_crossing_timeline.py`): separates `HTTP_TIMEOUT_VISUAL_CROSSING` (default 30 s) so slow upstream calls fail fast.
+
 ### Monitoring Tools
 
 - **Real-time logs**: `tail -f temphist.log`

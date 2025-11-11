@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from config import (
     CACHE_ENABLED, FILTER_WEATHER_DATA, SHORT_CACHE_DURATION_SECONDS,
     LONG_CACHE_DURATION_SECONDS, SHORT_CACHE_DURATION, LONG_CACHE_DURATION,
-    HTTP_TIMEOUT, DEBUG, MAX_CONCURRENT_REQUESTS
+    HTTP_TIMEOUT, HTTP_TIMEOUT_VISUAL_CROSSING, DEBUG, MAX_CONCURRENT_REQUESTS
 )
 from cache_utils import (
     get_cache_value, set_cache_value, get_weather_cache_key, generate_cache_key,
@@ -190,7 +190,7 @@ async def get_forecast_data(location: str, date, redis_client: redis.Redis = Non
         logger.error(f"❌ Error building URL for location '{location}': {url_error}")
         raise
     
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_VISUAL_CROSSING) as client:
         response = await client.get(url, headers={"Accept-Encoding": "gzip"})
     if response.status_code == 200 and 'application/json' in response.headers.get('Content-Type', ''):
         data = response.json()

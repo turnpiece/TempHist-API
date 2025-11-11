@@ -53,6 +53,7 @@ USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
 HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
 HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks
 HTTP_TIMEOUT_LONG = 120.0    # Long timeout for large data requests
+HTTP_TIMEOUT_VISUAL_CROSSING = float(os.getenv("HTTP_TIMEOUT_VISUAL_CROSSING", "30.0"))  # Visual Crossing API timeout
 HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection
 
