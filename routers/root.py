@@ -27,6 +27,10 @@ async def root():
                 "/v1/records/{period}/{location}/{identifier}/updated"
             ],
             "periods": ["daily", "weekly", "monthly", "yearly"],
+            "locations": [
+                "/v1/locations/preapproved",
+                "/v1/locations/preapproved/status"
+            ],
             "examples": [
                 "/v1/records/daily/london/01-15",
                 "/v1/records/weekly/london/01-15",
