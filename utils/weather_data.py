@@ -264,7 +264,7 @@ async def get_temperature_series(
     redis_client: redis.Redis
 ) -> Dict:
     """Get temperature series data for a location and date over multiple years."""
-    from utils.weather import get_year_range, track_missing_year, create_metadata, is_today
+    from utils.weather import get_year_range, track_missing_year, create_metadata
     
     # Check for cached series first
     series_cache_key = generate_cache_key("series", location, f"{month:02d}_{day:02d}")
@@ -295,23 +295,8 @@ async def get_temperature_series(
         date_str = f"{year}-{month:02d}-{day:02d}"
         cache_key = generate_cache_key("weather", location, date_str)
         year_to_date_str[year] = date_str
-        # If this is today's date, use the forecast data
-        if year == current_year and month == today.month and day == today.day:
-            logger.debug("get_temperature_series forecast for today")
-            try:
-                forecast_data = await get_forecast_data(location, datetime(year, month, day).date(), redis_client)
-                logger.debug(f"Got forecast data {forecast_data}")
-                if "error" in forecast_data:
-                    logger.warning(f"Forecast error: {forecast_data['error']}")
-                    track_missing_year(missing_years, year, "forecast_error")
-                else:
-                    data.append({"x": year, "y": forecast_data["average_temperature"]})
-                continue
-            except Exception as e:
-                logger.error(f"Error fetching forecast: {str(e)}")
-                track_missing_year(missing_years, year, "forecast_failed")
-                continue
-        # Use historical data for all other dates
+
+        # Check cache for all dates (Visual Crossing API works the same for past/present/future)
         if CACHE_ENABLED:
             cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
             if cached_data:
@@ -353,7 +338,15 @@ async def get_temperature_series(
                         # Cache the result if caching is enabled
                         if CACHE_ENABLED:
                             cache_key = generate_cache_key("weather", location, date_str)
-                            cache_duration = SHORT_CACHE_DURATION if is_today(year, month, day) else LONG_CACHE_DURATION
+                            # Determine cache duration based on how recent/future the date is
+                            target_date = datetime(year, month, day).date()
+                            days_diff = (target_date - today.date()).days
+                            # Use short cache for today, future dates, and recent past (last 7 days)
+                            # These may be forecasts or recently updated data
+                            if -7 <= days_diff <= 365:  # Last 7 days or future dates
+                                cache_duration = SHORT_CACHE_DURATION
+                            else:  # Historical data (8+ days old)
+                                cache_duration = LONG_CACHE_DURATION
                             set_cache_value(cache_key, cache_duration, json.dumps(weather), redis_client)
                     else:
                         logger.debug(f"Temperature is None for {year}, marking as missing.")

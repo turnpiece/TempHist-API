@@ -37,7 +37,7 @@ _preapproved_locations_cache: Optional[List[Dict[str, Any]]] = None
 def validate_ttl(ttl: int, name: str, default: int) -> int:
     """Validate cache TTL value with min/max bounds."""
     MIN_TTL = 60  # 1 minute minimum
-    MAX_TTL = 7776000  # 90 days maximum (allows for stable historical data caching)
+    MAX_TTL = 31536000  # 365 days maximum (allows for very old historical data caching)
     
     if not isinstance(ttl, int):
         logger.warning(f"{name} TTL is not integer, using default {default}s")
