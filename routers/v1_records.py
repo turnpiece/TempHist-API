@@ -259,9 +259,14 @@ async def _collect_rolling_window_values(
     missing_years: List[Dict] = []
     coverage_details: List[Dict] = []
     window_days = WINDOW_DAYS[period]
+    current_year_now = datetime.now().year
+
+    # First pass: collect all unique dates needed across all years
+    # This allows us to fetch all data in a single database query instead of 51 separate queries
+    all_dates_needed: set[date] = set()
+    year_to_date_sequence: Dict[int, List[date]] = {}
 
     for year in years:
-        current_year_now = datetime.now().year
         anchor = _resolve_anchor_date(year, month, day)
         if anchor is None:
             track_missing_year(missing_years, year, "invalid_anchor_date")
@@ -269,7 +274,25 @@ async def _collect_rolling_window_values(
 
         start_date = anchor - timedelta(days=window_days - 1)
         date_sequence = [start_date + timedelta(days=i) for i in range(window_days)]
-        cache = await store.fetch(location, date_sequence)
+        year_to_date_sequence[year] = date_sequence
+        all_dates_needed.update(date_sequence)
+
+    # Single database fetch for ALL dates across ALL years (huge performance improvement!)
+    # This reduces ~51 database calls to just 1 by fetching all unique dates at once
+    if all_dates_needed:
+        logger.info(
+            f"Fetching {len(all_dates_needed)} unique dates for {location} "
+            f"across {len(year_to_date_sequence)} years in single query"
+        )
+    cache = await store.fetch(location, list(all_dates_needed))
+
+    # Second pass: process each year using the cached data
+    for year in years:
+        if year not in year_to_date_sequence:
+            continue  # Already tracked as missing in first pass
+
+        date_sequence = year_to_date_sequence[year]
+        anchor = _resolve_anchor_date(year, month, day)
 
         expected_days = len(date_sequence)
         missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]

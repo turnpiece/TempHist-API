@@ -572,9 +572,7 @@ class DailyTemperatureStore:
 
         logger.debug("Fetch cached records for a location and list of dates")
         try:
-            logger.debug("Acquiring connection from pool")
             async with pool.acquire() as conn:
-                logger.debug("Connection acquired; fetching id for %s", normalized_location)
                 # Resolve location_id through aliases first, then direct lookup
                 location_row = await conn.fetchrow(
                     """
@@ -610,7 +608,6 @@ class DailyTemperatureStore:
                         len(rows),
                         location,
                     )
-            logger.debug("Connection released")
         except Exception as exc:
             if isinstance(exc, asyncpg.PostgresError):
                 logger.error(
