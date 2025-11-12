@@ -13,7 +13,7 @@ import firebase_admin
 import redis
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from firebase_admin import auth, credentials
@@ -2203,6 +2203,47 @@ async def fetch_weather_batch(location: str, date_strs: list, redis_client: redi
         date_str, result = await fut
         results[date_str] = result
     return results
+
+
+@app.post("/admin/clear-job-queue")
+async def admin_clear_job_queue(
+    admin_key: str = Header(None, alias="X-Admin-Key")
+):
+    """
+    Admin endpoint to clear the job queue.
+    Requires X-Admin-Key header matching ADMIN_API_KEY environment variable.
+    """
+    expected_key = os.getenv("ADMIN_API_KEY")
+
+    if not expected_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin API not configured (ADMIN_API_KEY not set)"
+        )
+
+    if admin_key != expected_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin key"
+        )
+
+    try:
+        from admin_clear_queue import clear_job_queue
+        result = clear_job_queue()
+
+        return {
+            "status": result["status"],
+            "message": result["message"],
+            "jobs_cleared": result.get("jobs_cleared", 0),
+            "remaining_jobs": result.get("remaining_jobs", 0),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error clearing job queue: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error clearing job queue: {str(e)}"
+        )
 
 
 # For local testing
