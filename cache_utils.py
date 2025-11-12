@@ -1781,11 +1781,33 @@ class JobManager:
         self.job_ttl = CACHE_TTL_JOB
     
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
-        """Create a new job and return job ID."""
+        """
+        Create a new job and return job ID.
+        Implements deduplication - if an identical job is already pending or processing, returns existing job_id.
+        """
         try:
-            job_id = f"{job_type}_{int(time.time() * 1000)}_{hashlib.sha256(str(params).encode()).hexdigest()[:8]}"
+            # Generate deterministic job ID based on params (without timestamp for deduplication)
+            params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
+            dedup_key = f"job:dedup:{job_type}:{params_hash}"
+
+            # Check if identical job already exists
+            existing_job_id = self.redis.get(dedup_key)
+            if existing_job_id:
+                existing_job_id = existing_job_id.decode() if isinstance(existing_job_id, bytes) else existing_job_id
+                # Verify the job still exists and is pending/processing
+                job_key = f"{self.job_prefix}{existing_job_id}"
+                job_data = self.redis.get(job_key)
+                if job_data:
+                    job = json.loads(job_data)
+                    status = job.get("status")
+                    if status in [JobStatus.PENDING, JobStatus.PROCESSING]:
+                        logger.info(f"Deduplicated job {existing_job_id}: identical job already {status}")
+                        return existing_job_id
+
+            # Create new job with timestamp for uniqueness
+            job_id = f"{job_type}_{int(time.time() * 1000)}_{params_hash[:8]}"
             job_key = f"{self.job_prefix}{job_id}"
-            
+
             job_data = {
                 "id": job_id,
                 "type": job_type,
@@ -1794,19 +1816,22 @@ class JobManager:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
-            
+
             logger.info(f"Creating job with ID: {job_id}")
             logger.info(f"Job params: {params}")
-            
+
             # Store job data
             self.redis.setex(job_key, self.job_ttl, json.dumps(job_data))
             logger.info(f"Job data stored in Redis with key: {job_key}")
-            
+
+            # Store deduplication key (expires after 5 minutes)
+            self.redis.setex(dedup_key, 300, job_id)
+
             # Add job to queue for worker processing
             job_queue_key = "job_queue"
             self.redis.lpush(job_queue_key, job_id)
             logger.info(f"Job {job_id} added to queue")
-            
+
             return job_id
         except Exception as e:
             logger.error(f"Error in create_job: {e}")
@@ -1837,26 +1862,35 @@ class JobManager:
         """Update job status and optionally store result."""
         job_key = f"{self.job_prefix}{job_id}"
         job_data = self.redis.get(job_key)
-        
+
         if not job_data:
             return
-        
+
         job = json.loads(job_data)
         job["status"] = status
         job["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         if error:
             job["error"] = error
-        
+
         if error_details:
             job["error_details"] = error_details
-        
+
         self.redis.setex(job_key, self.job_ttl, json.dumps(job))
-        
+
         # Store result if provided
         if result is not None:
             result_key = f"{self.result_prefix}{job_id}"
             self.redis.setex(result_key, self.job_ttl, json.dumps(result))
+
+        # Clean up deduplication key when job completes (READY or ERROR status)
+        if status in [JobStatus.READY, JobStatus.ERROR]:
+            job_type = job.get("type")
+            params = job.get("params")
+            if job_type and params:
+                params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
+                dedup_key = f"job:dedup:{job_type}:{params_hash}"
+                self.redis.delete(dedup_key)
     
     def cleanup_expired_jobs(self) -> int:
         """Clean up expired jobs (Redis TTL should handle this automatically)."""
