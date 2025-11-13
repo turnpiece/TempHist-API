@@ -1193,7 +1193,7 @@ async def verify_token_middleware(request: Request, call_next):
     # Public paths that don't require a token or rate limiting
     # Note: Stats endpoints removed - they require authentication (HIGH-012)
     public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", "/rate-limit-status", "/analytics", "/health", "/health/detailed", "/v1/jobs/diagnostics/worker-status"]
-    if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
+    if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics", "/data"]):
         if DEBUG:
             logger.debug(f"[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
