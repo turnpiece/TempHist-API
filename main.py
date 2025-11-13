@@ -850,15 +850,6 @@ app = FastAPI(lifespan=lifespan)
 # Register exception handlers from exceptions module
 register_exception_handlers(app)
 
-# Mount static files for location images
-# Must be done before including routers to avoid route conflicts
-data_dir = Path(__file__).resolve().parent / "data"
-if data_dir.exists():
-    app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
-    logger.info(f"📁 Mounted static files from {data_dir}")
-else:
-    logger.warning(f"⚠️  Data directory not found at {data_dir}")
-
 # Include all routers
 app.include_router(root_router)
 app.include_router(health_router)
@@ -871,6 +862,15 @@ app.include_router(jobs_router)
 app.include_router(legacy_router)
 app.include_router(stats_router)
 app.include_router(analytics_router)
+
+# Mount static files for location images
+# Must be done AFTER including routers so router paths take precedence
+data_dir = Path(__file__).resolve().parent / "data"
+if data_dir.exists():
+    app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
+    logger.info(f"📁 Mounted static files from {data_dir}")
+else:
+    logger.warning(f"⚠️  Data directory not found at {data_dir}")
 
 # Initialize Redis with security validation
 def create_redis_client(url: str):
