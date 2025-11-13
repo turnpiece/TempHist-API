@@ -28,7 +28,8 @@ from routers.locations_preapproved import (
     validate_country_code,
     validate_limit,
     generate_etag,
-    filter_locations
+    filter_locations,
+    convert_image_urls
 )
 
 # Test data
@@ -43,7 +44,12 @@ SAMPLE_LOCATIONS = [
         "latitude": 51.5074,
         "longitude": -0.1278,
         "timezone": "Europe/London",
-        "tier": "global"
+        "tier": "global",
+        "imageUrl": {
+            "webp": "http://localhost:8000/data/locations/processed/london.webp",
+            "jpeg": "http://localhost:8000/data/locations/processed/london.jpg"
+        },
+        "imageAlt": "London Eye and Thames river"
     },
     {
         "id": "new_york",
@@ -55,7 +61,12 @@ SAMPLE_LOCATIONS = [
         "latitude": 40.7128,
         "longitude": -74.0060,
         "timezone": "America/New_York",
-        "tier": "global"
+        "tier": "global",
+        "imageUrl": {
+            "webp": "http://localhost:8000/data/locations/processed/new-york.webp",
+            "jpeg": "http://localhost:8000/data/locations/processed/new-york.jpg"
+        },
+        "imageAlt": "New York skyline"
     },
     {
         "id": "paris",
@@ -67,7 +78,12 @@ SAMPLE_LOCATIONS = [
         "latitude": 48.8566,
         "longitude": 2.3522,
         "timezone": "Europe/Paris",
-        "tier": "global"
+        "tier": "global",
+        "imageUrl": {
+            "webp": "http://localhost:8000/data/locations/processed/paris.webp",
+            "jpeg": "http://localhost:8000/data/locations/processed/paris.jpg"
+        },
+        "imageAlt": "Paris cityscape"
     }
 ]
 
@@ -127,8 +143,20 @@ class TestLocationItem:
                 latitude=0.0,
                 longitude=0.0,
                 timezone="UTC",
-                tier="test"
+                tier="test",
+                imageUrl={
+                    "webp": "http://localhost:8000/test.webp",
+                    "jpeg": "http://localhost:8000/test.jpg"
+                },
+                imageAlt="Test image"
             )
+
+    def test_location_with_images(self):
+        """Test location item with image URLs and alt text."""
+        location = LocationItem(**SAMPLE_LOCATIONS[0])
+        assert location.imageUrl.webp == "http://localhost:8000/data/locations/processed/london.webp"
+        assert location.imageUrl.jpeg == "http://localhost:8000/data/locations/processed/london.jpg"
+        assert location.imageAlt == "London Eye and Thames river"
 
 class TestUtilityFunctions:
     """Test utility functions."""
@@ -170,29 +198,49 @@ class TestUtilityFunctions:
         # No filters
         filtered = filter_locations(sample_locations)
         assert len(filtered) == 3
-        
+
         # Country filter
         filtered = filter_locations(sample_locations, country_code="US")
         assert len(filtered) == 1
         assert filtered[0].country_code == "US"
-        
+
         # Tier filter
         filtered = filter_locations(sample_locations, tier="global")
         assert len(filtered) == 3  # All are global tier
-        
+
         # Combined filters
         filtered = filter_locations(sample_locations, country_code="GB", tier="global")
         assert len(filtered) == 1
         assert filtered[0].country_code == "GB"
-        
+
         # Limit
         filtered = filter_locations(sample_locations, limit=2)
         assert len(filtered) == 2
-        
+
         # Sort by name
         filtered = filter_locations(sample_locations)
         names = [loc.name for loc in filtered]
         assert names == sorted(names)
+
+    def test_convert_image_urls(self):
+        """Test image URL conversion from relative to full URLs."""
+        # Test relative URLs
+        relative_urls = {
+            "webp": "/data/locations/processed/test.webp",
+            "jpeg": "/data/locations/processed/test.jpg"
+        }
+        converted = convert_image_urls(relative_urls)
+        assert converted["webp"] == "http://localhost:8000/data/locations/processed/test.webp"
+        assert converted["jpeg"] == "http://localhost:8000/data/locations/processed/test.jpg"
+
+        # Test already full URLs
+        full_urls = {
+            "webp": "https://example.com/test.webp",
+            "jpeg": "https://example.com/test.jpg"
+        }
+        converted = convert_image_urls(full_urls)
+        assert converted["webp"] == "https://example.com/test.webp"
+        assert converted["jpeg"] == "https://example.com/test.jpg"
 
 class TestPreapprovedLocationsEndpoint:
     """Test the main preapproved locations endpoint."""
@@ -200,15 +248,22 @@ class TestPreapprovedLocationsEndpoint:
     def test_get_all_locations(self, client, mock_locations_data):
         """Test getting all locations."""
         response = client.get("/v1/locations/preapproved")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["version"] == 1
         assert data["count"] == 3
         assert len(data["locations"]) == 3
         assert "generated_at" in data
-        
+
+        # Check that image fields are present
+        for location in data["locations"]:
+            assert "imageUrl" in location
+            assert "webp" in location["imageUrl"]
+            assert "jpeg" in location["imageUrl"]
+            assert "imageAlt" in location
+
         # Check cache headers
         assert "Cache-Control" in response.headers
         assert "ETag" in response.headers

@@ -1,0 +1,18 @@
+# Binary files - prevent line ending conversion
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.ico binary
+
+# Archive files
+*.zip binary
+*.tar binary
+*.gz binary
+
+# JSON files should use LF line endings
+*.json text eol=lf
+
+# Python files should use LF line endings
+*.py text eol=lf

@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field
 
@@ -848,6 +849,15 @@ app = FastAPI(lifespan=lifespan)
 
 # Register exception handlers from exceptions module
 register_exception_handlers(app)
+
+# Mount static files for location images
+# Must be done before including routers to avoid route conflicts
+data_dir = Path(__file__).resolve().parent / "data"
+if data_dir.exists():
+    app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
+    logger.info(f"📁 Mounted static files from {data_dir}")
+else:
+    logger.warning(f"⚠️  Data directory not found at {data_dir}")
 
 # Include all routers
 app.include_router(root_router)

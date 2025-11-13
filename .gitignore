@@ -8,6 +8,9 @@ venv/
 .venv/
 *_env_vars.json
 
+# Location image files
+data/locations/originals/
+
 # Profiling files
 *.prof
 *.svg
@@ -17,4 +20,3 @@ profile_*.py
 
 # Log files
 *.log
-temphist.log

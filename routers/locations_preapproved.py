@@ -24,13 +24,19 @@ from pydantic import BaseModel, Field, field_validator
 logger = logging.getLogger(__name__)
 
 # Constants
-CACHE_TTL = 86400  # 24 hours
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+CACHE_TTL = 604800  # 7 days (data changes infrequently)
 RATE_LIMIT_REQUESTS = 60  # requests per minute
 RATE_LIMIT_WINDOW = 60  # 1 minute window
 CACHE_PREFIX = "preapproved:v1"
 MAX_LIMIT = 500
 
 # Pydantic Models
+class ImageUrl(BaseModel):
+    """Image URL with format options."""
+    webp: str = Field(..., description="WebP format image URL")
+    jpeg: str = Field(..., description="JPEG format image URL")
+
 class LocationItem(BaseModel):
     """Individual location item."""
     id: str = Field(..., description="Unique location identifier")
@@ -43,6 +49,8 @@ class LocationItem(BaseModel):
     longitude: float = Field(..., description="Longitude coordinate")
     timezone: str = Field(..., description="IANA timezone identifier")
     tier: str = Field(..., description="Location tier classification")
+    imageUrl: ImageUrl = Field(..., description="Location image URLs")
+    imageAlt: str = Field(..., description="Alt text for location image")
 
     @field_validator('country_code')
     @classmethod
@@ -144,6 +152,13 @@ def filter_locations(
     
     return filtered
 
+def convert_image_urls(image_urls: Dict[str, str]) -> Dict[str, str]:
+    """Convert relative image URLs to full URLs."""
+    return {
+        format_type: f"{BASE_URL}{url}" if url.startswith('/') else url
+        for format_type, url in image_urls.items()
+    }
+
 async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
     """Load and validate locations data from JSON file."""
     # Find project root by looking for pyproject.toml
@@ -153,27 +168,32 @@ async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
         if os.path.exists(os.path.join(project_root, "pyproject.toml")):
             break
         project_root = os.path.dirname(project_root)
-    
+
     data_file = os.path.join(project_root, "data", "preapproved_locations.json")
-    
+
     try:
         with open(data_file, 'r', encoding='utf-8') as f:
             raw_data = f.read()
-        
+
         # Parse JSON
         json_data = json.loads(raw_data)
-        
+
+        # Transform relative URLs to full URLs
+        for item in json_data:
+            if 'imageUrl' in item:
+                item['imageUrl'] = convert_image_urls(item['imageUrl'])
+
         # Validate against schema
         locations = [LocationItem(**item) for item in json_data]
-        
+
         # Generate ETag and Last-Modified
         etag = generate_etag(raw_data)
         file_stat = os.stat(data_file)
         last_modified = datetime.fromtimestamp(file_stat.st_mtime).strftime('%a, %d %b %Y %H:%M:%S GMT')
-        
+
         logger.info(f"Loaded {len(locations)} preapproved locations from {data_file}")
         return locations, etag, last_modified
-        
+
     except FileNotFoundError:
         logger.error(f"Locations data file not found: {data_file}")
         raise HTTPException(status_code=500, detail="Locations data not available")
@@ -260,11 +280,11 @@ async def get_preapproved_locations(
     cached_response = await get_cached_response(cache_key)
     
     if cached_response:
-        # Set cache headers
-        response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400"
+        # Set cache headers (7 days for CDN/shared caches, 1 hour for browsers)
+        response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
         response.headers["ETag"] = locations_etag
         response.headers["Last-Modified"] = locations_last_modified
-        
+
         return PreapprovedResponse(**cached_response)
     
     # Filter locations
@@ -280,12 +300,12 @@ async def get_preapproved_locations(
     
     # Cache the response
     await set_cached_response(cache_key, response_data)
-    
-    # Set cache headers
-    response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400"
+
+    # Set cache headers (7 days for CDN/shared caches, 1 hour for browsers)
+    response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
     response.headers["ETag"] = locations_etag
     response.headers["Last-Modified"] = locations_last_modified
-    
+
     return PreapprovedResponse(**response_data)
 
 @router.get("/v1/locations/preapproved/status")
