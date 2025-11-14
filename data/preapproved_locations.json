@@ -31,7 +31,16 @@
       "webp": "/data/locations/processed/manchester.webp",
       "jpeg": "/data/locations/processed/manchester.jpg"
     },
-    "imageAlt": "Aerial view of Manchester cityscape"
+    "imageAlt": "Sunny canal ciew in Manchester city center",
+    "imageAttribution": {
+      "title": "Sunny Canal View in Manchester City Center",
+      "photographerName": "Miguel Arcanjo Saddi",
+      "sourceName": "Pexels",
+      "sourceUrl": "https://www.pexels.com/photo/sunny-canal-view-in-manchester-city-center-34577518/",
+      "licenseName": "Pexels License",
+      "licenseUrl": "https://www.pexels.com/license/",
+      "attributionRequired": false
+    }
   },
   {
     "id": "birmingham",
@@ -65,7 +74,16 @@
       "webp": "/data/locations/processed/edinburgh.webp",
       "jpeg": "/data/locations/processed/edinburgh.jpg"
     },
-    "imageAlt": "Skyline of Edinburgh"
+    "imageAlt": "Edinburgh skyline from Salisbury Crags",
+    "imageAttribution": {
+      "title": "Edinburgh skyline from Salisbury Crags",
+      "photographerName": "Ad Meskens",
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Edinburgh_skyline_from_Salisbury_Crags_02.JPG",
+      "licenseName": "Creative Commons Attribution-Share Alike 3.0 Unported",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "attributionRequired": true
+    }
   },
   {
     "id": "glasgow",
@@ -133,7 +151,16 @@
       "webp": "/data/locations/processed/dublin.webp",
       "jpeg": "/data/locations/processed/dublin.jpg"
     },
-    "imageAlt": "Samuel Beckett Bridge at sunset in Dublin"
+    "imageAlt": "Samuel Beckett Bridge at sunset in Dublin",
+    "imageAttribution": {
+      "title": "Samuel Beckett Bridge at sunset, Dublin",
+      "photographerName": null,
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Samuel_Beckett_Bridge_At_Sunset_Dublin_Ireland_(97037639).jpeg",
+      "licenseName": null,
+      "licenseUrl": null,
+      "attributionRequired": true
+    }
   },
   {
     "id": "new_york",
@@ -235,7 +262,16 @@
       "webp": "/data/locations/processed/melbourne.webp",
       "jpeg": "/data/locations/processed/melbourne.jpg"
     },
-    "imageAlt": "Melbourne cityscape"
+    "imageAlt": "Melbourne city skyline",
+    "imageAttribution": {
+      "title": "Melbourne city skyline",
+      "photographerName": "Nick English",
+      "sourceName": "Pexels",
+      "sourceUrl": "https://www.pexels.com/photo/18198178",
+      "licenseName": "Pexels License",
+      "licenseUrl": "https://www.pexels.com/license/",
+      "attributionRequired": false
+    }
   },
   {
     "id": "auckland",
@@ -303,7 +339,16 @@
       "webp": "/data/locations/processed/singapore.webp",
       "jpeg": "/data/locations/processed/singapore.jpg"
     },
-    "imageAlt": "Singapore skyline at blue hour"
+    "imageAlt": "Singapore skyline at blue hour",
+    "imageAttribution": {
+      "title": "Singapore skyline at blue hour",
+      "photographerName": "Merlion444",
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/Category:Blue_hour_in_Singapore",
+      "licenseName": "Public domain (CC0 / PD-self, per Commons description)",
+      "licenseUrl": null,
+      "attributionRequired": false
+    }
   },
   {
     "id": "hong_kong",
