@@ -37,6 +37,16 @@ class ImageUrl(BaseModel):
     webp: str = Field(..., description="WebP format image URL")
     jpeg: str = Field(..., description="JPEG format image URL")
 
+class ImageAttribution(BaseModel):
+    """Image attribution details."""
+    title: Optional[str] = Field(None, description="Title or description of the image")
+    photographerName: Optional[str] = Field(None, description="Name of the photographer or image creator")
+    sourceName: Optional[str] = Field(None, description="Name of the source (e.g., Wikimedia Commons, Pexels)")
+    sourceUrl: Optional[str] = Field(None, description="URL to the original source or license information")
+    licenseName: Optional[str] = Field(None, description="Name of the license (e.g., CC BY-SA 4.0, Pexels License)")
+    licenseUrl: Optional[str] = Field(None, description="URL to the full license text")
+    attributionRequired: Optional[bool] = Field(None, description="Whether attribution is required by the license")
+
 class LocationItem(BaseModel):
     """Individual location item."""
     id: str = Field(..., description="Unique location identifier")
@@ -51,6 +61,7 @@ class LocationItem(BaseModel):
     tier: str = Field(..., description="Location tier classification")
     imageUrl: ImageUrl = Field(..., description="Location image URLs")
     imageAlt: str = Field(..., description="Alt text for location image")
+    imageAttribution: Optional[ImageAttribution] = Field(None, description="Location image attribution")
 
     @field_validator('country_code')
     @classmethod

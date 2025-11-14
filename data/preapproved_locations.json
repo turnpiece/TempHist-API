@@ -117,7 +117,16 @@
       "webp": "/data/locations/processed/cardiff.webp",
       "jpeg": "/data/locations/processed/cardiff.jpg"
     },
-    "imageAlt": "Cardiff Castle shell keep"
+    "imageAlt": "Cardiff Castle shell keep",
+    "imageAttribution": {
+      "title": "Cardiff Castle shell keep",
+      "photographerName": "bluemonday16",
+      "sourceName": "Flickr",
+      "sourceUrl": "https://www.flickr.com/photos/robinbyles/7285120452/",
+      "licenseName": "CC BY-NC 2.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-nc/2.0/deed.en",
+      "attributionRequired": true
+    }
   },
   {
     "id": "belfast",
@@ -134,7 +143,16 @@
       "webp": "/data/locations/processed/belfast.webp",
       "jpeg": "/data/locations/processed/belfast.jpg"
     },
-    "imageAlt": "Belfast City Hall"
+    "imageAlt": "Belfast City Hall",
+    "imageAttribution": {
+      "title": "Belfast City Hall",
+      "photographerName": "William Murphy",
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Belfast_City_Hall.jpg",
+      "licenseName": "CC BY-SA 2.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/2.0/deed.en",
+      "attributionRequired": true
+    }
   },
   {
     "id": "dublin",
@@ -157,8 +175,8 @@
       "photographerName": null,
       "sourceName": "Wikimedia Commons",
       "sourceUrl": "https://commons.wikimedia.org/wiki/File:Samuel_Beckett_Bridge_At_Sunset_Dublin_Ireland_(97037639).jpeg",
-      "licenseName": null,
-      "licenseUrl": null,
+      "licenseName": "CC BY 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/3.0/deed.en",
       "attributionRequired": true
     }
   },
@@ -194,7 +212,16 @@
       "webp": "/data/locations/processed/chicago.webp",
       "jpeg": "/data/locations/processed/chicago.jpg"
     },
-    "imageAlt": "Chicago cityscape"
+    "imageAlt": "Chicago, photo of buildings",
+    "imageAttribution": {
+      "title": "Photo Of Buildings",
+      "photographerName": "Chait Goli",
+      "sourceName": "Pexels",
+      "sourceUrl": "https://www.pexels.com/photo/photo-of-buildings-1823681/",
+      "licenseName": "Pexels License",
+      "licenseUrl": "https://www.pexels.com/license/",
+      "attributionRequired": false
+    }
   },
   {
     "id": "san_francisco",
@@ -211,7 +238,16 @@
       "webp": "/data/locations/processed/san-francisco.webp",
       "jpeg": "/data/locations/processed/san-francisco.jpg"
     },
-    "imageAlt": "San Francisco from the Marin Headlands"
+    "imageAlt": "San Francisco from the Marin Headlands",
+    "imageAttribution": {
+      "title": "San Francisco from the Marin Headlands on August 22, 2022",
+      "photographerName": "Lightandtruth",
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:San_Francisco_from_the_Marin_Headlands_in_August_2022.jpg",
+      "licenseName": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.en",
+      "attributionRequired": true
+    }
   },
   {
     "id": "los_angeles",
@@ -228,7 +264,16 @@
       "webp": "/data/locations/processed/los-angeles.webp",
       "jpeg": "/data/locations/processed/los-angeles.jpg"
     },
-    "imageAlt": "Los Angeles cityscape in winter"
+    "imageAlt": "Los Angeles skyline in winter",
+    "imageAttribution": {
+      "title": "Los Angeles skyline and San Gabriel mountains, winter 2016",
+      "photographerName": "salewskia",
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Los_Angeles,_Winter_2016.jpg",
+      "licenseName": "CC BY-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.en",
+      "attributionRequired": true
+    }
   },
   {
     "id": "sydney",
@@ -245,7 +290,16 @@
       "webp": "/data/locations/processed/sydney.webp",
       "jpeg": "/data/locations/processed/sydney.jpg"
     },
-    "imageAlt": "Sydney Harbour"
+    "imageAlt": "Sydney Harbour",
+    "imageAttribution": {
+      "title": "On Sydney Harbour",
+      "photographerName": "Bernard Spragg",
+      "sourceName": "Flickr",
+      "sourceUrl": "https://www.flickr.com/photos/volvob12b/8069201903",
+      "licenseName": "CC0 1.0 Universal",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "attributionRequired": false
+    }
   },
   {
     "id": "melbourne",
@@ -288,7 +342,16 @@
       "webp": "/data/locations/processed/auckland.webp",
       "jpeg": "/data/locations/processed/auckland.jpg"
     },
-    "imageAlt": "Auckland Harbour Bridge at sunset"
+    "imageAlt": "Auckland Harbour Bridge at sunset",
+    "imageAttribution": {
+      "title": "Spirit of New Zealand, sailing under the Harbour Bridge in Auckland at sunset",
+      "photographerName": "Stephen Witherden",
+      "sourceName": "Flickr",
+      "sourceUrl": "https://www.flickr.com/photos/swit012/2225752140/",
+      "licenseName": "CC BY 2.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/2.0/deed.en",
+      "attributionRequired": true
+    }    
   },
   {
     "id": "toronto",
@@ -305,7 +368,16 @@
       "webp": "/data/locations/processed/toronto.webp",
       "jpeg": "/data/locations/processed/toronto.jpg"
     },
-    "imageAlt": "Toronto cityscape"
+    "imageAlt": "Toronto skyline",
+    "imageAttribution": {
+      "title": "Toronto skyline",
+      "photographerName": "Bernard Spragg",
+      "sourceName": "Flickr",
+      "sourceUrl": "https://www.flickr.com/photos/volvob12b/48993906211/",
+      "licenseName": "Creative Commons 1.0 Universal",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "attributionRequired": false
+    }  
   },
   {
     "id": "vancouver",
@@ -322,7 +394,16 @@
       "webp": "/data/locations/processed/vancouver.webp",
       "jpeg": "/data/locations/processed/vancouver.jpg"
     },
-    "imageAlt": "Vancouver cityscape"
+    "imageAlt": "Vancouver cityscape",
+    "imageAttribution": {
+      "title": "Vancouver cityscape",
+      "photographerName": "Luke Lawreszuk",
+      "sourceName": "Sprayedout.com",
+      "sourceUrl": "https://www.sprayedout.com/vancouver-downtown-north-vancouver-mountains-cityscape/",
+      "licenseName": "CC BY-NC-SA 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+      "attributionRequired": true
+    }
   },
   {
     "id": "singapore",
@@ -365,7 +446,16 @@
       "webp": "/data/locations/processed/hong-kong.webp",
       "jpeg": "/data/locations/processed/hong-kong.jpg"
     },
-    "imageAlt": "Hong Kong from Victoria Peak"
+    "imageAlt": "Hong Kong from Victoria Peak",
+    "imageAttribution": {
+      "title": "Hong Kong from Victoria Peak",
+      "photographerName": "Mustang Joe",
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://www.flickr.com/photos/mustangjoe/54148420380/",
+      "licenseName": "Creative Commons CC0 1.0 Universal Public Domain Dedication",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "attributionRequired": false
+    }
   },
   {
     "id": "cape_town",
@@ -382,6 +472,15 @@
       "webp": "/data/locations/processed/cape-town.webp",
       "jpeg": "/data/locations/processed/cape-town.jpg"
     },
-    "imageAlt": "Aerial view of Sea Point, Cape Town"
+    "imageAlt": "Aerial view of Sea Point, Cape Town",
+    "imageAttribution": {
+      "title": "Aerial View of Sea Point, Cape Town South Africa",
+      "photographerName": "Hilton1949",
+      "sourceName": "Wikimedia Commons",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Aerial_View_of_Sea_Point,_Cape_Town_South_Africa.jpg",
+      "licenseName": "Public domain (CC0 / PD-self, per Commons description)",
+      "licenseUrl": null,
+      "attributionRequired": false
+    }
   }
 ]
