@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field
 
@@ -863,11 +864,31 @@ app.include_router(legacy_router)
 app.include_router(stats_router)
 app.include_router(analytics_router)
 
+# Custom StaticFiles class to ensure correct Content-Type headers for images
+class ImageStaticFiles(StaticFiles):
+    """Custom StaticFiles that ensures correct Content-Type headers for image files."""
+
+    async def get_response(self, path: str, scope):
+        """Override to ensure proper content-type for images."""
+        response = await super().get_response(path, scope)
+
+        # Ensure proper content-type for image files
+        if isinstance(response, FileResponse):
+            import mimetypes
+            file_path = str(response.path)
+            content_type, _ = mimetypes.guess_type(file_path)
+
+            if content_type:
+                response.headers["Content-Type"] = content_type
+                response.media_type = content_type
+
+        return response
+
 # Mount static files for location images
 # Must be done AFTER including routers so router paths take precedence
 data_dir = Path(__file__).resolve().parent / "data"
 if data_dir.exists():
-    app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
+    app.mount("/data", ImageStaticFiles(directory=str(data_dir)), name="data")
     logger.info(f"📁 Mounted static files from {data_dir}")
 else:
     logger.warning(f"⚠️  Data directory not found at {data_dir}")
