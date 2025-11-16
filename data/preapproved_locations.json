@@ -296,7 +296,7 @@
       "photographerName": "Bernard Spragg",
       "sourceName": "Flickr",
       "sourceUrl": "https://www.flickr.com/photos/volvob12b/8069201903",
-      "licenseName": "CC0 1.0 Universal",
+      "licenseName": "CC0 1.0",
       "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/deed.en",
       "attributionRequired": false
     }
@@ -374,7 +374,7 @@
       "photographerName": "Bernard Spragg",
       "sourceName": "Flickr",
       "sourceUrl": "https://www.flickr.com/photos/volvob12b/48993906211/",
-      "licenseName": "Creative Commons 1.0 Universal",
+      "licenseName": "CC0 1.0",
       "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/deed.en",
       "attributionRequired": false
     }  
@@ -423,12 +423,12 @@
     "imageAlt": "Singapore skyline at blue hour",
     "imageAttribution": {
       "title": "Singapore skyline at blue hour",
-      "photographerName": "Merlion444",
+      "photographerName": "Cpgfella",
       "sourceName": "Wikimedia Commons",
-      "sourceUrl": "https://commons.wikimedia.org/wiki/Category:Blue_hour_in_Singapore",
-      "licenseName": "Public domain (CC0 / PD-self, per Commons description)",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Singapore_Skyline_at_Bluehour.jpg",
+      "licenseName": "CC BY-SA 4.0",
       "licenseUrl": null,
-      "attributionRequired": false
+      "attributionRequired": true
     }
   },
   {
@@ -450,9 +450,9 @@
     "imageAttribution": {
       "title": "Hong Kong from Victoria Peak",
       "photographerName": "Mustang Joe",
-      "sourceName": "Wikimedia Commons",
+      "sourceName": "Flickr",
       "sourceUrl": "https://www.flickr.com/photos/mustangjoe/54148420380/",
-      "licenseName": "Creative Commons CC0 1.0 Universal Public Domain Dedication",
+      "licenseName": "CC0 1.0",
       "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/deed.en",
       "attributionRequired": false
     }
@@ -478,9 +478,9 @@
       "photographerName": "Hilton1949",
       "sourceName": "Wikimedia Commons",
       "sourceUrl": "https://commons.wikimedia.org/wiki/File:Aerial_View_of_Sea_Point,_Cape_Town_South_Africa.jpg",
-      "licenseName": "Public domain (CC0 / PD-self, per Commons description)",
-      "licenseUrl": null,
-      "attributionRequired": false
+      "licenseName": "CC BY-SA 3.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/deed.en",
+      "attributionRequired": true
     }
   }
 ]
