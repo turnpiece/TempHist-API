@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 from pathlib import Path
 from datetime import datetime, timedelta, date as dt_date, timezone
@@ -864,6 +865,16 @@ app.include_router(legacy_router)
 app.include_router(stats_router)
 app.include_router(analytics_router)
 
+# Initialize mimetypes at module level to ensure proper configuration across workers
+mimetypes.init()
+# Add common image types explicitly to ensure they're recognized
+mimetypes.add_type('image/jpeg', '.jpg')
+mimetypes.add_type('image/jpeg', '.jpeg')
+mimetypes.add_type('image/png', '.png')
+mimetypes.add_type('image/gif', '.gif')
+mimetypes.add_type('image/webp', '.webp')
+mimetypes.add_type('image/svg+xml', '.svg')
+
 # Custom StaticFiles class to ensure correct Content-Type headers for images
 class ImageStaticFiles(StaticFiles):
     """Custom StaticFiles that ensures correct Content-Type headers for image files."""
@@ -874,13 +885,21 @@ class ImageStaticFiles(StaticFiles):
 
         # Ensure proper content-type for image files
         if isinstance(response, FileResponse):
-            import mimetypes
             file_path = str(response.path)
             content_type, _ = mimetypes.guess_type(file_path)
 
             if content_type:
+                # Force the content type in both places to ensure it takes effect
                 response.headers["Content-Type"] = content_type
                 response.media_type = content_type
+                # Also set it in raw_headers for Starlette to ensure it's not overridden
+                response.raw_headers = [
+                    (k, v) for k, v in response.raw_headers if k.lower() != b"content-type"
+                ]
+                response.raw_headers.append((b"content-type", content_type.encode()))
+
+                if DEBUG or LOG_VERBOSITY == "verbose":
+                    logger.debug(f"📷 Serving {path} with Content-Type: {content_type}")
 
         return response
 
@@ -1024,6 +1043,38 @@ def verify_firebase_token(request: Request):
         return decoded_token  # Can use user ID, etc.
     except Exception as e:
         raise HTTPException(status_code=403, detail="Invalid token")
+
+# Middleware to fix Content-Type for static image files
+# This runs first in the middleware stack (last in response processing)
+@app.middleware("http")
+async def fix_image_content_type_middleware(request: Request, call_next):
+    """Ensure correct Content-Type headers for image files served from /data."""
+    response = await call_next(request)
+
+    # Check if this is a request for an image file from /data
+    if request.url.path.startswith("/data/"):
+        path_lower = request.url.path.lower()
+
+        # Map file extensions to content types
+        content_type_map = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.svg': 'image/svg+xml',
+        }
+
+        # Check if the path ends with an image extension
+        for ext, content_type in content_type_map.items():
+            if path_lower.endswith(ext):
+                # Force the correct content type
+                response.headers["Content-Type"] = content_type
+                if DEBUG or LOG_VERBOSITY == "verbose":
+                    logger.debug(f"📷 Fixed Content-Type for {request.url.path} to {content_type}")
+                break
+
+    return response
 
 # LOW-003: Request ID middleware for distributed tracing
 @app.middleware("http")
