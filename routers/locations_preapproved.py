@@ -20,11 +20,12 @@ import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
 from pydantic import BaseModel, Field, field_validator
 
+from config import BASE_URL
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Constants
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 CACHE_TTL = 604800  # 7 days (data changes infrequently)
 RATE_LIMIT_REQUESTS = 60  # requests per minute
 RATE_LIMIT_WINDOW = 60  # 1 minute window

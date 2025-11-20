@@ -22,6 +22,8 @@ import redis
 import aiohttp
 from fastapi import Request, Response
 
+from config import USAGE_TRACKING_ENABLED, USAGE_RETENTION_DAYS, DEBUG, API_ACCESS_TOKEN, BASE_URL
+
 # Try to import zoneinfo (Python 3.9+). Fall back to UTC if unavailable.
 try:
     from zoneinfo import ZoneInfo
@@ -120,14 +122,11 @@ CACHE_INVALIDATION_ENABLED = os.getenv("CACHE_INVALIDATION_ENABLED", "true").low
 CACHE_INVALIDATION_DRY_RUN = os.getenv("CACHE_INVALIDATION_DRY_RUN", "false").lower() == "true"
 CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "100"))
 
-# Usage Tracking Configuration
-USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
-USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
+# Usage Tracking Configuration (imported from config)
+# USAGE_TRACKING_ENABLED and USAGE_RETENTION_DAYS are imported from config
 
-# Environment variables for cache warming
-DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
+# Environment variables for cache warming (imported from config)
+# DEBUG, BASE_URL, and API_ACCESS_TOKEN are imported from config
 
 class LocationUsageTracker:
     """Track location usage patterns for analytics and cache warming."""

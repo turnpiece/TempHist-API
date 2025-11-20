@@ -29,6 +29,7 @@ if ENVIRONMENT == "production" and DEBUG:
 # Logging configuration
 LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "normal", "verbose"
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")  # Public API URL for job callbacks
 
 # Rate limiting configuration
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"

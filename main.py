@@ -59,7 +59,13 @@ from cache_utils import (
 from version import __version__
 
 # Import configuration and rate limiting
-from config import CORS_ORIGINS, CORS_ORIGIN_REGEX, VISUAL_CROSSING_BASE_URL, VISUAL_CROSSING_REMOTE_DATA, SERVICE_TOKEN_RATE_LIMITS
+from config import (
+    CORS_ORIGINS, CORS_ORIGIN_REGEX, VISUAL_CROSSING_BASE_URL, VISUAL_CROSSING_REMOTE_DATA,
+    SERVICE_TOKEN_RATE_LIMITS, ENVIRONMENT, HTTP_TIMEOUT_VISUAL_CROSSING, HTTP_TIMEOUT,
+    MAX_CONCURRENT_REQUESTS, CACHE_ENABLED, DEBUG, LOG_VERBOSITY, API_ACCESS_TOKEN,
+    CACHE_CONTROL_HEADER, FILTER_WEATHER_DATA, RATE_LIMIT_ENABLED, MAX_LOCATIONS_PER_HOUR,
+    MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS, IP_WHITELIST, IP_BLACKLIST
+)
 from rate_limiting import ServiceTokenRateLimiter, LocationDiversityMonitor, RequestRateMonitor
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 
@@ -142,10 +148,8 @@ def sanitize_for_logging(data: str, max_length: int = 100) -> str:
 _temp_logger = _logging.getLogger(__name__)
 _temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {sanitize_url(REDIS_URL)}")
 
-CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 # LOW-008: Validate debug mode with environment check
-ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
-DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+# CACHE_ENABLED, ENVIRONMENT, and DEBUG are imported from config
 
 # Prevent DEBUG mode in production
 if ENVIRONMENT == "production" and DEBUG:
@@ -154,25 +158,11 @@ if ENVIRONMENT == "production" and DEBUG:
     _temp_logger = _logging.getLogger(__name__)
     _temp_logger.error("❌ DEBUG mode cannot be enabled in production environment")
     raise ValueError("DEBUG=true is forbidden in production. Set ENVIRONMENT=production and DEBUG=false")
-# Logging verbosity control - set to "minimal" to reduce Railway logging limits
-LOG_VERBOSITY = os.getenv("LOG_VERBOSITY", "normal").lower()  # "minimal", "normal", "verbose"
-API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
-CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
-FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
-# Rate limiting configuration
-RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
-MAX_LOCATIONS_PER_HOUR = int(os.getenv("MAX_LOCATIONS_PER_HOUR", "10"))
-MAX_REQUESTS_PER_HOUR = int(os.getenv("MAX_REQUESTS_PER_HOUR", "100"))
-RATE_LIMIT_WINDOW_HOURS = int(os.getenv("RATE_LIMIT_WINDOW_HOURS", "1"))
-
-# IP address management
-IP_WHITELIST = os.getenv("IP_WHITELIST", "").split(",") if os.getenv("IP_WHITELIST") else []
-IP_BLACKLIST = os.getenv("IP_BLACKLIST", "").split(",") if os.getenv("IP_BLACKLIST") else []
-
-# Clean up empty strings from lists
-IP_WHITELIST = [ip.strip() for ip in IP_WHITELIST if ip.strip()]
-IP_BLACKLIST = [ip.strip() for ip in IP_BLACKLIST if ip.strip()]
+# Configuration variables are imported from config
+# LOG_VERBOSITY, API_ACCESS_TOKEN, CACHE_CONTROL_HEADER, FILTER_WEATHER_DATA,
+# RATE_LIMIT_ENABLED, MAX_LOCATIONS_PER_HOUR, MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS,
+# IP_WHITELIST, IP_BLACKLIST
 
 # Pydantic Models for v1 API
 class TemperatureValue(BaseModel):
@@ -916,9 +906,9 @@ def create_redis_client(url: str):
     """Create Redis client with security validation."""
     import ssl
     from urllib.parse import urlparse
-    
+
     parsed = urlparse(url)
-    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    env = ENVIRONMENT  # Use ENVIRONMENT imported from config
     
     # Enforce password in production
     if env == "production" and not parsed.password:
@@ -974,14 +964,7 @@ if DEBUG:
 
 # HTTP client configuration
 # LOW-004: Extract magic numbers to named constants
-# HTTP Request Timeouts
-HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
-HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks
-HTTP_TIMEOUT_LONG = 120.0    # Long timeout for large data requests
-HTTP_TIMEOUT_VISUAL_CROSSING = float(os.getenv("HTTP_TIMEOUT_VISUAL_CROSSING", "30.0"))  # Visual Crossing API timeout
-
-HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
-MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection - prevents stampeding Visual Crossing API
+# HTTP Request Timeouts (imported from config)
 
 # Simple global semaphore - prevents stampeding Visual Crossing API
 # Lower concurrency reduces 429 errors by spacing out requests
@@ -1141,7 +1124,7 @@ async def log_requests_middleware(request: Request, call_next):
 async def add_security_headers(request: Request, call_next):
     """Add security headers to all responses to prevent various attacks."""
     # Enforce HTTPS in production (MED-001)
-    env = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+    env = ENVIRONMENT  # Use ENVIRONMENT imported from config
     if env == "production" and request.url.scheme != "https":
         return JSONResponse(
             status_code=400,
