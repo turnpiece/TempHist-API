@@ -19,7 +19,6 @@ Complete deployment instructions for the TempHist API.
 - GitHub account
 - Railway account (https://railway.app/)
 - Visual Crossing API key
-- OpenWeather API key
 - Firebase service account JSON (optional)
 
 ### Basic Deployment Steps
@@ -89,7 +88,6 @@ Then add your other environment variables:
 ```bash
 # Required API Keys
 VISUAL_CROSSING_API_KEY=your_key_here
-OPENWEATHER_API_KEY=your_key_here
 API_ACCESS_TOKEN=your_token_here
 
 # Firebase (optional - see Firebase section below)
@@ -129,7 +127,6 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | Variable                  | Description                                     | Example                                           |
 | ------------------------- | ----------------------------------------------- | ------------------------------------------------- |
 | `VISUAL_CROSSING_API_KEY` | Visual Crossing weather API key                 | `abc123...`                                       |
-| `OPENWEATHER_API_KEY`     | OpenWeather API key                             | `def456...`                                       |
 | `API_ACCESS_TOKEN`        | API access token for automated systems          | `ghi789...`                                       |
 | `REDIS_URL`               | Redis connection URL (auto-provided by Railway) | `redis://default:...@redis.railway.internal:6379` |
 
@@ -327,7 +324,6 @@ Export from Render and import to Railway:
 ```bash
 # Render environment variables to migrate:
 VISUAL_CROSSING_API_KEY
-OPENWEATHER_API_KEY
 FIREBASE_SERVICE_ACCOUNT
 API_ACCESS_TOKEN
 CACHE_ENABLED

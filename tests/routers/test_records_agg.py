@@ -25,7 +25,6 @@ def mock_env_vars():
     """Fixture to set up environment variables for testing"""
     with patch.dict('os.environ', {
         'VISUAL_CROSSING_API_KEY': 'test_key',
-        'OPENWEATHER_API_KEY': 'test_key',
         'CACHE_ENABLED': 'true',
         'API_ACCESS_TOKEN': 'test_api_token'
     }):

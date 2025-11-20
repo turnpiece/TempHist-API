@@ -65,7 +65,6 @@ from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 
 # Environment variables - strip whitespace/newlines from API keys
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 
 # Debug: Log the REDIS_URL value to diagnose connection issues (sanitized)

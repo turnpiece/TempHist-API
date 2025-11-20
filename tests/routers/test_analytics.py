@@ -26,7 +26,6 @@ def mock_env_vars():
     """Fixture to set up environment variables for testing"""
     with patch.dict('os.environ', {
         'VISUAL_CROSSING_API_KEY': 'test_key',
-        'OPENWEATHER_API_KEY': 'test_key',
         'CACHE_ENABLED': 'true',
         'API_ACCESS_TOKEN': 'test_api_token',
         'ANALYTICS_RATE_LIMIT': '10000'  # Very high limit for tests to avoid rate limit issues
