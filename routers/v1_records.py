@@ -889,7 +889,7 @@ async def get_record(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
-    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: redis.Redis = Depends(get_redis_client),
     invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache)
@@ -966,15 +966,15 @@ async def get_record(
                     if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
                         values = bundle_payload['records']
                         data = _rebuild_full_response_from_values(
-                            values, period, location, identifier, month, day, current_year, years, redis_client, unit
+                            values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
                         )
-                        
+
                         # Validate cached data
                         is_valid, error_msg = validate_location_response(data, location)
                         if not is_valid:
                             invalid_location_cache.mark_location_invalid(location, "no_data_cached")
                             raise HTTPException(status_code=400, detail=error_msg)
-                        
+
                         # Set cache headers with stale-while-revalidate and ETag
                         json_response = JSONResponse(content=data)
                         json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
@@ -1014,9 +1014,9 @@ async def get_record(
                             if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
                                 values = bundle_payload['records']
                                 data = _rebuild_full_response_from_values(
-                                    values, period, location, identifier, month, day, current_year, years, redis_client, unit
+                                    values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
                                 )
-                                
+
                                 # Validate cached data
                                 is_valid, error_msg = validate_location_response(data, location)
                                 if not is_valid:
@@ -1152,14 +1152,14 @@ async def get_record(
                 # Rebuild full response from year_data using helper
                 values = [year_data[y] for y in sorted(year_data.keys())]
                 data = _rebuild_full_response_from_values(
-                    values, period, location, identifier, month, day, current_year, years, redis_client, unit
+                    values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
                 )
-                
+
                 # Set cache status
                 cache_status = "HIT" if not missing_past and not missing_current else "PARTIAL"
             else:
                 # No cached data, fetch fresh
-                data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+                data = await get_temperature_data_v1(location, period, identifier, unit_group, redis_client)
                 
                 # Extract and store per-year records
                 per_year_records = _extract_per_year_records(data)
@@ -1191,7 +1191,7 @@ async def get_record(
                 cache_status = "MISS"
         else:
             # Cache disabled, fetch fresh
-            data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+            data = await get_temperature_data_v1(location, period, identifier, unit_group, redis_client)
         
         # Validate the response data
         is_valid, error_msg = validate_location_response(data, location)
