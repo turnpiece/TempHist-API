@@ -20,3 +20,6 @@ profile_*.py
 
 # Log files
 *.log
+
+# Node modules
+mode_modules/
