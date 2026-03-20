@@ -88,7 +88,7 @@ def test_weather_endpoint(client):
         "tempmax": 22.0,
         "tempmin": 18.0
     }
-    with patch('main.fetch_weather_batch', return_value={"2024-05-15": mock_weather_data}):
+    with patch('routers.weather.get_weather_for_date', new_callable=AsyncMock, return_value={"days": [mock_weather_data]}):
         response = client.get(
             "/weather/London/2024-05-15",
             headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
