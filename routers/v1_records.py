@@ -4,7 +4,7 @@ import logging
 import redis
 from datetime import datetime, timedelta, timezone, date
 from typing import Literal, Dict, List, Tuple, Optional
-from fastapi import APIRouter, HTTPException, Path, Response, Request, Depends
+from fastapi import APIRouter, HTTPException, Path, Response, Request, Depends, Query
 from fastapi.responses import JSONResponse
 
 from models import (
@@ -663,12 +663,13 @@ def _rebuild_full_response_from_values(
     day: int,
     current_year: int,
     years: List[int],
-    redis_client: redis.Redis
+    redis_client: redis.Redis,
+    unit_group: str = "celsius"
 ) -> Dict:
     """Rebuild full RecordResponse from list of year values.
     
     Args:
-        values: List of TemperatureValue dicts
+        values: List of TemperatureValue dicts with temperatures in Celsius
         period: Period type
         location: Location name
         identifier: Date identifier
@@ -677,41 +678,61 @@ def _rebuild_full_response_from_values(
         current_year: Current year
         years: List of all years in range
         redis_client: Redis client
+        unit_group: Target unit ('celsius' or 'fahrenheit')
         
     Returns:
-        Full response dict with all fields
+        Full response dict with all fields, with temperatures converted to unit_group
     """
     from utils.temperature import calculate_trend_slope, generate_summary
     from utils.weather import create_metadata
     
-    all_temps = [v.get('temperature') for v in values if v.get('temperature') is not None]
+    # Convert temperatures from Celsius to requested unit
+    converted_values = []
+    for v in values:
+        converted_v = dict(v)  # Make a copy
+        if converted_v.get('temperature') is not None:
+            converted_v['temperature'] = _convert_c_to_unit(converted_v['temperature'], unit_group)
+        converted_values.append(converted_v)
     
+    all_temps = [v.get('temperature') for v in converted_values if v.get('temperature') is not None]
+    
+    # Format average based on unit
     if all_temps:
+        if unit_group.lower() == "fahrenheit":
+            # Fahrenheit averages as whole numbers (0 decimal places)
+            avg_mean = round(sum(all_temps) / len(all_temps), 0)
+        else:
+            # Celsius with 1 decimal place
+            avg_mean = round(sum(all_temps) / len(all_temps), 1)
+        
         avg_data = {
-            "mean": round(sum(all_temps) / len(all_temps), 1),
-            "unit": "celsius",
+            "mean": avg_mean,
+            "unit": unit_group,
             "data_points": len(all_temps)
         }
     else:
-        avg_data = {"mean": 0.0, "unit": "celsius", "data_points": 0}
+        avg_data = {"mean": 0.0, "unit": unit_group, "data_points": 0}
     
-    if len(values) >= 2:
-        trend_input = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
+    if len(converted_values) >= 2:
+        trend_input = [{"x": v.get('year'), "y": v.get('temperature')} for v in converted_values]
         slope = calculate_trend_slope(trend_input)
+        trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
         trend_data = {
             "slope": slope,
-            "unit": "°C/decade",
-            "data_points": len(values),
+            "unit": trend_unit,
+            "data_points": len(converted_values),
             "r_squared": None
         }
     else:
-        trend_data = {"slope": 0.0, "unit": "°C/decade", "data_points": len(values)}
+        trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
+        trend_data = {"slope": 0.0, "unit": trend_unit, "data_points": len(converted_values)}
     
     end_date_obj = datetime(current_year, month, day)
-    summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
-    summary_text = generate_summary(summary_data, end_date_obj, period)
+    # Pass original Celsius data for summary calculation, then let generate_summary handle conversion
+    summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in converted_values]
+    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group)
 
-    available_years = {v.get('year') for v in values if v.get('year') is not None}
+    available_years = {v.get('year') for v in converted_values if v.get('year') is not None}
     rebuilt_missing_years = []
     if current_year not in available_years:
         track_missing_year(rebuilt_missing_years, current_year, "no_data_current_year")
@@ -721,16 +742,16 @@ def _rebuild_full_response_from_values(
         "location": location,
         "identifier": identifier,
         "range": {
-            "start": f"{min(v.get('year') for v in values)}-{month:02d}-{day:02d}",
-            "end": f"{max(v.get('year') for v in values)}-{month:02d}-{day:02d}",
-            "years": max(v.get('year') for v in values) - min(v.get('year') for v in values) + 1
+            "start": f"{min(v.get('year') for v in converted_values)}-{month:02d}-{day:02d}",
+            "end": f"{max(v.get('year') for v in converted_values)}-{month:02d}-{day:02d}",
+            "years": max(v.get('year') for v in converted_values) - min(v.get('year') for v in converted_values) + 1
         },
-        "unit_group": "celsius",
-        "values": values,
+        "unit_group": unit_group,
+        "values": converted_values,
         "average": avg_data,
         "trend": trend_data,
         "summary": summary_text,
-        "metadata": create_metadata(len(years), len(values), rebuilt_missing_years, {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
+        "metadata": create_metadata(len(years), len(converted_values), rebuilt_missing_years, {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
         "timezone": _get_location_timezone(location, redis_client),
         "updated": datetime.now(timezone.utc).isoformat()
     }
@@ -803,7 +824,8 @@ async def _get_record_data_internal(
     location: str,
     identifier: str,
     redis_client: redis.Redis,
-    invalid_location_cache: InvalidLocationCache
+    invalid_location_cache: InvalidLocationCache,
+    unit_group: str = "celsius"
 ) -> Dict:
     """Internal helper to get record data using per-year caching (returns dict, not response)."""
     # This is essentially the same logic as get_record but returns the data dict
@@ -824,54 +846,9 @@ async def _get_record_data_internal(
                 bundle_payload = json.loads(data_str)
                 if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
                     values = bundle_payload['records']
-                    all_temps = [v.get('temperature') for v in values if v.get('temperature') is not None]
-                    
-                    from utils.temperature import calculate_trend_slope, generate_summary
-                    from utils.weather import create_metadata
-                    
-                    if all_temps:
-                        avg_data = {
-                            "mean": round(sum(all_temps) / len(all_temps), 1),
-                            "unit": "celsius",
-                            "data_points": len(all_temps)
-                        }
-                    else:
-                        avg_data = {"mean": 0.0, "unit": "celsius", "data_points": 0}
-                    
-                    if len(values) >= 2:
-                        trend_input = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
-                        slope = calculate_trend_slope(trend_input)
-                        trend_data = {
-                            "slope": slope,
-                            "unit": "°C/decade",
-                            "data_points": len(values),
-                            "r_squared": None
-                        }
-                    else:
-                        trend_data = {"slope": 0.0, "unit": "°C/decade", "data_points": len(values)}
-                    
-                    end_date_obj = datetime(current_year, month, day)
-                    summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in values]
-                    summary_text = generate_summary(summary_data, end_date_obj, period)
-                    
-                    return {
-                        "period": period,
-                        "location": location,
-                        "identifier": identifier,
-                        "range": {
-                            "start": f"{min(v.get('year') for v in values)}-{month:02d}-{day:02d}",
-                            "end": f"{max(v.get('year') for v in values)}-{month:02d}-{day:02d}",
-                            "years": max(v.get('year') for v in values) - min(v.get('year') for v in values) + 1
-                        },
-                        "unit_group": "celsius",
-                        "values": values,
-                        "average": avg_data,
-                        "trend": trend_data,
-                        "summary": summary_text,
-                        "metadata": create_metadata(len(years), len(values), [], {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
-                        "timezone": _get_location_timezone(location, redis_client),
-                        "updated": datetime.now(timezone.utc).isoformat()
-                    }
+                    return _rebuild_full_response_from_values(
+                        values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+                    )
             except Exception:
                 pass
         
@@ -891,11 +868,20 @@ async def _get_record_data_internal(
         if year_data:
             values = [year_data[y] for y in sorted(year_data.keys())]
             return _rebuild_full_response_from_values(
-                values, period, location, identifier, month, day, current_year, years, redis_client
+                values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
             )
     
-    # Fallback: fetch fresh
-    return await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+    # Fallback: fetch fresh and rebuild with correct unit
+    fallback_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+    
+    # Convert the fallback data to the requested unit
+    values = fallback_data.get('values', [])
+    if values:
+        return _rebuild_full_response_from_values(
+            values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+        )
+    else:
+        return fallback_data  # Return as-is if no values
 
 @router.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
 async def get_record(
@@ -903,6 +889,7 @@ async def get_record(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
+    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: redis.Redis = Depends(get_redis_client),
     invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache)
@@ -979,7 +966,7 @@ async def get_record(
                     if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
                         values = bundle_payload['records']
                         data = _rebuild_full_response_from_values(
-                            values, period, location, identifier, month, day, current_year, years, redis_client
+                            values, period, location, identifier, month, day, current_year, years, redis_client, unit
                         )
                         
                         # Validate cached data
@@ -1027,7 +1014,7 @@ async def get_record(
                             if 'records' in bundle_payload and len(bundle_payload['records']) > 0:
                                 values = bundle_payload['records']
                                 data = _rebuild_full_response_from_values(
-                                    values, period, location, identifier, month, day, current_year, years, redis_client
+                                    values, period, location, identifier, month, day, current_year, years, redis_client, unit
                                 )
                                 
                                 # Validate cached data
@@ -1165,7 +1152,7 @@ async def get_record(
                 # Rebuild full response from year_data using helper
                 values = [year_data[y] for y in sorted(year_data.keys())]
                 data = _rebuild_full_response_from_values(
-                    values, period, location, identifier, month, day, current_year, years, redis_client
+                    values, period, location, identifier, month, day, current_year, years, redis_client, unit
                 )
                 
                 # Set cache status
@@ -1254,6 +1241,7 @@ async def get_record_average(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
+    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: redis.Redis = Depends(get_redis_client),
     invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache)
@@ -1282,7 +1270,7 @@ async def get_record_average(
         end_date = datetime(current_year, month, day).date()
         
         # Get full record data using per-year caching
-        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache)
+        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache, unit)
         
         # Extract average data
         response_data = SubResourceResponse(
@@ -1312,6 +1300,7 @@ async def get_record_trend(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
+    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: redis.Redis = Depends(get_redis_client),
     invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache)
@@ -1340,7 +1329,7 @@ async def get_record_trend(
         end_date = datetime(current_year, month, day).date()
         
         # Get full record data using per-year caching
-        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache)
+        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache, unit)
         
         # Extract trend data
         response_data = SubResourceResponse(
@@ -1370,6 +1359,7 @@ async def get_record_summary(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
+    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: redis.Redis = Depends(get_redis_client),
     invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache)
@@ -1398,7 +1388,7 @@ async def get_record_summary(
         end_date = datetime(current_year, month, day).date()
         
         # Get full record data using per-year caching
-        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache)
+        record_data = await _get_record_data_internal(period, location, identifier, redis_client, invalid_location_cache, unit)
         
         # Extract summary data
         response_data = SubResourceResponse(
