@@ -565,8 +565,8 @@ async def get_temperature_data_v1(
             'y': value.temperature
         })
     
-    # Generate summary text
-    summary_text = generate_summary(summary_data, end_date_obj, period)
+    # Generate summary text with correct unit conversion
+    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group)
 
     # Ensure metadata reflects missing current year when data is unavailable
     available_years = {v.year for v in values}

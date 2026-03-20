@@ -115,7 +115,7 @@ class TestV1RecordsEndpoints:
                 "identifier": identifier,
                 "range": {"start": "1974-01-15", "end": "2024-01-15"},
                 "unit_group": "celsius",
-                "values": [{"date": "2024-01-15", "temperature": 15.0}],
+                "values": [{"date": "2024-01-15", "year": 2024, "temperature": 15.0}],
                 "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1, "unit": "celsius"},
                 "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
                 "summary": "Test summary",

@@ -5,14 +5,13 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import time
 import os
 from main import (
-    calculate_historical_average,
-    calculate_trend_slope,
     get_temperature_series,
     app as main_app,
     LocationDiversityMonitor,
     RequestRateMonitor,
     API_ACCESS_TOKEN
 )
+from utils.temperature import calculate_historical_average, calculate_trend_slope
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 
 # Check if rate limiting is enabled
