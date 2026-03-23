@@ -105,12 +105,14 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
 
     avg_temp = calculate_historical_average(data)
     diff = latest['y'] - avg_temp
-    rounded_diff = round(diff, 1)
+    is_fahrenheit = unit_group.lower() == "fahrenheit"
+    rounded_diff = int(round(diff, 0)) if is_fahrenheit else round(diff, 1)
+    latest_temp = int(round(latest['y'], 0)) if is_fahrenheit else round(latest['y'], 1)
 
     friendly_date = get_friendly_date(date)
     warm_summary = ''
     cold_summary = ''
-    temperature = f"{latest['y']}{unit_symbol}."
+    temperature = f"{latest_temp}{unit_symbol}."
 
     # Determine tense based on date and period
     today = datetime.now().date()
