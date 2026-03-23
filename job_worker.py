@@ -277,22 +277,24 @@ class JobWorker:
     
     async def process_record_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record computation job with per-year granularity."""
-        from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year
+        from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year, _rebuild_full_response_from_values
         from cache_utils import (
             normalize_location_for_cache, rec_key, rec_etag_key,
             get_ttl_for_year, ETagGenerator
         )
+        from utils.weather import get_year_range
         from fastapi import HTTPException
-        
+
         logger.info(f"🔍 Processing record job with params: {params}")
         scope = params.get("scope") or params.get("period")  # Support both for backward compatibility
         location = params.get("location")
         identifier = params.get("identifier")
         year = params.get("year")
-        
+        unit_group = params.get("unit_group", "celsius")
+
         if not all([scope, location, identifier]):
             raise ValueError(f"Missing required params - scope: {scope}, location: {location}, identifier: {identifier}")
-        
+
         # Normalize location to slug
         slug = normalize_location_for_cache(location)
         current_year = datetime.now(timezone.utc).year
@@ -342,11 +344,17 @@ class JobWorker:
                 logger.warning(f"Serialization error caching per-year record {year_key}: {serialize_error}")
                 raise
             
+            # Rebuild single-year result in the requested unit for the response
+            month, day = int(identifier.split("-")[0]), int(identifier.split("-")[1])
+            years = get_year_range(current_year)
+            result_data = _rebuild_full_response_from_values(
+                [year_record], scope, location, identifier, month, day, current_year, years, self.redis, unit_group
+            )
             return {
                 "cache_key": year_key,
                 "etag": etag,
                 "year": year,
-                "data": year_record,
+                "data": result_data,
                 "computed_at": datetime.now(timezone.utc).isoformat()
             }
         else:
@@ -356,8 +364,8 @@ class JobWorker:
                 data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
             except HTTPException as http_err:
                 raise ValueError(f"{http_err.detail}") from http_err
-            
-            # Extract and store all per-year records using Redis pipeline for better performance
+
+            # Extract and store all per-year records (celsius) using Redis pipeline
             per_year_records = _extract_per_year_records(data)
 
             try:
@@ -386,12 +394,22 @@ class JobWorker:
 
             except (redis.RedisError, json.JSONEncodeError, TypeError) as e:
                 logger.warning(f"Error caching years with pipeline: {type(e).__name__}: {e}")
-            
-            # Return summary
+
+            # Rebuild full response in the requested unit
+            month, day = int(identifier.split("-")[0]), int(identifier.split("-")[1])
+            years = get_year_range(current_year)
+            values_list = [per_year_records[y] for y in sorted(per_year_records.keys())]
+            if values_list:
+                result_data = _rebuild_full_response_from_values(
+                    values_list, scope, location, identifier, month, day, current_year, years, self.redis, unit_group
+                )
+            else:
+                result_data = data
+
             return {
                 "cache_keys": [rec_key(scope, slug, identifier, y) for y in per_year_records.keys()],
                 "years_cached": list(per_year_records.keys()),
-                "data": data,
+                "data": result_data,
                 "computed_at": datetime.now(timezone.utc).isoformat()
             }
     

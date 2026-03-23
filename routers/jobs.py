@@ -89,6 +89,7 @@ async def create_record_job(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None
 ):
     """Create an async job to compute heavy record data."""
@@ -96,12 +97,13 @@ async def create_record_job(
         logger.info(f"Creating async job: period={period}, location={location}, identifier={identifier}")
         job_manager = get_job_manager()
         logger.info(f"Job manager retrieved successfully")
-        
+
         # Create job
         job_id = job_manager.create_job("record_computation", {
             "period": period,
             "location": location,
-            "identifier": identifier
+            "identifier": identifier,
+            "unit_group": unit_group
         })
         logger.info(f"Job created successfully: {job_id}")
         
