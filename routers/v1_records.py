@@ -1158,10 +1158,10 @@ async def get_record(
                 # Set cache status
                 cache_status = "HIT" if not missing_past and not missing_current else "PARTIAL"
             else:
-                # No cached data, fetch fresh
-                data = await get_temperature_data_v1(location, period, identifier, unit_group, redis_client)
-                
-                # Extract and store per-year records
+                # No cached data, fetch fresh in celsius (cache always stores celsius)
+                data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+
+                # Extract and store per-year records (celsius)
                 per_year_records = _extract_per_year_records(data)
                 await _store_per_year_records(redis_client, period, slug, identifier, per_year_records, current_year)
 
@@ -1188,10 +1188,25 @@ async def get_record(
                         redis_client, period, slug, identifier, per_year_records, year_etags
                     )
 
+                # Rebuild response with the requested unit conversion
+                values_list = [per_year_records[y] for y in sorted(per_year_records.keys())]
+                if values_list:
+                    data = _rebuild_full_response_from_values(
+                        values_list, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+                    )
+
                 cache_status = "MISS"
         else:
-            # Cache disabled, fetch fresh
-            data = await get_temperature_data_v1(location, period, identifier, unit_group, redis_client)
+            # Cache disabled, fetch fresh in celsius then convert for response
+            celsius_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+            per_year = _extract_per_year_records(celsius_data)
+            values_list = [per_year[y] for y in sorted(per_year.keys())]
+            if values_list:
+                data = _rebuild_full_response_from_values(
+                    values_list, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+                )
+            else:
+                data = celsius_data
         
         # Validate the response data
         is_valid, error_msg = validate_location_response(data, location)
