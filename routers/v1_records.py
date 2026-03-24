@@ -728,9 +728,20 @@ def _rebuild_full_response_from_values(
         trend_data = {"slope": 0.0, "unit": trend_unit, "data_points": len(converted_values)}
     
     end_date_obj = datetime(current_year, month, day)
-    # Pass original Celsius data for summary calculation, then let generate_summary handle conversion
     summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in converted_values]
     summary_text = generate_summary(summary_data, end_date_obj, period, unit_group)
+
+    # Replace bare date with period-prefixed version for non-daily periods
+    if period == "weekly":
+        period_friendly_date = f"week ending {get_friendly_date(end_date_obj)}"
+    elif period == "monthly":
+        period_friendly_date = f"month ending {get_friendly_date(end_date_obj)}"
+    elif period == "yearly":
+        period_friendly_date = f"year ending {get_friendly_date(end_date_obj)}"
+    else:
+        period_friendly_date = None
+    if period_friendly_date:
+        summary_text = summary_text.replace(get_friendly_date(end_date_obj), period_friendly_date)
 
     available_years = {v.get('year') for v in converted_values if v.get('year') is not None}
     rebuilt_missing_years = []
