@@ -22,6 +22,10 @@ from cache_utils import (
     get_job_manager
 )
 
+from app.cache_utils import (
+    cache_get as temporal_cache_get,
+    cache_set as temporal_cache_set,
+)
 from utils.validation import validate_location_for_ssrf
 from utils.location_validation import (
     is_location_likely_invalid, validate_location_response, InvalidLocationCache
@@ -1005,7 +1009,51 @@ async def get_record(
                 except (json.JSONDecodeError, KeyError, ValueError) as e:
                     if DEBUG:
                         logger.debug(f"Error parsing bundle cache: {e}, falling through to per-year lookup")
-            
+
+            # Step 1b: Try temporal cache (supports approximate matching for monthly/yearly)
+            temporal_hit = temporal_cache_get(
+                redis_client, agg=period, original_location=location, end_date=end_date
+            )
+            if temporal_hit:
+                data = temporal_hit["data"]
+                meta = temporal_hit["meta"]
+
+                # Apply unit conversion if needed (temporal cache stores celsius)
+                if unit_group == "fahrenheit" and "records" in data:
+                    values = data["records"]
+                    data = _rebuild_full_response_from_values(
+                        values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+                    )
+
+                # Attach meta block to response
+                data["meta"] = meta
+
+                is_valid, error_msg = validate_location_response(data, location)
+                if not is_valid:
+                    invalid_location_cache.mark_location_invalid(location, "no_data_cached")
+                    raise HTTPException(status_code=400, detail=error_msg)
+
+                from cache_utils import ETagGenerator
+                etag = ETagGenerator.generate_etag(data)
+
+                if if_none_match and ETagGenerator.matches_etag(etag, if_none_match):
+                    response.status_code = 304
+                    response.headers["ETag"] = etag
+                    response.headers["X-Cache-Status"] = "HIT"
+                    return None
+
+                json_response = JSONResponse(content=data)
+                json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+                json_response.headers["ETag"] = etag
+                cache_label = "APPROX" if meta["approximate"]["temporal"] else "HIT"
+                json_response.headers["X-Cache-Status"] = cache_label
+                set_weather_cache_headers(json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1")
+
+                if DEBUG:
+                    logger.debug(f"✅ SERVING TEMPORAL CACHE ({cache_label}): {period}/{location}/{identifier}")
+
+                return json_response
+
             # Step 2: MGET all year keys
             year_data, missing_past, missing_current = await get_records(
                 redis_client, period, slug, identifier, years
@@ -1251,6 +1299,19 @@ async def get_record(
                 from cache_utils import ETagGenerator
                 bundle_etag_computed = ETagGenerator.generate_etag(data)
         
+        # Store in temporal cache for future approximate matching (always store celsius data)
+        if CACHE_ENABLED:
+            try:
+                temporal_cache_set(
+                    redis_client,
+                    agg=period,
+                    original_location=location,
+                    end_date=end_date,
+                    payload=data,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to store in temporal cache: {e}")
+
         # Create response with smart cache headers
         json_response = JSONResponse(content=data)
         json_response.headers["ETag"] = bundle_etag_computed
