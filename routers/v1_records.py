@@ -385,7 +385,8 @@ async def _collect_rolling_window_values(
                     f"below threshold"
                 )
 
-            track_missing_year(missing_years, year, "coverage_below_threshold")
+            if not timeline_failed:
+                track_missing_year(missing_years, year, "coverage_below_threshold")
             continue
 
         temps_converted = [
@@ -745,9 +746,13 @@ def _rebuild_full_response_from_values(
 
     available_years = {v.get('year') for v in converted_values if v.get('year') is not None}
     rebuilt_missing_years = []
-    if current_year not in available_years:
-        track_missing_year(rebuilt_missing_years, current_year, "no_data_current_year")
-    
+    for y in years:
+        if y not in available_years:
+            reason = "no_data_current_year" if y == current_year else "no_data"
+            track_missing_year(rebuilt_missing_years, y, reason)
+
+    period_days = WINDOW_DAYS.get(period, 1)
+
     return {
         "period": period,
         "location": location,
@@ -762,7 +767,7 @@ def _rebuild_full_response_from_values(
         "average": avg_data,
         "trend": trend_data,
         "summary": summary_text,
-        "metadata": create_metadata(len(years), len(converted_values), rebuilt_missing_years, {"period_days": 1, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
+        "metadata": create_metadata(len(years), len(converted_values), rebuilt_missing_years, {"period_days": period_days, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
         "timezone": _get_location_timezone(location, redis_client),
         "updated": datetime.now(timezone.utc).isoformat()
     }
