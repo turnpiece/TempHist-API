@@ -58,6 +58,15 @@ CACHE_TTL_SHORT = validate_ttl(int(os.getenv("CACHE_TTL_SHORT", "3600")), "CACHE
 CACHE_TTL_LONG = validate_ttl(int(os.getenv("CACHE_TTL_LONG", "604800")), "CACHE_TTL_LONG", 604800)  # 7 days
 CACHE_TTL_JOB = validate_ttl(int(os.getenv("CACHE_TTL_JOB", "7200")), "CACHE_TTL_JOB", 7200)  # 2 hours for job results
 
+# Job queue limits
+MAX_JOB_QUEUE_SIZE = int(os.getenv("MAX_JOB_QUEUE_SIZE", "1000"))
+
+
+class JobQueueFullError(Exception):
+    """Raised when the job queue exceeds MAX_JOB_QUEUE_SIZE."""
+    pass
+
+
 # Year-based caching TTL constants
 TTL_STABLE = validate_ttl(int(os.getenv("TTL_STABLE", "7776000")), "TTL_STABLE", 7776000)  # 90 days for past years
 TTL_HISTORICAL = validate_ttl(int(os.getenv("TTL_HISTORICAL", "31536000")), "TTL_HISTORICAL", 31536000)  # 365 days for very old data (7+ years)
@@ -1802,6 +1811,12 @@ class JobManager:
                     if status in [JobStatus.PENDING, JobStatus.PROCESSING]:
                         logger.info(f"Deduplicated job {existing_job_id}: identical job already {status}")
                         return existing_job_id
+
+            # Reject if queue is too large (backpressure)
+            queue_length = self.redis.llen("job_queue")
+            if queue_length >= MAX_JOB_QUEUE_SIZE:
+                logger.warning(f"Job queue full ({queue_length} >= {MAX_JOB_QUEUE_SIZE}), rejecting new job")
+                raise JobQueueFullError(f"Job queue is full ({queue_length} jobs). Try again later.")
 
             # Create new job with timestamp for uniqueness
             job_id = f"{job_type}_{int(time.time() * 1000)}_{params_hash[:8]}"
