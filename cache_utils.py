@@ -1791,18 +1791,20 @@ class JobManager:
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
         """
         Create a new job and return job ID.
-        Implements deduplication - if an identical job is already pending or processing, returns existing job_id.
+        Implements deduplication - if an identical job is already pending, processing,
+        recently completed, or recently failed, returns existing job_id.
         """
         try:
             # Generate deterministic job ID based on params (without timestamp for deduplication)
             params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
             dedup_key = f"job:dedup:{job_type}:{params_hash}"
 
-            # Check if identical job already exists
+            # Check if identical job already exists (any status — pending, processing,
+            # recently completed, or recently failed).  The dedup key is kept alive with
+            # a TTL after completion so that client retries don't re-enqueue the same work.
             existing_job_id = self.redis.get(dedup_key)
             if existing_job_id:
                 existing_job_id = existing_job_id.decode() if isinstance(existing_job_id, bytes) else existing_job_id
-                # Verify the job still exists and is pending/processing
                 job_key = f"{self.job_prefix}{existing_job_id}"
                 job_data = self.redis.get(job_key)
                 if job_data:
@@ -1810,6 +1812,12 @@ class JobManager:
                     status = job.get("status")
                     if status in [JobStatus.PENDING, JobStatus.PROCESSING]:
                         logger.info(f"Deduplicated job {existing_job_id}: identical job already {status}")
+                        return existing_job_id
+                    if status == JobStatus.READY:
+                        logger.info(f"Deduplicated job {existing_job_id}: identical job already completed")
+                        return existing_job_id
+                    if status == JobStatus.ERROR:
+                        logger.info(f"Deduplicated job {existing_job_id}: identical job recently failed, skipping re-enqueue")
                         return existing_job_id
 
             # Reject if queue is too large (backpressure)
@@ -1897,14 +1905,17 @@ class JobManager:
             result_key = f"{self.result_prefix}{job_id}"
             self.redis.setex(result_key, self.job_ttl, json.dumps(result))
 
-        # Clean up deduplication key when job completes (READY or ERROR status)
+        # Keep deduplication key alive after completion so that client retries
+        # don't re-enqueue the same work.  For successful jobs we keep it for 5 minutes;
+        # for failures we keep it for 2 minutes (allows a retry after a cooldown).
         if status in [JobStatus.READY, JobStatus.ERROR]:
             job_type = job.get("type")
             params = job.get("params")
             if job_type and params:
                 params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
                 dedup_key = f"job:dedup:{job_type}:{params_hash}"
-                self.redis.delete(dedup_key)
+                cooldown_ttl = 300 if status == JobStatus.READY else 120
+                self.redis.setex(dedup_key, cooldown_ttl, job_id)
     
     def cleanup_expired_jobs(self) -> int:
         """Clean up expired jobs (Redis TTL should handle this automatically)."""

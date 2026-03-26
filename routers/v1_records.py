@@ -228,21 +228,34 @@ def _evaluate_coverage(period: str, available_days: int, expected_days: int, yea
 
 
 def _enqueue_backfill_job(period: str, location: str, identifier: str, year: int) -> None:
-    """Request the background worker to backfill missing daily data for a specific year."""
+    """Request the background worker to backfill missing daily data for a specific year.
+
+    Uses a per-key cooldown so that rapid client retries don't flood the job
+    queue with duplicate backfill requests (even beyond the job-level dedup).
+    """
     try:
         job_manager = get_job_manager()
         if not job_manager:
             return
-        job_manager.create_job(
-            "record_computation",
-            {
-                "scope": period,
-                "slug": normalize_location_for_cache(location),
-                "identifier": identifier,
-                "year": year,
-                "location": location,
-            },
-        )
+
+        # Router-level cooldown: skip enqueue if we already requested this
+        # backfill recently.  60 s is enough for the worker to pick it up.
+        slug = normalize_location_for_cache(location)
+        cooldown_key = f"backfill:cd:{period}:{slug}:{identifier}:{year}"
+        if job_manager.redis.set(cooldown_key, 1, nx=True, ex=60):
+            # Key was newly set — proceed with enqueue
+            job_manager.create_job(
+                "record_computation",
+                {
+                    "scope": period,
+                    "slug": slug,
+                    "identifier": identifier,
+                    "year": year,
+                    "location": location,
+                },
+            )
+        elif DEBUG:
+            logger.debug("Backfill cooldown active for %s %s %s %s", period, slug, identifier, year)
     except Exception as exc:  # Best-effort enqueue; log at debug level when verbose.
         if DEBUG:
             logger.debug("Failed to enqueue backfill job for %s %s %s: %s", period, location, year, exc)
