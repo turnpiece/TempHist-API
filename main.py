@@ -800,13 +800,16 @@ async def lifespan(app: FastAPI):
         from cache_utils import get_job_manager
         job_manager = get_job_manager()
         if job_manager:
-            job_id = job_manager.create_job("cache_warming", {
-                "type": "all",
-                "locations": [],
-                "triggered_by": "startup",
-                "triggered_at": datetime.now(timezone.utc).isoformat()
-            })
-            logger.info(f"✅ Startup cache warming job created: {job_id}")
+            try:
+                job_id = job_manager.create_job("cache_warming", {
+                    "type": "all",
+                    "locations": [],
+                    "triggered_by": "startup",
+                    "triggered_at": datetime.now(timezone.utc).isoformat()
+                })
+                logger.info(f"✅ Startup cache warming job created: {job_id}")
+            except Exception as job_error:
+                logger.warning(f"⚠️  Startup cache warming job skipped: {job_error}")
         else:
             logger.warning("⚠️  Job manager not available, skipping startup warming")
         
