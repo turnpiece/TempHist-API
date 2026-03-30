@@ -71,8 +71,17 @@ if __name__ == "__main__":
 
     result = clear_job_queue(redis_url)
 
-    print(f"Status: {result['status']}")
-    print(f"Message: {result['message']}")
+    print(f"Status:       {result['status']}")
+    print(f"Message:      {result['message']}")
+    if "jobs_cleared" in result:
+        print(f"Jobs cleared: {result['jobs_cleared']}")
+    if "remaining_jobs" in result:
+        remaining = result["remaining_jobs"]
+        if remaining == 0:
+            print(f"Verification: ✓ Queue is empty")
+        else:
+            print(f"Verification: ✗ {remaining} jobs still remain — manual inspection required")
+            sys.exit(1)
 
     if result['status'] == 'error':
         sys.exit(1)

@@ -5,14 +5,13 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import time
 import os
 from main import (
-    calculate_historical_average,
-    calculate_trend_slope,
     get_temperature_series,
     app as main_app,
     LocationDiversityMonitor,
     RequestRateMonitor,
     API_ACCESS_TOKEN
 )
+from utils.temperature import calculate_historical_average, calculate_trend_slope
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 
 # Check if rate limiting is enabled
@@ -47,7 +46,6 @@ def mock_env_vars():
     """Fixture to set up environment variables for testing"""
     with patch.dict('os.environ', {
         'VISUAL_CROSSING_API_KEY': 'test_key',
-        'OPENWEATHER_API_KEY': 'test_key',
         'CACHE_ENABLED': 'true',
         'API_ACCESS_TOKEN': 'test_api_token'  # Test API token
     }):
@@ -90,7 +88,7 @@ def test_weather_endpoint(client):
         "tempmax": 22.0,
         "tempmin": 18.0
     }
-    with patch('main.fetch_weather_batch', return_value={"2024-05-15": mock_weather_data}):
+    with patch('routers.weather.get_weather_for_date', new_callable=AsyncMock, return_value={"days": [mock_weather_data]}):
         response = client.get(
             "/weather/London/2024-05-15",
             headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}

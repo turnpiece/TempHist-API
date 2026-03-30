@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 JOB_PROCESSING_BATCH_SIZE = 10  # Maximum jobs to process in one cycle
 WORKER_POLL_INTERVAL_SECONDS = 1  # Time between job queue polls
 WORKER_HEARTBEAT_INTERVAL_CYCLES = 60  # Update heartbeat every 60 poll cycles (60 seconds)
+WORKER_DEEP_CLEANUP_INTERVAL_CYCLES = 300  # Deep queue cleanup every 300 cycles (~5 minutes)
+WORKER_DEEP_CLEANUP_BATCH_SIZE = 1000  # Max entries to scan during deep cleanup
 WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES = 300  # Log heartbeat every 300 cycles (5 minutes)
 
 class JobWorker:
@@ -48,11 +50,16 @@ class JobWorker:
                 if poll_count % WORKER_HEARTBEAT_INTERVAL_CYCLES == 0:
                     try:
                         self.redis.setex("worker:heartbeat", 180, datetime.now(timezone.utc).isoformat())
-                        # Only log heartbeat periodically to reduce log volume
+                        # Log heartbeat with queue depth
                         if poll_count % WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES == 0:
-                            logger.info(f"💓 Worker heartbeat active (poll #{poll_count})")
+                            queue_depth = self.redis.llen(self.job_queue_key)
+                            logger.info(f"💓 Worker heartbeat active (poll #{poll_count}, queue depth: {queue_depth})")
                     except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
                         logger.warning(f"⚠️  Redis error updating heartbeat: {e}")
+
+                # Periodic deep cleanup of stale queue entries
+                if poll_count % WORKER_DEEP_CLEANUP_INTERVAL_CYCLES == 0:
+                    self.cleanup_stale_queue_entries()
 
                 await asyncio.sleep(WORKER_POLL_INTERVAL_SECONDS)
         except Exception as e:
@@ -120,25 +127,24 @@ class JobWorker:
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
     
     async def get_pending_jobs(self) -> list:
-        """Get list of pending job IDs from the job queue."""
+        """Get list of pending job IDs from the job queue.
+
+        Also cleans up orphaned entries (expired job data) and
+        non-pending jobs that are still in the queue.
+        """
         try:
-            # Use Redis LIST operations instead of KEYS command
-            # This is more efficient and doesn't require KEYS permission
             pending_jobs = []
-            
-            # Check if we have a job queue
+            stale_job_ids = []
+
             queue_length = self.redis.llen(self.job_queue_key)
-            
+
             if queue_length > 0:
-                # Get jobs from the queue (without removing them)
                 for i in range(min(queue_length, JOB_PROCESSING_BATCH_SIZE)):
                     job_id = self.redis.lindex(self.job_queue_key, i)
                     if job_id:
-                        # Convert byte string to string if needed
                         if isinstance(job_id, bytes):
                             job_id = job_id.decode('utf-8')
-                        
-                        # Check if job is still pending
+
                         job_key = f"job:{job_id}"
                         job_data = self.redis.get(job_key)
                         if job_data:
@@ -146,17 +152,70 @@ class JobWorker:
                             job_status = job.get("status")
                             if job_status == JobStatus.PENDING:
                                 pending_jobs.append(job_id)
+                            else:
+                                # Job already processed/failed but still in queue
+                                stale_job_ids.append(job_id)
                         else:
-                            logger.warning(f"⚠️ No job data found for: {job_id}")
-            
+                            # Job data expired — orphaned queue entry
+                            stale_job_ids.append(job_id)
+
+            # Batch-remove stale entries after iteration to avoid index shifting
+            if stale_job_ids:
+                for job_id in stale_job_ids:
+                    self.redis.lrem(self.job_queue_key, 1, job_id)
+                logger.info(f"🧹 Cleaned {len(stale_job_ids)} stale entries from job queue")
+
             return pending_jobs
-            
+
         except Exception as e:
             logger.error(f"❌ Error getting pending jobs: {e}")
             import traceback
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return []
-    
+
+    def cleanup_stale_queue_entries(self):
+        """Deep scan the queue and remove orphaned/completed entries.
+
+        Called periodically to clean entries beyond the normal batch window.
+        """
+        try:
+            queue_length = self.redis.llen(self.job_queue_key)
+            if queue_length == 0:
+                return
+
+            scan_size = min(queue_length, WORKER_DEEP_CLEANUP_BATCH_SIZE)
+            stale_ids = []
+
+            for i in range(scan_size):
+                job_id = self.redis.lindex(self.job_queue_key, i)
+                if not job_id:
+                    continue
+                if isinstance(job_id, bytes):
+                    job_id = job_id.decode('utf-8')
+
+                job_data = self.redis.get(f"job:{job_id}")
+                if not job_data:
+                    stale_ids.append(job_id)
+                else:
+                    status = json.loads(job_data).get("status")
+                    if status not in (JobStatus.PENDING, JobStatus.PROCESSING):
+                        stale_ids.append(job_id)
+
+            for job_id in stale_ids:
+                self.redis.lrem(self.job_queue_key, 1, job_id)
+
+            remaining = self.redis.llen(self.job_queue_key)
+            if stale_ids:
+                logger.info(
+                    f"🧹 Deep cleanup: removed {len(stale_ids)} stale entries "
+                    f"(scanned {scan_size}, queue now {remaining})"
+                )
+            else:
+                logger.info(f"🧹 Deep cleanup: queue healthy ({remaining} entries, scanned {scan_size})")
+
+        except Exception as e:
+            logger.error(f"❌ Error during deep queue cleanup: {e}")
+
     async def process_job(self, job_id: str, job_manager):
         """Process a single job."""
         start_time = datetime.now(timezone.utc)
@@ -277,22 +336,24 @@ class JobWorker:
     
     async def process_record_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record computation job with per-year granularity."""
-        from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year
+        from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year, _rebuild_full_response_from_values
         from cache_utils import (
             normalize_location_for_cache, rec_key, rec_etag_key,
             get_ttl_for_year, ETagGenerator
         )
+        from utils.weather import get_year_range
         from fastapi import HTTPException
-        
+
         logger.info(f"🔍 Processing record job with params: {params}")
         scope = params.get("scope") or params.get("period")  # Support both for backward compatibility
         location = params.get("location")
         identifier = params.get("identifier")
         year = params.get("year")
-        
+        unit_group = params.get("unit_group", "celsius")
+
         if not all([scope, location, identifier]):
             raise ValueError(f"Missing required params - scope: {scope}, location: {location}, identifier: {identifier}")
-        
+
         # Normalize location to slug
         slug = normalize_location_for_cache(location)
         current_year = datetime.now(timezone.utc).year
@@ -342,11 +403,17 @@ class JobWorker:
                 logger.warning(f"Serialization error caching per-year record {year_key}: {serialize_error}")
                 raise
             
+            # Rebuild single-year result in the requested unit for the response
+            month, day = int(identifier.split("-")[0]), int(identifier.split("-")[1])
+            years = get_year_range(current_year)
+            result_data = _rebuild_full_response_from_values(
+                [year_record], scope, location, identifier, month, day, current_year, years, self.redis, unit_group
+            )
             return {
                 "cache_key": year_key,
                 "etag": etag,
                 "year": year,
-                "data": year_record,
+                "data": result_data,
                 "computed_at": datetime.now(timezone.utc).isoformat()
             }
         else:
@@ -356,8 +423,8 @@ class JobWorker:
                 data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
             except HTTPException as http_err:
                 raise ValueError(f"{http_err.detail}") from http_err
-            
-            # Extract and store all per-year records using Redis pipeline for better performance
+
+            # Extract and store all per-year records (celsius) using Redis pipeline
             per_year_records = _extract_per_year_records(data)
 
             try:
@@ -386,12 +453,22 @@ class JobWorker:
 
             except (redis.RedisError, json.JSONEncodeError, TypeError) as e:
                 logger.warning(f"Error caching years with pipeline: {type(e).__name__}: {e}")
-            
-            # Return summary
+
+            # Rebuild full response in the requested unit
+            month, day = int(identifier.split("-")[0]), int(identifier.split("-")[1])
+            years = get_year_range(current_year)
+            values_list = [per_year_records[y] for y in sorted(per_year_records.keys())]
+            if values_list:
+                result_data = _rebuild_full_response_from_values(
+                    values_list, scope, location, identifier, month, day, current_year, years, self.redis, unit_group
+                )
+            else:
+                result_data = data
+
             return {
                 "cache_keys": [rec_key(scope, slug, identifier, y) for y in per_year_records.keys()],
                 "years_cached": list(per_year_records.keys()),
-                "data": data,
+                "data": result_data,
                 "computed_at": datetime.now(timezone.utc).isoformat()
             }
     

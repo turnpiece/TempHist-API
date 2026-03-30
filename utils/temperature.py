@@ -71,12 +71,21 @@ def get_friendly_date(date: datetime) -> str:
     return f"{day}{suffix} {date.strftime('%B')}"
 
 
-def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily") -> str:
-    """Generate a summary text for temperature data.
+def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily", unit_group: str = "celsius") -> str:
+    """Generate a summary text for temperature data in the requested unit.
+    
+    Args:
+        data: List of dicts with 'x' (year) and 'y' (temperature) keys. Temperatures should already be in the target unit.
+        date: Reference date for the summary
+        period: Data period ("daily", "weekly", "monthly", or "yearly")
+        unit_group: Temperature unit ("celsius" or "fahrenheit")
     
     Note: Time-sensitive summaries (e.g., "the past week/month/year") should have
     very short cache durations (minutes) as they become invalid quickly.
     """
+    # Determine unit symbol
+    unit_symbol = "°F" if unit_group.lower() == "fahrenheit" else "°C"
+    
     # Filter out data points with None temperature
     data = [d for d in data if d.get('y') is not None]
     if not data or len(data) < 2:
@@ -96,12 +105,14 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
 
     avg_temp = calculate_historical_average(data)
     diff = latest['y'] - avg_temp
-    rounded_diff = round(diff, 1)
+    is_fahrenheit = unit_group.lower() == "fahrenheit"
+    rounded_diff = int(round(diff, 0)) if is_fahrenheit else round(diff, 1)
+    latest_temp = int(round(latest['y'], 0)) if is_fahrenheit else round(latest['y'], 1)
 
     friendly_date = get_friendly_date(date)
     warm_summary = ''
     cold_summary = ''
-    temperature = f"{latest['y']}°C."
+    temperature = f"{latest_temp}{unit_symbol}."
 
     # Determine tense based on date and period
     today = datetime.now().date()
@@ -278,29 +289,29 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
             avg_summary = "However, " if cold_summary else ""
-            avg_summary += f"{'it' if cold_summary else 'It'} was {rounded_diff}°C warmer than average."
+            avg_summary += f"{'it' if cold_summary else 'It'} was {rounded_diff}{unit_symbol} warmer than average."
         else:
             # For daily periods, use the period context
             avg_summary = "However, " if cold_summary else ""
             if cold_summary:
                 period_lower = period_context.lower()
-                avg_summary += f"{period_lower} {tense_context} {rounded_diff}°C warmer than average."
+                avg_summary += f"{period_lower} {tense_context} {rounded_diff}{unit_symbol} warmer than average."
             else:
                 period_capitalised = period_context.capitalize()
-                avg_summary += f"{period_capitalised} {tense_context} {rounded_diff}°C warmer than average."
+                avg_summary += f"{period_capitalised} {tense_context} {rounded_diff}{unit_symbol} warmer than average."
     else:
         # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
         if period in ["weekly", "monthly", "yearly"]:
             avg_summary = "However, " if warm_summary else ""
-            avg_summary += f"{'it' if warm_summary else 'It'} was {abs(rounded_diff)}°C cooler than average."
+            avg_summary += f"{'it' if warm_summary else 'It'} was {abs(rounded_diff)}{unit_symbol} cooler than average."
         else:
             # For daily periods, use the period context
             avg_summary = "However, " if warm_summary else ""
             if warm_summary:
                 period_lower = period_context.lower()
-                avg_summary += f"{period_lower} {tense_context} {abs(rounded_diff)}°C cooler than average."
+                avg_summary += f"{period_lower} {tense_context} {abs(rounded_diff)}{unit_symbol} cooler than average."
             else:
                 period_capitalised = period_context.capitalize()
-                avg_summary += f"{period_capitalised} {tense_context} {abs(rounded_diff)}°C cooler than average."
+                avg_summary += f"{period_capitalised} {tense_context} {abs(rounded_diff)}{unit_symbol} cooler than average."
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))

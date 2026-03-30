@@ -5,7 +5,7 @@ import redis
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Path, Query, Response, Depends, Request
-from cache_utils import get_job_manager, JobStatus
+from cache_utils import get_job_manager, JobStatus, JobQueueFullError
 from routers.dependencies import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,7 @@ async def create_record_job(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None
 ):
     """Create an async job to compute heavy record data."""
@@ -96,12 +97,13 @@ async def create_record_job(
         logger.info(f"Creating async job: period={period}, location={location}, identifier={identifier}")
         job_manager = get_job_manager()
         logger.info(f"Job manager retrieved successfully")
-        
+
         # Create job
         job_id = job_manager.create_job("record_computation", {
             "period": period,
             "location": location,
-            "identifier": identifier
+            "identifier": identifier,
+            "unit_group": unit_group
         })
         logger.info(f"Job created successfully: {job_id}")
         
@@ -117,6 +119,15 @@ async def create_record_job(
             "status_url": f"/v1/jobs/{job_id}"
         }
         
+    except JobQueueFullError as e:
+        logger.warning(f"Job queue full, returning 503: {e}")
+        response.status_code = 503
+        response.headers["Retry-After"] = "10"
+        return {
+            "error": "service_unavailable",
+            "message": str(e),
+            "retry_after": 10
+        }
     except Exception as e:
         logger.error(f"Error creating record job: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")

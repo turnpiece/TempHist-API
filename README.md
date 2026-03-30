@@ -37,7 +37,6 @@ Create a `.env` file with the following variables:
 ```bash
 # Required API Keys
 VISUAL_CROSSING_API_KEY=your_key_here
-OPENWEATHER_API_KEY=your_key_here
 API_ACCESS_TOKEN=your_key_here
 
 # Redis Configuration
@@ -1248,7 +1247,6 @@ grep "RATE" temphist.log
 
 ```bash
 VISUAL_CROSSING_API_KEY=your_visual_crossing_key    # Primary weather data source
-OPENWEATHER_API_KEY=your_openweather_key            # Backup weather data source
 ```
 
 **Database:**
