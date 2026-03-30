@@ -22,6 +22,8 @@ import redis
 import aiohttp
 from fastapi import Request, Response
 
+from config import USAGE_TRACKING_ENABLED, USAGE_RETENTION_DAYS, DEBUG, API_ACCESS_TOKEN, BASE_URL
+
 # Try to import zoneinfo (Python 3.9+). Fall back to UTC if unavailable.
 try:
     from zoneinfo import ZoneInfo
@@ -55,6 +57,15 @@ CACHE_TTL_DEFAULT = validate_ttl(int(os.getenv("CACHE_TTL_DEFAULT", "86400")), "
 CACHE_TTL_SHORT = validate_ttl(int(os.getenv("CACHE_TTL_SHORT", "3600")), "CACHE_TTL_SHORT", 3600)  # 1 hour  
 CACHE_TTL_LONG = validate_ttl(int(os.getenv("CACHE_TTL_LONG", "604800")), "CACHE_TTL_LONG", 604800)  # 7 days
 CACHE_TTL_JOB = validate_ttl(int(os.getenv("CACHE_TTL_JOB", "7200")), "CACHE_TTL_JOB", 7200)  # 2 hours for job results
+
+# Job queue limits
+MAX_JOB_QUEUE_SIZE = int(os.getenv("MAX_JOB_QUEUE_SIZE", "1000"))
+
+
+class JobQueueFullError(Exception):
+    """Raised when the job queue exceeds MAX_JOB_QUEUE_SIZE."""
+    pass
+
 
 # Year-based caching TTL constants
 TTL_STABLE = validate_ttl(int(os.getenv("TTL_STABLE", "7776000")), "TTL_STABLE", 7776000)  # 90 days for past years
@@ -120,14 +131,11 @@ CACHE_INVALIDATION_ENABLED = os.getenv("CACHE_INVALIDATION_ENABLED", "true").low
 CACHE_INVALIDATION_DRY_RUN = os.getenv("CACHE_INVALIDATION_DRY_RUN", "false").lower() == "true"
 CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "100"))
 
-# Usage Tracking Configuration
-USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
-USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
+# Usage Tracking Configuration (imported from config)
+# USAGE_TRACKING_ENABLED and USAGE_RETENTION_DAYS are imported from config
 
-# Environment variables for cache warming
-DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN")  # API access token for automated systems
+# Environment variables for cache warming (imported from config)
+# DEBUG, BASE_URL, and API_ACCESS_TOKEN are imported from config
 
 class LocationUsageTracker:
     """Track location usage patterns for analytics and cache warming."""
@@ -1783,18 +1791,20 @@ class JobManager:
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
         """
         Create a new job and return job ID.
-        Implements deduplication - if an identical job is already pending or processing, returns existing job_id.
+        Implements deduplication - if an identical job is already pending, processing,
+        recently completed, or recently failed, returns existing job_id.
         """
         try:
             # Generate deterministic job ID based on params (without timestamp for deduplication)
             params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
             dedup_key = f"job:dedup:{job_type}:{params_hash}"
 
-            # Check if identical job already exists
+            # Check if identical job already exists (any status — pending, processing,
+            # recently completed, or recently failed).  The dedup key is kept alive with
+            # a TTL after completion so that client retries don't re-enqueue the same work.
             existing_job_id = self.redis.get(dedup_key)
             if existing_job_id:
                 existing_job_id = existing_job_id.decode() if isinstance(existing_job_id, bytes) else existing_job_id
-                # Verify the job still exists and is pending/processing
                 job_key = f"{self.job_prefix}{existing_job_id}"
                 job_data = self.redis.get(job_key)
                 if job_data:
@@ -1803,6 +1813,18 @@ class JobManager:
                     if status in [JobStatus.PENDING, JobStatus.PROCESSING]:
                         logger.info(f"Deduplicated job {existing_job_id}: identical job already {status}")
                         return existing_job_id
+                    if status == JobStatus.READY:
+                        logger.info(f"Deduplicated job {existing_job_id}: identical job already completed")
+                        return existing_job_id
+                    if status == JobStatus.ERROR:
+                        logger.info(f"Deduplicated job {existing_job_id}: identical job recently failed, skipping re-enqueue")
+                        return existing_job_id
+
+            # Reject if queue is too large (backpressure)
+            queue_length = self.redis.llen("job_queue")
+            if queue_length >= MAX_JOB_QUEUE_SIZE:
+                logger.warning(f"Job queue full ({queue_length} >= {MAX_JOB_QUEUE_SIZE}), rejecting new job")
+                raise JobQueueFullError(f"Job queue is full ({queue_length} jobs). Try again later.")
 
             # Create new job with timestamp for uniqueness
             job_id = f"{job_type}_{int(time.time() * 1000)}_{params_hash[:8]}"
@@ -1883,14 +1905,17 @@ class JobManager:
             result_key = f"{self.result_prefix}{job_id}"
             self.redis.setex(result_key, self.job_ttl, json.dumps(result))
 
-        # Clean up deduplication key when job completes (READY or ERROR status)
+        # Keep deduplication key alive after completion so that client retries
+        # don't re-enqueue the same work.  For successful jobs we keep it for 5 minutes;
+        # for failures we keep it for 2 minutes (allows a retry after a cooldown).
         if status in [JobStatus.READY, JobStatus.ERROR]:
             job_type = job.get("type")
             params = job.get("params")
             if job_type and params:
                 params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
                 dedup_key = f"job:dedup:{job_type}:{params_hash}"
-                self.redis.delete(dedup_key)
+                cooldown_ttl = 300 if status == JobStatus.READY else 120
+                self.redis.setex(dedup_key, cooldown_ttl, job_id)
     
     def cleanup_expired_jobs(self) -> int:
         """Clean up expired jobs (Redis TTL should handle this automatically)."""

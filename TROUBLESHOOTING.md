@@ -495,7 +495,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 2. **Common causes**:
 
    - Missing environment variables
-   - API key issues (Visual Crossing, OpenWeather)
+   - API key issues (Visual Crossing)
    - Redis connection problems
    - Invalid data from external API
 
@@ -504,7 +504,6 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 ```bash
 # Check all required variables are set:
 VISUAL_CROSSING_API_KEY
-OPENWEATHER_API_KEY
 API_ACCESS_TOKEN
 REDIS_URL
 ```

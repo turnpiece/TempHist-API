@@ -24,8 +24,10 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Import configuration
+from config import DEBUG
+
 # Setup logging
-DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',

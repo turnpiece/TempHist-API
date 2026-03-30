@@ -5,9 +5,7 @@ from datetime import datetime
 import time
 import httpx
 import redis
-from config import (
-    API_KEY, OPENWEATHER_API_KEY
-)
+from config import API_KEY
 from cache_utils import get_cache_stats
 from routers.dependencies import get_redis_client
 
@@ -117,21 +115,7 @@ async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_cl
         }
         if overall_healthy:
             health_status["status"] = "degraded"
-    
-    # Check API keys configuration
-    if not OPENWEATHER_API_KEY:
-        health_status["checks"]["openweather_api"] = {
-            "status": "degraded",
-            "message": "API key not configured"
-        }
-        if overall_healthy:
-            health_status["status"] = "degraded"
-    else:
-        health_status["checks"]["openweather_api"] = {
-            "status": "healthy",
-            "message": "API key configured"
-        }
-    
+
     # Check worker service health (LOW-007)
     try:
         heartbeat_key = "worker:heartbeat"

@@ -23,7 +23,6 @@ Complete deployment and management guide for the TempHist API on Railway.
 - GitHub account
 - Railway account (https://railway.app/)
 - Visual Crossing API key
-- OpenWeather API key
 - Firebase service account JSON (optional)
 
 ### Basic Deployment Steps
@@ -129,7 +128,6 @@ Set these in Railway project dashboard → Variables tab for both services:
 ```
 # Required API Keys
 VISUAL_CROSSING_API_KEY=your_key_here
-OPENWEATHER_API_KEY=your_key_here
 API_ACCESS_TOKEN=your_token_here
 
 # Redis Configuration

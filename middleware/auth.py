@@ -54,7 +54,7 @@ def create_verify_token_middleware(
         public_paths = ["/", "/docs", "/openapi.json", "/redoc", "/test-cors", "/test-redis", 
                         "/rate-limit-status", "/analytics", "/health", "/health/detailed", 
                         "/v1/jobs/diagnostics/worker-status"]
-        if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics"]):
+        if request.url.path in public_paths or any(request.url.path.startswith(p) for p in ["/static", "/analytics", "/v1/shares/"]):
             if DEBUG:
                 logger.debug(f"[DEBUG] Middleware: Public path, allowing through")
             return await call_next(request)
