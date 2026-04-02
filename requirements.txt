@@ -13,3 +13,4 @@ python-dateutil==2.9.0.post0
 pytest==8.3.4
 pytest-asyncio==0.25.2
 asyncpg==0.29.0
+matplotlib==3.10.1

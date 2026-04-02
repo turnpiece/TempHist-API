@@ -40,6 +40,7 @@ from routers.stats import router as stats_router
 from routers.analytics import router as analytics_router
 from routers.root import router as root_router
 from routers.shares import router as shares_router
+from routers.og_image import router as og_image_router
 from routers.dependencies import initialize_dependencies
 from exceptions import register_exception_handlers
 
@@ -859,6 +860,7 @@ app.include_router(legacy_router)
 app.include_router(stats_router)
 app.include_router(analytics_router)
 app.include_router(shares_router)
+app.include_router(og_image_router)
 
 # Initialize mimetypes at module level to ensure proper configuration across workers
 mimetypes.init()
