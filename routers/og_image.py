@@ -198,7 +198,7 @@ def _render_placeholder(share: dict) -> bytes:
     ax.text(
         0.5, 0.44, location,
         ha="center", va="center", transform=ax.transAxes,
-        color=_ACCENT, fontsize=24,
+        color=_AVG_LINE, fontsize=24,
     )
     ax.text(
         0.5, 0.32, f"{period}  ·  {identifier}  ·  {ref_year}",
