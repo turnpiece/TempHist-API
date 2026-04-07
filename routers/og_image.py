@@ -101,13 +101,14 @@ def _render_chart(share: dict, records: list) -> bytes:
     if not pairs:
         return _render_placeholder(share)
 
+    # Sort ascending by year, then reverse so most recent is at the top
     pairs.sort(key=lambda p: p[0])
     years, temps = zip(*pairs)
+    years = list(reversed(years))
+    temps = list(reversed(temps))
 
     if unit == "fahrenheit":
         temps = [_celsius_to_fahrenheit(t) for t in temps]
-    else:
-        temps = list(temps)
 
     fig, ax = plt.subplots(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
     fig.patch.set_facecolor(_BG_DARK)
@@ -117,7 +118,7 @@ def _render_chart(share: dict, records: list) -> bytes:
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
     if hist_temps:
         avg = sum(hist_temps) / len(hist_temps)
-        ax.axhline(
+        ax.axvline(
             avg,
             color=_AVG_LINE,
             linestyle=":",
@@ -127,20 +128,20 @@ def _render_chart(share: dict, records: list) -> bytes:
             label=f"Avg {avg:.1f}{unit_symbol}",
         )
 
-    # Bar chart: ref_year in green, historical years in red — matches the app's chart colours
+    # Horizontal bars: ref_year in green, historical years in red
     bar_colors = [_REF_YEAR if y == ref_year else _BAR for y in years]
-    ax.bar(years, temps, color=bar_colors, width=0.7, zorder=2, alpha=0.85)
+    ax.barh(years, temps, color=bar_colors, height=0.7, zorder=2, alpha=0.85)
 
     # Annotate ref_year bar with its value
     if ref_year in years:
-        idx = list(years).index(ref_year)
+        idx = years.index(ref_year)
         ref_temp = temps[idx]
         ax.annotate(
             f"{ref_temp:.1f}{unit_symbol}",
-            xy=(ref_year, ref_temp),
-            xytext=(0, 8),
+            xy=(ref_temp, ref_year),
+            xytext=(8, 0),
             textcoords="offset points",
-            ha="center",
+            va="center",
             color=_REF_YEAR,
             fontsize=13,
             fontweight="bold",
@@ -154,9 +155,10 @@ def _render_chart(share: dict, records: list) -> bytes:
         pad=14,
         fontweight="bold",
     )
-    ax.set_xlabel("Year", color=_TICK_COLOR, fontsize=12)
-    ax.set_ylabel(f"Temperature ({unit_symbol})", color=_TICK_COLOR, fontsize=12)
+    ax.set_xlabel(f"Temperature ({unit_symbol})", color=_TICK_COLOR, fontsize=12)
+    ax.set_ylabel("Year", color=_TICK_COLOR, fontsize=12)
     ax.tick_params(colors=_TICK_COLOR, which="both")
+    ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
     for spine in ax.spines.values():
         spine.set_edgecolor("#333355")
 
