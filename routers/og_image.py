@@ -23,17 +23,57 @@ router = APIRouter()
 _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
 _IMG_W, _IMG_H = 1200, 630
 
-# Dark-themed brand colours
-_BG_DARK = "#1a1a2e"
-_BG_AXES = "#16213e"
+# Brand colours — match the website / mobile app
+_BG = "#242456"
 _BAR = "#ff6b6b"
 _REF_YEAR = "#51cf66"
 _AVG_LINE = "#4dabf7"
-_TICK_COLOR = "#aaaaaa"
+_TICK_COLOR = "#cccccc"
+_TITLE_COLOR = "#ff6b6b"
+_FONT_FAMILY = ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"]
 
 
 def _share_cache_key(share_id: str) -> str:
     return f"share:{share_id}"
+
+
+_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _format_period_heading(period: str, identifier: str) -> str:
+    """Return a human heading like 'Month ending 7th April'."""
+    parts = identifier.split("-") if identifier else []
+    if len(parts) != 2:
+        return identifier or ""
+    try:
+        month = int(parts[0])
+        day = int(parts[1])
+    except ValueError:
+        return identifier
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return identifier
+    friendly = f"{_ordinal(day)} {_MONTH_NAMES[month - 1]}"
+    p = (period or "").lower()
+    if p == "daily":
+        return friendly
+    if p == "weekly":
+        return f"Week ending {friendly}"
+    if p == "monthly":
+        return f"Month ending {friendly}"
+    if p == "yearly":
+        return f"Year ending {friendly}"
+    return friendly
 
 
 async def _lookup_share(share_id: str, redis_client: redis.Redis) -> Optional[dict]:
@@ -111,15 +151,19 @@ def _celsius_to_fahrenheit(t: float) -> float:
 
 
 def _render_chart(share: dict, records: list) -> bytes:
-    """Render a temperature-over-years line chart as PNG bytes."""
+    """Render a horizontal bar chart of per-year temperatures as PNG bytes."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import MultipleLocator
+
+    matplotlib.rcParams["font.family"] = "sans-serif"
+    matplotlib.rcParams["font.sans-serif"] = _FONT_FAMILY
 
     unit = share.get("unit", "celsius")
     ref_year = share.get("ref_year")
     location = share.get("location", "")
-    period = share.get("period", "").capitalize()
+    period = share.get("period", "")
     identifier = share.get("identifier", "")
     unit_symbol = "°C" if unit == "celsius" else "°F"
 
@@ -142,26 +186,26 @@ def _render_chart(share: dict, records: list) -> bytes:
         temps = [_celsius_to_fahrenheit(t) for t in temps]
 
     fig, ax = plt.subplots(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
-    fig.patch.set_facecolor(_BG_DARK)
-    ax.set_facecolor(_BG_AXES)
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
 
-    # Historical average (excludes ref_year)
+    # Historical average (excludes ref_year) — solid blue vertical line
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
     if hist_temps:
         avg = sum(hist_temps) / len(hist_temps)
         ax.axvline(
             avg,
             color=_AVG_LINE,
-            linestyle=":",
-            linewidth=1.5,
-            alpha=0.8,
+            linestyle="-",
+            linewidth=2,
+            alpha=0.9,
             zorder=1,
             label=f"Avg {avg:.1f}{unit_symbol}",
         )
 
     # Horizontal bars: ref_year in green, historical years in red
     bar_colors = [_REF_YEAR if y == ref_year else _BAR for y in years]
-    ax.barh(years, temps, color=bar_colors, height=0.7, zorder=2, alpha=0.85)
+    ax.barh(years, temps, color=bar_colors, height=0.7, zorder=2, alpha=0.9)
 
     # Annotate ref_year bar with its value
     if ref_year in years:
@@ -178,23 +222,42 @@ def _render_chart(share: dict, records: list) -> bytes:
             fontweight="bold",
         )
 
-    # Labels and styling
+    # X-axis limits: start a few degrees below the lowest temperature
+    # (not at 0 — temperatures may be negative)
+    t_min = min(temps)
+    t_max = max(temps)
+    span = t_max - t_min
+    pad_low = max(span * 0.15, 2.0)
+    pad_high = max(span * 0.12, 1.5)
+    ax.set_xlim(t_min - pad_low, t_max + pad_high)
+
+    # Title — city name + period heading, red, Arial, weight 400
+    city = location.split(",")[0].strip() if location else ""
+    heading = _format_period_heading(period, identifier)
+    title = f"{city} · {heading}" if city and heading else (city or heading)
     ax.set_title(
-        f"{location}  ·  {period} {identifier}",
-        color="white",
-        fontsize=17,
-        pad=14,
-        fontweight="bold",
+        title,
+        color=_TITLE_COLOR,
+        fontsize=22,
+        pad=16,
+        fontweight="normal",
+        fontfamily=_FONT_FAMILY,
     )
+
     ax.set_xlabel(f"Temperature ({unit_symbol})", color=_TICK_COLOR, fontsize=12)
-    ax.set_ylabel("Year", color=_TICK_COLOR, fontsize=12)
+    ax.set_ylabel("")
     ax.tick_params(colors=_TICK_COLOR, which="both")
-    ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    ax.yaxis.set_major_locator(MultipleLocator(5))
     for spine in ax.spines.values():
-        spine.set_edgecolor("#333355")
+        spine.set_edgecolor(_BG)
 
     if hist_temps:
-        ax.legend(facecolor=_BG_AXES, edgecolor="#333355", labelcolor=_TICK_COLOR, fontsize=11)
+        ax.legend(
+            facecolor=_BG,
+            edgecolor=_BG,
+            labelcolor=_TICK_COLOR,
+            fontsize=11,
+        )
 
     plt.tight_layout(pad=1.8)
 
@@ -211,34 +274,38 @@ def _render_placeholder(share: dict) -> bytes:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    matplotlib.rcParams["font.family"] = "sans-serif"
+    matplotlib.rcParams["font.sans-serif"] = _FONT_FAMILY
+
     location = share.get("location", "")
-    period = share.get("period", "").capitalize()
-    raw_identifier = share.get("identifier", "")
-    # Identifier is stored as MM-DD; display as DD-MM for UK/European format
-    parts = raw_identifier.split("-")
-    identifier = f"{parts[1]}-{parts[0]}" if len(parts) == 2 else raw_identifier
-    ref_year = share.get("ref_year", "")
+    city = location.split(",")[0].strip() if location else ""
+    heading = _format_period_heading(share.get("period", ""), share.get("identifier", ""))
 
     fig, ax = plt.subplots(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
-    fig.patch.set_facecolor(_BG_DARK)
-    ax.set_facecolor(_BG_DARK)
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
     ax.axis("off")
 
     ax.text(
         0.5, 0.62, "TempHist",
         ha="center", va="center", transform=ax.transAxes,
-        color="white", fontsize=54, fontweight="bold",
+        color="white", fontsize=54, fontweight="normal",
+        fontfamily=_FONT_FAMILY,
     )
-    ax.text(
-        0.5, 0.44, location,
-        ha="center", va="center", transform=ax.transAxes,
-        color=_AVG_LINE, fontsize=24,
-    )
-    ax.text(
-        0.5, 0.32, f"{period}  ·  {identifier}  ·  {ref_year}",
-        ha="center", va="center", transform=ax.transAxes,
-        color=_TICK_COLOR, fontsize=16,
-    )
+    if city:
+        ax.text(
+            0.5, 0.44, city,
+            ha="center", va="center", transform=ax.transAxes,
+            color=_TITLE_COLOR, fontsize=26, fontweight="normal",
+            fontfamily=_FONT_FAMILY,
+        )
+    if heading:
+        ax.text(
+            0.5, 0.32, heading,
+            ha="center", va="center", transform=ax.transAxes,
+            color=_TICK_COLOR, fontsize=18,
+            fontfamily=_FONT_FAMILY,
+        )
 
     plt.tight_layout(pad=1.5)
     buf = io.BytesIO()
