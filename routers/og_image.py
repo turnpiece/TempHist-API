@@ -63,6 +63,7 @@ def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optional[list
     """Return per-year temperature records from the Redis bundle cache, or None."""
     slug = normalize_location_for_cache(share["location"])
     bkey = bundle_key(share["period"], slug, share["identifier"])
+    logger.info("OG bundle lookup: share=%s key=%s", share.get("id"), bkey)
     try:
         raw = redis_client.get(bkey)
         if raw:
@@ -70,6 +71,7 @@ def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optional[list
             records = data.get("records", [])
             if records:
                 return records
+        logger.warning("OG bundle miss: share=%s key=%s", share.get("id"), bkey)
     except Exception as exc:
         logger.warning("Redis bundle read failed for share %s: %s", share.get("id"), exc)
     return None
@@ -182,7 +184,10 @@ def _render_placeholder(share: dict) -> bytes:
 
     location = share.get("location", "")
     period = share.get("period", "").capitalize()
-    identifier = share.get("identifier", "")
+    raw_identifier = share.get("identifier", "")
+    # Identifier is stored as MM-DD; display as DD-MM for UK/European format
+    parts = raw_identifier.split("-")
+    identifier = f"{parts[1]}-{parts[0]}" if len(parts) == 2 else raw_identifier
     ref_year = share.get("ref_year", "")
 
     fig, ax = plt.subplots(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
