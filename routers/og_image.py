@@ -25,9 +25,9 @@ _IMG_W, _IMG_H = 1200, 630
 # Dark-themed brand colours
 _BG_DARK = "#1a1a2e"
 _BG_AXES = "#16213e"
-_ACCENT = "#4cc9f0"
-_HIGHLIGHT = "#e94560"
-_AVG_LINE = "#ffd166"
+_BAR = "#ff6b6b"
+_REF_YEAR = "#51cf66"
+_AVG_LINE = "#4dabf7"
 _TICK_COLOR = "#aaaaaa"
 
 
@@ -127,25 +127,21 @@ def _render_chart(share: dict, records: list) -> bytes:
             label=f"Avg {avg:.1f}{unit_symbol}",
         )
 
-    # Line connecting all points
-    ax.plot(years, temps, color=_ACCENT, linewidth=1.5, alpha=0.45, zorder=2)
+    # Bar chart: ref_year in green, historical years in red — matches the app's chart colours
+    bar_colors = [_REF_YEAR if y == ref_year else _BAR for y in years]
+    ax.bar(years, temps, color=bar_colors, width=0.7, zorder=2, alpha=0.85)
 
-    # Scatter: highlight ref_year in red, rest in blue
-    point_colors = [_HIGHLIGHT if y == ref_year else _ACCENT for y in years]
-    point_sizes = [100 if y == ref_year else 30 for y in years]
-    ax.scatter(years, temps, c=point_colors, s=point_sizes, zorder=3, linewidths=0)
-
-    # Vertical rule + annotation for ref_year
+    # Annotate ref_year bar with its value
     if ref_year in years:
         idx = list(years).index(ref_year)
         ref_temp = temps[idx]
-        ax.axvline(ref_year, color=_HIGHLIGHT, linestyle="--", linewidth=1, alpha=0.5, zorder=2)
         ax.annotate(
             f"{ref_temp:.1f}{unit_symbol}",
             xy=(ref_year, ref_temp),
-            xytext=(10, 10),
+            xytext=(0, 8),
             textcoords="offset points",
-            color=_HIGHLIGHT,
+            ha="center",
+            color=_REF_YEAR,
             fontsize=13,
             fontweight="bold",
         )
