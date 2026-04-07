@@ -127,24 +127,20 @@ def _render_chart(share: dict, records: list) -> bytes:
             label=f"Avg {avg:.1f}{unit_symbol}",
         )
 
-    # Line connecting all points
-    ax.plot(years, temps, color=_ACCENT, linewidth=1.5, alpha=0.45, zorder=2)
+    # Bar chart: highlight ref_year in red, rest in accent blue
+    bar_colors = [_HIGHLIGHT if y == ref_year else _ACCENT for y in years]
+    ax.bar(years, temps, color=bar_colors, width=0.7, zorder=2, alpha=0.85)
 
-    # Scatter: highlight ref_year in red, rest in blue
-    point_colors = [_HIGHLIGHT if y == ref_year else _ACCENT for y in years]
-    point_sizes = [100 if y == ref_year else 30 for y in years]
-    ax.scatter(years, temps, c=point_colors, s=point_sizes, zorder=3, linewidths=0)
-
-    # Vertical rule + annotation for ref_year
+    # Annotate ref_year bar with its value
     if ref_year in years:
         idx = list(years).index(ref_year)
         ref_temp = temps[idx]
-        ax.axvline(ref_year, color=_HIGHLIGHT, linestyle="--", linewidth=1, alpha=0.5, zorder=2)
         ax.annotate(
             f"{ref_temp:.1f}{unit_symbol}",
             xy=(ref_year, ref_temp),
-            xytext=(10, 10),
+            xytext=(0, 8),
             textcoords="offset points",
+            ha="center",
             color=_HIGHLIGHT,
             fontsize=13,
             fontweight="bold",
