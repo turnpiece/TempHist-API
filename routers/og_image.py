@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
-_IMG_W, _IMG_H = 1200, 630
+_IMG_W, _IMG_H = 1200, 1200
 
 # Brand colours — match the website / mobile app
 _BG = "#242456"
@@ -200,12 +200,11 @@ def _render_chart(share: dict, records: list) -> bytes:
             linewidth=2,
             alpha=0.9,
             zorder=1,
-            label=f"Avg {avg:.1f}{unit_symbol}",
         )
 
     # Horizontal bars: ref_year in green, historical years in red
     bar_colors = [_REF_YEAR if y == ref_year else _BAR for y in years]
-    ax.barh(years, temps, color=bar_colors, height=0.7, zorder=2, alpha=0.9)
+    ax.barh(years, temps, color=bar_colors, height=0.75, zorder=2, alpha=0.9)
 
     # Annotate ref_year bar with its value
     if ref_year in years:
@@ -218,7 +217,7 @@ def _render_chart(share: dict, records: list) -> bytes:
             textcoords="offset points",
             va="center",
             color=_REF_YEAR,
-            fontsize=13,
+            fontsize=15,
             fontweight="bold",
         )
 
@@ -238,26 +237,18 @@ def _render_chart(share: dict, records: list) -> bytes:
     ax.set_title(
         title,
         color=_TITLE_COLOR,
-        fontsize=22,
-        pad=16,
+        fontsize=26,
+        pad=20,
         fontweight="normal",
         fontfamily=_FONT_FAMILY,
     )
 
-    ax.set_xlabel(f"Temperature ({unit_symbol})", color=_TICK_COLOR, fontsize=12)
+    ax.set_xlabel(f"Temperature ({unit_symbol})", color=_TICK_COLOR, fontsize=14)
     ax.set_ylabel("")
-    ax.tick_params(colors=_TICK_COLOR, which="both")
+    ax.tick_params(colors=_TICK_COLOR, which="both", labelsize=13)
     ax.yaxis.set_major_locator(MultipleLocator(5))
     for spine in ax.spines.values():
         spine.set_edgecolor(_BG)
-
-    if hist_temps:
-        ax.legend(
-            facecolor=_BG,
-            edgecolor=_BG,
-            labelcolor=_TICK_COLOR,
-            fontsize=11,
-        )
 
     plt.tight_layout(pad=1.8)
 
@@ -287,23 +278,23 @@ def _render_placeholder(share: dict) -> bytes:
     ax.axis("off")
 
     ax.text(
-        0.5, 0.62, "TempHist",
+        0.5, 0.58, "TempHist",
         ha="center", va="center", transform=ax.transAxes,
-        color="white", fontsize=54, fontweight="normal",
+        color="white", fontsize=64, fontweight="normal",
         fontfamily=_FONT_FAMILY,
     )
     if city:
         ax.text(
-            0.5, 0.44, city,
+            0.5, 0.46, city,
             ha="center", va="center", transform=ax.transAxes,
-            color=_TITLE_COLOR, fontsize=26, fontweight="normal",
+            color=_TITLE_COLOR, fontsize=30, fontweight="normal",
             fontfamily=_FONT_FAMILY,
         )
     if heading:
         ax.text(
-            0.5, 0.32, heading,
+            0.5, 0.36, heading,
             ha="center", va="center", transform=ax.transAxes,
-            color=_TICK_COLOR, fontsize=18,
+            color=_TICK_COLOR, fontsize=20,
             fontfamily=_FONT_FAMILY,
         )
 
