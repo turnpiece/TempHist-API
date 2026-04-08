@@ -100,6 +100,10 @@ API_ACCESS_TOKEN=your_api_token_here  # API access token for automated systems
    pip install -r requirements.txt
    ```
 
+   > **Important:** Make sure your virtual environment is activated before running the worker.
+   > If you see `ModuleNotFoundError: No module named 'dotenv'`, dependencies were installed
+   > outside your active environment. Re-activate `venv` and run `pip install -r requirements.txt` again.
+
 4. **Set up environment**
 
    ```bash
@@ -135,10 +139,31 @@ API_ACCESS_TOKEN=your_api_token_here  # API access token for automated systems
    python worker_service.py
    ```
 
+   The web/mobile clients use async job endpoints for temperature data.
+   If the worker is not running, API calls can connect successfully but data
+   will not complete loading because jobs stay pending/processing.
+
 8. **Run the development server** (in another terminal)
    ```bash
    uvicorn main:app --reload
    ```
+
+### Optional quick start script
+
+If you prefer a shortcut for local development, use:
+
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+`start.sh` activates `venv`, attempts to start Redis/PostgreSQL when available,
+then starts the API server and launches the worker.
+
+Notes:
+- Redis/PostgreSQL startup is best-effort (the script won't fail if it cannot start them automatically).
+- On macOS it tries Homebrew services; on Linux it tries `systemctl`.
+- If services are already running, they are left as-is.
 
 ## 🚀 Enhanced Caching System
 
