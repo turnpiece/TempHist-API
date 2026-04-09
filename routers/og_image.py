@@ -236,6 +236,7 @@ def _render_chart(share: dict, records: list) -> bytes:
     title = f"{city} · {heading}" if city and heading else (city or heading)
     ax.set_title(
         title,
+        loc="left",
         color=_TITLE_COLOR,
         fontsize=26,
         pad=20,
