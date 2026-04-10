@@ -1155,8 +1155,8 @@ async def add_security_headers(request: Request, call_next):
     # Note: Adjust based on your frontend requirements
     csp_policy = (
         "default-src 'self'; "
-        "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "img-src 'self' data: https:; "
         "font-src 'self'; "
         "connect-src 'self' https://weather.visualcrossing.com; "
