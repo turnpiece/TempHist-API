@@ -11,7 +11,7 @@ from main import (
     RequestRateMonitor,
     API_ACCESS_TOKEN
 )
-from utils.temperature import calculate_historical_average, calculate_trend_slope
+from utils.temperature import calculate_historical_average, calculate_trend_slope, generate_summary
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 
 # Check if rate limiting is enabled
@@ -203,6 +203,23 @@ async def test_summary_text_accuracy():
             assert f"{case['expected_diff']}°C warmer than average" in summary
         else:
             assert f"{abs(case['expected_diff'])}°C cooler than average" in summary
+
+def test_generate_summary_fahrenheit_about_average():
+    """Fahrenheit summaries should say 'about average' when the rounded diff is 0°F."""
+    current_year = datetime.now().year
+    # Historical average rounds to 49.0°F; latest is 49.2°F → diff 0.2°F → rounds to 0°F
+    data = [
+        {"x": current_year - 5, "y": 49.0},
+        {"x": current_year - 4, "y": 49.0},
+        {"x": current_year - 3, "y": 49.0},
+        {"x": current_year - 2, "y": 49.0},
+        {"x": current_year - 1, "y": 49.0},
+        {"x": current_year, "y": 49.2},
+    ]
+    summary = generate_summary(data, datetime.now(), period="daily", unit_group="fahrenheit")
+    assert "about average" in summary
+    assert "0°F warmer" not in summary
+
 
 # Rate Limiting Tests
 class TestLocationDiversityMonitor:
