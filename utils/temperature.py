@@ -279,7 +279,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = "that period"
             period_context_alt = "that period"
 
-    if abs(diff) < 0.05:
+    if rounded_diff == 0:
         # Special case for yearly summaries to sound more natural
         if period == "yearly":
             avg_summary = f"It {tense_context_alt} an average year."
