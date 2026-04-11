@@ -11,6 +11,7 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 - **Weather Forecasts**: Current weather data and forecasts
 - **Performance Monitoring**: Built-in profiling and monitoring tools
 - **Cache Prewarming**: Automated cache warming for popular locations
+- **Social Sharing**: Create shareable links and OG preview images for temperature snapshots
 - **CORS Enabled**: Ready for web applications
 - **Production Ready**: Deploy on Railway or Render
 
@@ -789,6 +790,82 @@ GET /v1/records/daily/london/01-15/trend
 | `GET /`                          | API information           | -            |
 | `GET /weather/{location}/{date}` | Weather for specific date | `YYYY-MM-DD` |
 | `GET /forecast/{location}`       | Current weather forecast  | -            |
+
+### Social Sharing Endpoints
+
+| Endpoint                    | Description                                    | Auth     |
+| --------------------------- | ---------------------------------------------- | -------- |
+| `POST /v1/shares`           | Create a share record, returns ID and URL      | Firebase |
+| `GET /v1/shares/{share_id}` | Retrieve share parameters by ID               | Public   |
+| `GET /v1/og/{share_id}.png` | Generate OG preview image (bar chart PNG)     | Public   |
+
+#### Creating a Share
+
+```bash
+curl -X POST https://api.temphist.com/v1/shares \
+     -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "location": "London, England, United Kingdom",
+       "period": "yearly",
+       "identifier": "04-11",
+       "ref_year": 2024,
+       "unit": "celsius"
+     }'
+```
+
+**Request body:**
+
+| Field        | Type    | Description                                              |
+| ------------ | ------- | -------------------------------------------------------- |
+| `location`   | string  | Location name (max 200 chars)                            |
+| `period`     | string  | `daily`, `weekly`, `monthly`, or `yearly`                |
+| `identifier` | string  | End date in `MM-DD` format                               |
+| `ref_year`   | integer | Year to highlight in the chart (1970–2100)               |
+| `unit`       | string  | `celsius` (default) or `fahrenheit`                      |
+
+**Response:**
+
+```json
+{
+  "id": "aB3xY7qZ",
+  "url": "https://temphist.com/s/aB3xY7qZ"
+}
+```
+
+#### Retrieving Share Metadata
+
+```bash
+GET /v1/shares/aB3xY7qZ
+```
+
+```json
+{
+  "id": "aB3xY7qZ",
+  "location": "London, England, United Kingdom",
+  "period": "yearly",
+  "identifier": "04-11",
+  "ref_year": 2024,
+  "unit": "celsius",
+  "created_at": "2024-04-11T10:00:00+00:00"
+}
+```
+
+#### OG Preview Image
+
+`GET /v1/og/{share_id}.png` returns a PNG bar chart showing per-year temperatures with the reference year highlighted. This URL is used as the `og:image` meta tag when social crawlers fetch a share page.
+
+- Celsius temperatures are labelled to one decimal place (e.g. `9.4°C`)
+- Fahrenheit temperatures are labelled as integers (e.g. `49°F`)
+- Returns a placeholder image if share data or temperature records are unavailable
+
+#### Configuration
+
+```bash
+SHARE_BASE_URL=https://temphist.com  # Base URL prepended to share URLs (default: https://temphist.com)
+```
+
+The share store requires a PostgreSQL connection (`TEMPHIST_PG_DSN` / `DATABASE_URL`). The `shares` table is created automatically on first use.
 
 ### Monitoring Endpoints
 

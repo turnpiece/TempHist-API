@@ -2,6 +2,29 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-04-11] - Social Sharing & OG Images (v1.1.5)
+
+### Added
+
+- **Social Share Endpoints**: New endpoints for creating and retrieving shareable temperature snapshots
+  - `POST /v1/shares` — creates a share record (Firebase auth required), returns a short ID and URL
+  - `GET /v1/shares/{share_id}` — retrieves share metadata by ID (public, no auth)
+  - Share records are persisted in PostgreSQL and cached in Redis for 30 days
+- **OG Preview Image**: `GET /v1/og/{share_id}.png` — generates a horizontal bar chart PNG for use as an `og:image` in social previews
+  - Reference year bar highlighted in green; historical bars in red
+  - Chart title shows city name and period; supports both Celsius and Fahrenheit
+  - Placeholder image returned gracefully if data is unavailable
+
+### Fixed
+
+- **OG image Fahrenheit label**: Bar annotation now displays Fahrenheit temperatures as integers (e.g. `49°F`) instead of one decimal place (e.g. `49.3°F`); Celsius labels remain one decimal place
+- **Fahrenheit summary text**: Fixed "0°F warmer than average" showing instead of "about average" when the difference rounds to zero
+
+### Configuration
+
+- `SHARE_BASE_URL` — base URL prepended to generated share URLs (default: `https://temphist.com`)
+- Requires PostgreSQL (`TEMPHIST_PG_DSN` / `DATABASE_URL`); `shares` table is auto-created
+
 ## [2025-10-10] - Railway Deployment Fixes
 
 ### Fixed
