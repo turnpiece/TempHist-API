@@ -64,7 +64,33 @@ Edge TTL: 1 day
 Browser TTL: 1 hour
 ```
 
-#### 2. Bypass Cache for Jobs
+#### 2. Cache Share Metadata and OG Images
+
+Share records and OG images are **immutable** once created — a given `share_id` always returns the same data. Cache them aggressively:
+
+```
+Rule: Cache share metadata
+Expression: (http.request.method eq "GET") and (http.request.uri matches "^/v1/shares/[A-Za-z0-9]{8}$")
+Action: Cache Level = Cache Everything
+Edge TTL: 30 days
+Browser TTL: 1 day
+```
+
+```
+Rule: Cache OG images
+Expression: (http.request.method eq "GET") and (http.request.uri matches "^/v1/og/[A-Za-z0-9]{8}\.png$")
+Action: Cache Level = Cache Everything
+Edge TTL: 30 days
+Browser TTL: 1 day
+```
+
+```
+Rule: Bypass cache for share creation (POST)
+Expression: (http.request.method eq "POST") and (http.request.uri eq "/v1/shares")
+Action: Cache Level = Bypass
+```
+
+#### 3. Bypass Cache for Jobs
 
 ```
 Rule: Bypass cache for job endpoints
@@ -72,7 +98,7 @@ Expression: (http.request.uri contains "/v1/jobs/") or (http.request.uri contain
 Action: Cache Level = Bypass
 ```
 
-#### 3. Bypass Cache for Admin
+#### 5. Bypass Cache for Admin
 
 ```
 Rule: Bypass cache for admin endpoints
@@ -80,7 +106,7 @@ Expression: (http.request.uri contains "/admin/") or (http.request.uri contains 
 Action: Cache Level = Bypass
 ```
 
-#### 4. Respect Origin Cache Headers
+#### 6. Respect Origin Cache Headers
 
 ```
 Rule: Respect origin cache headers
@@ -97,11 +123,19 @@ Rule 1: Cache API endpoints
 URL: api.temphist.com/v1/records/*
 Settings: Cache Level = Cache Everything, Edge Cache TTL = 1 day
 
-Rule 2: Bypass job endpoints
+Rule 2: Cache share metadata (immutable)
+URL: api.temphist.com/v1/shares/*
+Settings: Cache Level = Cache Everything, Edge Cache TTL = 30 days
+
+Rule 3: Cache OG images (immutable)
+URL: api.temphist.com/v1/og/*.png
+Settings: Cache Level = Cache Everything, Edge Cache TTL = 30 days
+
+Rule 4: Bypass job endpoints
 URL: api.temphist.com/v1/jobs/*
 Settings: Cache Level = Bypass
 
-Rule 3: Bypass async endpoints
+Rule 5: Bypass async endpoints
 URL: api.temphist.com/*/async
 Settings: Cache Level = Bypass
 ```
