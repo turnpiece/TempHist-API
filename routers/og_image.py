@@ -211,7 +211,7 @@ def _render_chart(share: dict, records: list) -> bytes:
         idx = years.index(ref_year)
         ref_temp = temps[idx]
         ax.annotate(
-            f"{ref_temp:.1f}{unit_symbol}",
+            f"{ref_temp:.0f}{unit_symbol}" if unit == "fahrenheit" else f"{ref_temp:.1f}{unit_symbol}",
             xy=(ref_temp, ref_year),
             xytext=(8, 0),
             textcoords="offset points",
