@@ -115,7 +115,7 @@ def _convert_c_to_unit(temp_c: float, unit_group: str) -> float:
     if group in ("celsius", "metric"):
         return temp_c
     if group in ("fahrenheit", "us"):
-        return (temp_c * 9.0 / 5.0) + 32.0
+        return round((temp_c * 9.0 / 5.0) + 32.0, 1)
     return temp_c
 
 
