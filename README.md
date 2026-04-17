@@ -4,11 +4,10 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 
 ## 🚀 Features
 
-- **Historical Temperature Data**: 50 years of temperature data for any location
+- **Historical Temperature Data**: 50 years of daily temperature records for any location, with today's temperature sourced from forecast data
 - **Enhanced Caching**: Cloudflare-optimized caching with ETags and conditional requests
 - **Async Job Processing**: Heavy computations handled asynchronously with job tracking
 - **Rate Limiting**: Built-in protection against API abuse and misuse
-- **Weather Forecasts**: Current weather data and forecasts
 - **Performance Monitoring**: Built-in profiling and monitoring tools
 - **Cache Prewarming**: Automated cache warming for popular locations
 - **Social Sharing**: Create shareable links and OG preview images for temperature snapshots
@@ -22,6 +21,7 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
 - **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Migrating from legacy to v1 API
 - **[CLOUDFLARE_OPTIMIZATION.md](CLOUDFLARE_OPTIMIZATION.md)** - CDN optimization guide
+- **[AGENTS.md](AGENTS.md)** - Internal developer guide (service architecture, local dev setup)
 - **[railway/](railway/)** - Railway-specific deployment tools and documentation
 
 ## 📋 Requirements
@@ -856,7 +856,7 @@ GET /v1/shares/aB3xY7qZ
 `GET /v1/og/{share_id}.png` returns a PNG bar chart showing per-year temperatures with the reference year highlighted. This URL is used as the `og:image` meta tag when social crawlers fetch a share page.
 
 - Celsius temperatures are labelled to one decimal place (e.g. `9.4°C`)
-- Fahrenheit temperatures are labelled as integers (e.g. `49°F`)
+- Fahrenheit temperatures are labelled to one decimal place (e.g. `49.0°F`)
 - Returns a placeholder image if share data or temperature records are unavailable
 
 #### Configuration
@@ -1655,7 +1655,7 @@ The application validates all location data against the `LocationItem` schema:
 
 ## 📄 License
 
-MIT License - see LICENSE file for details
+MIT License
 
 ---
 
