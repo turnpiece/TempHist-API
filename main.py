@@ -29,7 +29,7 @@ load_dotenv(dotenv_path=env_path)
 
 # Import routers
 from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
-from routers.locations_preapproved import router as locations_preapproved_router, initialize_locations_data
+from routers.locations import router as locations_router, initialize_locations_data
 from routers.weather import router as weather_router
 from routers.v1_records import router as v1_records_router
 from routers.cache import router as cache_router
@@ -853,7 +853,7 @@ app.include_router(health_router)
 app.include_router(weather_router)
 app.include_router(records_agg_router)  # Must come before v1_records_router
 app.include_router(v1_records_router)
-app.include_router(locations_preapproved_router)
+app.include_router(locations_router)
 app.include_router(cache_router)
 app.include_router(jobs_router)
 app.include_router(legacy_router)

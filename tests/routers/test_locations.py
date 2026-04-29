@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
 # Import the router and models
-from routers.locations_preapproved import (
+from routers.locations import (
     router,
     LocationItem,
     initialize_locations_data,
@@ -115,10 +115,10 @@ def sample_locations():
 @pytest.fixture
 def mock_locations_data(sample_locations, mock_redis):
     """Mock the global locations data."""
-    with patch('routers.locations_preapproved.locations_data', sample_locations), \
-         patch('routers.locations_preapproved.locations_etag', '"test-etag"'), \
-         patch('routers.locations_preapproved.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-         patch('routers.locations_preapproved.redis_client', mock_redis):
+    with patch('routers.locations.locations_data', sample_locations), \
+         patch('routers.locations.locations_etag', '"test-etag"'), \
+         patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
+         patch('routers.locations.redis_client', mock_redis):
         yield
 
 class TestLocationItem:
@@ -363,10 +363,10 @@ class TestCaching:
     
     def test_redis_cache_miss(self, client, mock_redis, sample_locations):
         """Test Redis cache miss behavior."""
-        with patch('routers.locations_preapproved.locations_data', sample_locations), \
-             patch('routers.locations_preapproved.locations_etag', '"test-etag"'), \
-             patch('routers.locations_preapproved.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations_preapproved.redis_client', mock_redis):
+        with patch('routers.locations.locations_data', sample_locations), \
+             patch('routers.locations.locations_etag', '"test-etag"'), \
+             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
+             patch('routers.locations.redis_client', mock_redis):
             
             mock_redis.get.return_value = None  # Cache miss
             
@@ -385,10 +385,10 @@ class TestCaching:
             "locations": [loc.model_dump() for loc in sample_locations]
         }
         
-        with patch('routers.locations_preapproved.locations_data', sample_locations), \
-             patch('routers.locations_preapproved.locations_etag', '"test-etag"'), \
-             patch('routers.locations_preapproved.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations_preapproved.redis_client', mock_redis):
+        with patch('routers.locations.locations_data', sample_locations), \
+             patch('routers.locations.locations_etag', '"test-etag"'), \
+             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
+             patch('routers.locations.redis_client', mock_redis):
             
             mock_redis.get.return_value = json.dumps(cached_data, default=str)
             
@@ -404,7 +404,7 @@ class TestRateLimiting:
     @pytest.mark.asyncio
     async def test_rate_limit_exceeded(self):
         """Test rate limit exceeded scenario."""
-        from routers.locations_preapproved import check_rate_limit
+        from routers.locations import check_rate_limit
         
         # Simulate exceeding rate limit
         ip = "192.168.1.1"
@@ -436,7 +436,7 @@ class TestDataLoading:
         data_file = tmp_path / "preapproved_locations.json"
         data_file.write_text(json.dumps(SAMPLE_LOCATIONS))
         
-        with patch('routers.locations_preapproved.os.path.join', return_value=str(data_file)):
+        with patch('routers.locations.os.path.join', return_value=str(data_file)):
             await initialize_locations_data(mock_redis)
         
         # Verify cache was warmed
@@ -445,7 +445,7 @@ class TestDataLoading:
     @pytest.mark.asyncio
     async def test_initialize_locations_data_file_not_found(self, mock_redis):
         """Test initialization with missing data file."""
-        with patch('routers.locations_preapproved.os.path.join', return_value="/nonexistent/file.json"):
+        with patch('routers.locations.os.path.join', return_value="/nonexistent/file.json"):
             with pytest.raises(Exception):  # Should raise HTTPException
                 await initialize_locations_data(mock_redis)
     
@@ -455,7 +455,7 @@ class TestDataLoading:
         data_file = tmp_path / "preapproved_locations.json"
         data_file.write_text("invalid json")
         
-        with patch('routers.locations_preapproved.os.path.join', return_value=str(data_file)):
+        with patch('routers.locations.os.path.join', return_value=str(data_file)):
             with pytest.raises(Exception):  # Should raise HTTPException
                 await initialize_locations_data(mock_redis)
 
@@ -481,10 +481,10 @@ class TestErrorHandling:
     
     def test_redis_unavailable(self, client, sample_locations):
         """Test behavior when Redis is unavailable."""
-        with patch('routers.locations_preapproved.locations_data', sample_locations), \
-             patch('routers.locations_preapproved.locations_etag', '"test-etag"'), \
-             patch('routers.locations_preapproved.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations_preapproved.redis_client', None):
+        with patch('routers.locations.locations_data', sample_locations), \
+             patch('routers.locations.locations_etag', '"test-etag"'), \
+             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
+             patch('routers.locations.redis_client', None):
             
             # Should still work without Redis, just without caching
             response = client.get("/v1/locations/preapproved")
@@ -492,10 +492,10 @@ class TestErrorHandling:
     
     def test_malformed_json_in_cache(self, client, mock_redis, sample_locations):
         """Test handling of malformed JSON in cache."""
-        with patch('routers.locations_preapproved.locations_data', sample_locations), \
-             patch('routers.locations_preapproved.locations_etag', '"test-etag"'), \
-             patch('routers.locations_preapproved.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations_preapproved.redis_client', mock_redis):
+        with patch('routers.locations.locations_data', sample_locations), \
+             patch('routers.locations.locations_etag', '"test-etag"'), \
+             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
+             patch('routers.locations.redis_client', mock_redis):
             
             mock_redis.get.return_value = "invalid json"
             
