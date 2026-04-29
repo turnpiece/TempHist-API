@@ -320,6 +320,60 @@ async def get_preapproved_locations(
 
     return PreapprovedResponse(**response_data)
 
+@router.get("/v1/locations/search")
+async def search_locations(
+    request: Request,
+    q: str = Query(..., min_length=2, max_length=100, description="City name search query"),
+    limit: int = Query(10, ge=1, le=20, description="Maximum number of results"),
+):
+    """
+    Search for locations by city name.
+
+    Returns up to `limit` matching cities ranked by relevance:
+    exact match → starts-with → name contains → country contains.
+    """
+    # Rate limiting (shared bucket with preapproved endpoint)
+    client_ip = request.client.host
+    allowed, reason = await check_rate_limit(client_ip)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
+
+    if not locations_data:
+        raise HTTPException(status_code=503, detail="Locations data not yet loaded")
+
+    query_lower = q.strip().lower()
+
+    exact: List[LocationItem] = []
+    starts: List[LocationItem] = []
+    contains_name: List[LocationItem] = []
+    contains_country: List[LocationItem] = []
+
+    for loc in locations_data:
+        name_lower = loc.name.lower()
+        country_lower = loc.country_name.lower()
+        if name_lower == query_lower:
+            exact.append(loc)
+        elif name_lower.startswith(query_lower):
+            starts.append(loc)
+        elif query_lower in name_lower:
+            contains_name.append(loc)
+        elif query_lower in country_lower:
+            contains_country.append(loc)
+
+    for group in (exact, starts, contains_name, contains_country):
+        group.sort(key=lambda x: x.name)
+
+    results = (exact + starts + contains_name + contains_country)[:limit]
+
+    return {
+        "count": len(results),
+        "locations": [
+            {"name": loc.name, "country_name": loc.country_name}
+            for loc in results
+        ],
+    }
+
+
 @router.get("/v1/locations/preapproved/status")
 async def get_locations_status():
     """Get status information about the preapproved locations service."""
