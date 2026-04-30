@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 from typing import Optional
 
+
+class LocationNotFoundError(RuntimeError):
+    """Raised when Visual Crossing rejects a location as unresolvable (HTTP 400).
+    Not retried — the location string itself is the problem."""
+    pass
+
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 
 # Visual Crossing API timeout configuration
@@ -83,6 +89,12 @@ async def fetch_timeline_days(location: str, start: date, end: date) -> Tuple[Li
                             redacted_url,
                             text[:200],
                         )
+                        if response.status == 400:
+                            # 400 means the location string itself is invalid — retrying
+                            # won't help and would waste time cycling through all years.
+                            raise LocationNotFoundError(
+                                f"Location not found: {text[:200]}"
+                            )
                         raise RuntimeError(f"Visual Crossing timeline error: {response.status}")
                     payload = await response.json()
                     days = payload.get("days") or []
@@ -97,6 +109,8 @@ async def fetch_timeline_days(location: str, start: date, end: date) -> Tuple[Li
                         "longitude": payload.get("longitude"),
                     }
                     return days, metadata
+        except LocationNotFoundError:
+            raise  # never retry — the location string itself is wrong
         except (asyncio.TimeoutError, aiohttp.ClientError, RuntimeError) as exc:
             if attempt >= _RETRY_ATTEMPTS:
                 logger.error("Timeline fetch failed after %s attempts: %s (%s)", attempt, exc, redacted_url)

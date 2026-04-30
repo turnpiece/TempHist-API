@@ -39,7 +39,7 @@ from utils.daily_temperature_store import (
     DailyTemperatureRecord,
     get_daily_temperature_store,
 )
-from utils.visual_crossing_timeline import fetch_timeline_days
+from utils.visual_crossing_timeline import fetch_timeline_days, LocationNotFoundError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -335,6 +335,9 @@ async def _collect_rolling_window_values(
                         timeline_days, timeline_metadata = await fetch_timeline_days(
                             location, range_start, range_end
                         )
+                    except LocationNotFoundError as exc:
+                        logger.warning("Location not found, aborting fetch for %s: %s", location, exc)
+                        raise HTTPException(status_code=422, detail="location_not_found")
                     except Exception as exc:
                         error_detail = (
                             f"❌ timeline fetch failed for {location} "
