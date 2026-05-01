@@ -9,6 +9,11 @@ load_dotenv()
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 
+# Mapbox Geocoding API — used for location search autocomplete.
+# Obtain a public token from https://account.mapbox.com/
+# If unset, location search falls back to the small preapproved list (dev mode only).
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "").strip()
+
 # Cache configuration
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"

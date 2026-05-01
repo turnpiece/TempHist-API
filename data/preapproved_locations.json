@@ -60,6 +60,23 @@
     "imageAlt": "Birmingham skyline from Snowhill"
   },
   {
+    "id": "birmingham_alabama",
+    "slug": "birmingham-alabama",
+    "name": "Birmingham",
+    "admin1": "Alabama",
+    "country_name": "United States",
+    "country_code": "US",
+    "latitude": 33.5186,
+    "longitude": -86.8104,
+    "timezone": "America/Chicago",
+    "tier": "global",
+    "imageUrl": {
+      "webp": "/data/locations/processed/birmingham-alabama.webp",
+      "jpeg": "/data/locations/processed/birmingham-alabama.jpg"
+    },
+    "imageAlt": "Birmingham, Alabama skyline"
+  },
+  {
     "id": "edinburgh",
     "slug": "edinburgh",
     "name": "Edinburgh",

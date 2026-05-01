@@ -13,14 +13,16 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
+from urllib.parse import quote
 
+import aiohttp
 import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
 from pydantic import BaseModel, Field, field_validator
 
-from config import BASE_URL
+from config import BASE_URL, MAPBOX_TOKEN
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -227,11 +229,11 @@ async def get_cached_response(cache_key: str) -> Optional[Dict]:
         logger.warning(f"Cache get error: {e}")
     return None
 
-async def set_cached_response(cache_key: str, data: Dict) -> None:
+async def set_cached_response(cache_key: str, data: Dict, ttl: int = CACHE_TTL) -> None:
     """Cache response in Redis."""
     try:
         redis = get_redis_client()
-        redis.setex(cache_key, CACHE_TTL, json.dumps(data, default=str))
+        redis.setex(cache_key, ttl, json.dumps(data, default=str))
     except Exception as e:
         logger.warning(f"Cache set error: {e}")
 
@@ -249,6 +251,90 @@ async def warm_cache() -> None:
         logger.info("Warmed preapproved locations cache")
     except Exception as e:
         logger.error(f"Error warming cache: {e}")
+
+# ---------------------------------------------------------------------------
+# Mapbox geocoding
+# ---------------------------------------------------------------------------
+MAPBOX_GEOCODE_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places"
+SEARCH_CACHE_TTL = 86400  # 24 hours for geocoding results
+
+_mapbox_client: Optional[aiohttp.ClientSession] = None
+_mapbox_client_lock = asyncio.Lock()
+
+
+async def _get_mapbox_client() -> aiohttp.ClientSession:
+    """Return (or lazily create) a shared aiohttp session for Mapbox calls."""
+    global _mapbox_client
+    if _mapbox_client is not None and not _mapbox_client.closed:
+        return _mapbox_client
+    async with _mapbox_client_lock:
+        if _mapbox_client is None or _mapbox_client.closed:
+            timeout = aiohttp.ClientTimeout(total=10.0, connect=5.0)
+            _mapbox_client = aiohttp.ClientSession(timeout=timeout)
+        return _mapbox_client
+
+
+async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
+    """
+    Call the Mapbox Geocoding v5 API and return a list of dicts with keys:
+      name, admin1, country_name, country_code
+    Results are cached in Redis for SEARCH_CACHE_TTL seconds.
+    """
+    cache_key = f"geocode:mapbox:v1:{query.strip().lower()}:{limit}"
+    cached = await get_cached_response(cache_key)
+    if cached is not None:
+        return cached.get("results", [])
+
+    encoded = quote(query.strip(), safe="")
+    url = (
+        f"{MAPBOX_GEOCODE_URL}/{encoded}.json"
+        f"?types=place&language=en&limit={limit}&access_token={MAPBOX_TOKEN}"
+    )
+
+    session = await _get_mapbox_client()
+    try:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                logger.warning("Mapbox returned status %s for query %r", resp.status, query)
+                return []
+            data = await resp.json()
+    except Exception as exc:
+        logger.warning("Mapbox request failed: %s", exc)
+        return []
+
+    results: List[Dict] = []
+    for feature in data.get("features", []):
+        name = feature.get("text", "").strip()
+        if not name:
+            continue
+        admin1 = ""
+        country_name = ""
+        country_code = ""
+        for ctx in feature.get("context", []):
+            ctx_id = ctx.get("id", "")
+            if ctx_id.startswith("region."):
+                admin1 = ctx.get("text", "").strip()
+            elif ctx_id.startswith("country."):
+                country_name = ctx.get("text", "").strip()
+                sc = ctx.get("short_code", "")
+                country_code = sc[:2].upper() if sc else ""
+        if not country_name:
+            # Top-level feature may itself be a country-level result; skip it
+            continue
+        results.append({
+            "name": name,
+            "admin1": admin1,
+            "country_name": country_name,
+            "country_code": country_code,
+        })
+
+    await set_cached_response(cache_key, {"results": results}, ttl=SEARCH_CACHE_TTL)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Preapproved locations endpoint
+# ---------------------------------------------------------------------------
 
 @router.get("/v1/locations/preapproved", response_model=PreapprovedResponse)
 async def get_preapproved_locations(
@@ -329,8 +415,15 @@ async def search_locations(
     """
     Search for locations by city name.
 
-    Returns up to `limit` matching cities ranked by relevance:
-    exact match → starts-with → name contains → country contains.
+    When MAPBOX_TOKEN is configured, delegates to the Mapbox Geocoding API and
+    returns global results.  Without a token (dev / CI), falls back to a
+    ranked search over the preapproved list.
+
+    Each result includes:
+      - name          city name
+      - admin1        first-level subdivision (state, province, etc.)
+      - country_name  full country name
+      - country_code  ISO 3166-1 alpha-2 code
     """
     # Rate limiting (shared bucket with preapproved endpoint)
     client_ip = request.client.host
@@ -338,6 +431,15 @@ async def search_locations(
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
 
+    # --- Mapbox path ---
+    if MAPBOX_TOKEN:
+        results = await _geocode_mapbox(q, limit=limit)
+        return {
+            "count": len(results),
+            "locations": results,
+        }
+
+    # --- Fallback: search the preapproved list ---
     if not locations_data:
         raise HTTPException(status_code=503, detail="Locations data not yet loaded")
 
@@ -363,13 +465,18 @@ async def search_locations(
     for group in (exact, starts, contains_name, contains_country):
         group.sort(key=lambda x: x.name)
 
-    results = (exact + starts + contains_name + contains_country)[:limit]
+    ranked = (exact + starts + contains_name + contains_country)[:limit]
 
     return {
-        "count": len(results),
+        "count": len(ranked),
         "locations": [
-            {"name": loc.name, "country_name": loc.country_name}
-            for loc in results
+            {
+                "name": loc.name,
+                "admin1": loc.admin1,
+                "country_name": loc.country_name,
+                "country_code": loc.country_code,
+            }
+            for loc in ranked
         ],
     }
 
