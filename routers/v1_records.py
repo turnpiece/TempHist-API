@@ -559,12 +559,12 @@ async def get_temperature_data_v1(
     # Calculate trend
     if len(values) >= 2:
         trend_input = [{"x": v.year, "y": v.temperature} for v in values]
-        slope = calculate_trend_slope(trend_input)
+        slope, r_squared = calculate_trend_slope(trend_input)
         trend_data = TrendData(
             slope=slope,
             unit="°C/decade" if unit_group == "celsius" else "°F/decade",
             data_points=len(values),
-            r_squared=None
+            r_squared=r_squared,
         )
     else:
         trend_data = TrendData(slope=0.0, unit="°C/decade" if unit_group == "celsius" else "°F/decade", data_points=len(values))
@@ -749,13 +749,13 @@ def _rebuild_full_response_from_values(
     
     if len(converted_values) >= 2:
         trend_input = [{"x": v.get('year'), "y": v.get('temperature')} for v in converted_values]
-        slope = calculate_trend_slope(trend_input)
+        slope, r_squared = calculate_trend_slope(trend_input)
         trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
         trend_data = {
             "slope": slope,
             "unit": trend_unit,
             "data_points": len(converted_values),
-            "r_squared": None
+            "r_squared": r_squared,
         }
     else:
         trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"

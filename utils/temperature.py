@@ -29,48 +29,42 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     return round(avg_temp, 1)
 
 
-def calculate_trend_slope(data: List[Dict[str, float]]) -> float:
-    """Calculate temperature trend slope using linear regression.
-    
-    This function handles missing years correctly by using the actual years
-    in the linear regression calculation. The slope represents the rate of
-    temperature change per year, which is then converted to per decade.
-    
+def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional[float]]:
+    """Calculate temperature trend slope and R² using linear regression.
+
     Args:
         data: List of dictionaries with 'x' (year) and 'y' (temperature) keys
-        
+
     Returns:
-        Slope in °C/decade, rounded to 2 decimal places
+        Tuple of (slope in °C/decade, R²), both rounded to 2 decimal places.
+        R² is None when SS_tot is zero (all values identical).
     """
-    # Filter out None values
     data = [d for d in data if d.get('y') is not None]
     n = len(data)
     if n < 2:
-        return 0.0
+        return 0.0, None
 
-    # Sort by year to ensure proper ordering
     data = sorted(data, key=lambda d: d['x'])
-    
-    # Use actual years for the calculation - this is mathematically correct
-    # Linear regression works with any x-values, not just consecutive integers
+
     sum_x = sum(p['x'] for p in data)
     sum_y = sum(p['y'] for p in data)
     sum_xy = sum(p['x'] * p['y'] for p in data)
     sum_xx = sum(p['x'] ** 2 for p in data)
 
-    numerator = n * sum_xy - sum_x * sum_y
     denominator = n * sum_xx - sum_x ** 2
-    
     if denominator == 0:
-        return 0.0
-    
-    # Calculate slope in °C per year
-    slope_per_year = numerator / denominator
-    
-    # Convert to °C per decade
-    slope_per_decade = slope_per_year * 10.0
-    
-    return round(slope_per_decade, 2)
+        return 0.0, None
+
+    slope_per_year = (n * sum_xy - sum_x * sum_y) / denominator
+    intercept = (sum_y - slope_per_year * sum_x) / n
+
+    ss_res = sum((p['y'] - (slope_per_year * p['x'] + intercept)) ** 2 for p in data)
+    mean_y = sum_y / n
+    ss_tot = sum((p['y'] - mean_y) ** 2 for p in data)
+
+    r_squared = round(1 - ss_res / ss_tot, 2) if ss_tot != 0 else None
+
+    return round(slope_per_year * 10.0, 2), r_squared
 
 
 def get_friendly_date(date: datetime) -> str:
