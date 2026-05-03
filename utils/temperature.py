@@ -29,20 +29,20 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     return round(avg_temp, 1)
 
 
-def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional[float]]:
-    """Calculate temperature trend slope and R² using linear regression.
+def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional[float], Optional[float]]:
+    """Calculate temperature trend slope, R², and slope standard error using linear regression.
 
     Args:
         data: List of dictionaries with 'x' (year) and 'y' (temperature) keys
 
     Returns:
-        Tuple of (slope in °C/decade, R²), both rounded to 2 decimal places.
-        R² is None when SS_tot is zero (all values identical).
+        Tuple of (slope in °C/decade, R², slope_error in °C/decade), rounded to 2 decimal places.
+        R² and slope_error are None when they cannot be computed.
     """
     data = [d for d in data if d.get('y') is not None]
     n = len(data)
     if n < 2:
-        return 0.0, None
+        return 0.0, None, None
 
     data = sorted(data, key=lambda d: d['x'])
 
@@ -53,7 +53,7 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional
 
     denominator = n * sum_xx - sum_x ** 2
     if denominator == 0:
-        return 0.0, None
+        return 0.0, None, None
 
     slope_per_year = (n * sum_xy - sum_x * sum_y) / denominator
     intercept = (sum_y - slope_per_year * sum_x) / n
@@ -64,7 +64,13 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional
 
     r_squared = round(1 - ss_res / ss_tot, 2) if ss_tot != 0 else None
 
-    return round(slope_per_year * 10.0, 2), r_squared
+    # SE of slope per year = sqrt(SS_res / ((n-2) * SS_xx)); SS_xx = denominator / n
+    slope_error = None
+    if n > 2:
+        ss_xx = denominator / n
+        slope_error = round((ss_res / ((n - 2) * ss_xx)) ** 0.5 * 10.0, 2)
+
+    return round(slope_per_year * 10.0, 2), r_squared, slope_error
 
 
 def get_friendly_date(date: datetime) -> str:

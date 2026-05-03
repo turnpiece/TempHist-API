@@ -32,6 +32,7 @@ class TrendData(BaseModel):
     unit: str = Field("°C/decade", description="Trend unit (changes based on temperature unit)")
     data_points: int = Field(..., description="Number of data points used")
     r_squared: Optional[float] = Field(None, description="R-squared value for trend fit")
+    slope_error: Optional[float] = Field(None, description="Standard error of the slope (one SE); 95% CI is approximately slope ± 2 × slope_error")
 
 
 class UpdatedResponse(BaseModel):

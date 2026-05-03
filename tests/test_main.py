@@ -70,15 +70,17 @@ def test_calculate_historical_average_insufficient_data():
 
 def test_calculate_trend_slope():
     """Test the trend slope calculation"""
-    slope, r_squared = calculate_trend_slope(SAMPLE_TEMPERATURE_DATA["data"])
+    slope, r_squared, slope_error = calculate_trend_slope(SAMPLE_TEMPERATURE_DATA["data"])
     assert slope > 0
     assert r_squared is not None
     assert 0.0 <= r_squared <= 1.0
+    assert slope_error is not None
+    assert slope_error >= 0.0
 
 def test_calculate_trend_slope_insufficient_data():
     """Test trend slope with insufficient data"""
-    assert calculate_trend_slope([]) == (0.0, None)
-    assert calculate_trend_slope([{"x": 2024, "y": 17.0}]) == (0.0, None)
+    assert calculate_trend_slope([]) == (0.0, None, None)
+    assert calculate_trend_slope([{"x": 2024, "y": 17.0}]) == (0.0, None, None)
 
 # Legacy endpoint tests removed - endpoints have been removed
 
