@@ -9,6 +9,7 @@ class TemperatureValue(BaseModel):
     date: str = Field(..., description="Date in YYYY-MM-DD format")
     year: int = Field(..., description="Year")
     temperature: float = Field(..., description="Temperature value")
+    standard_deviation: Optional[float] = Field(None, description="Standard deviation of daily readings within the period")
 
 
 class DateRange(BaseModel):

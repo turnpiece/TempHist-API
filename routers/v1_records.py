@@ -31,7 +31,7 @@ from utils.location_validation import (
     is_location_likely_invalid, validate_location_response, InvalidLocationCache
 )
 from routers.dependencies import get_redis_client, get_invalid_location_cache
-from utils.temperature import calculate_trend_slope, get_friendly_date, generate_summary
+from utils.temperature import calculate_trend_slope, calculate_standard_deviation, get_friendly_date, generate_summary
 from utils.weather import get_year_range, track_missing_year, create_metadata
 from utils.weather_data import get_temperature_series
 from utils.cache_headers import set_weather_cache_headers
@@ -426,6 +426,7 @@ async def _collect_rolling_window_values(
                 date=anchor.strftime("%Y-%m-%d"),
                 year=anchor.year,
                 temperature=round(avg_temp, 1),
+                standard_deviation=calculate_standard_deviation(temps_converted),
             )
         )
 
@@ -713,6 +714,8 @@ def _rebuild_full_response_from_values(
         converted_v = dict(v)  # Make a copy
         if converted_v.get('temperature') is not None:
             converted_v['temperature'] = _convert_c_to_unit(converted_v['temperature'], unit_group)
+        if converted_v.get('standard_deviation') is not None and unit_group.lower() in ("fahrenheit", "us"):
+            converted_v['standard_deviation'] = round(converted_v['standard_deviation'] * 9.0 / 5.0, 2)
         converted_values.append(converted_v)
     
     all_temps = [v.get('temperature') for v in converted_values if v.get('temperature') is not None]

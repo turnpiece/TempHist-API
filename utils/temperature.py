@@ -1,6 +1,15 @@
 """Temperature calculation and summary generation utilities."""
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+
+
+def calculate_standard_deviation(values: List[float]) -> Optional[float]:
+    """Calculate population standard deviation of a list of temperature values."""
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    variance = sum((v - mean) ** 2 for v in values) / len(values)
+    return round(variance ** 0.5, 2)
 
 
 def calculate_historical_average(data: List[Dict[str, float]]) -> float:
