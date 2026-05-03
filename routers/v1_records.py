@@ -528,10 +528,6 @@ async def get_temperature_data_v1(
         missing_years.extend(window_missing)
         coverage_details.extend(window_coverage)
     
-    # Stamp series std dev (spread across all years) on every record
-    series_std_dev = calculate_standard_deviation(all_temps)
-    values = [v.model_copy(update={'standard_deviation': series_std_dev}) for v in values]
-
     # Calculate date range
     if values:
         start_year_val = min(v.year for v in values)
@@ -544,15 +540,21 @@ async def get_temperature_data_v1(
     else:
         range_data = DateRange(start="", end="", years=0)
     
-    # Calculate average
+    # Calculate average and series statistics
     if all_temps:
+        series_mean = sum(all_temps) / len(all_temps)
+        series_std_dev = calculate_standard_deviation(all_temps)
         avg_data = AverageData(
-            mean=round(sum(all_temps) / len(all_temps), 1),
+            mean=round(series_mean, 1),
             unit=unit_group,
             data_points=len(all_temps)
         )
     else:
+        series_mean = 0.0
+        series_std_dev = None
         avg_data = AverageData(mean=0.0, unit=unit_group, data_points=0)
+
+    values = [v.model_copy(update={'anomaly': round(v.temperature - series_mean, 2)}) for v in values]
     
     # Calculate trend
     if len(values) >= 2:
@@ -635,6 +637,7 @@ async def get_temperature_data_v1(
         "unit_group": unit_group,
         "values": [v.model_dump() for v in values],
         "average": avg_data.model_dump(),
+        "standard_deviation": series_std_dev,
         "trend": trend_data.model_dump(),
         "summary": summary_text,
         "metadata": create_metadata(len(years), len(values), missing_years, additional_metadata),
@@ -721,11 +724,12 @@ def _rebuild_full_response_from_values(
 
     all_temps = [v.get('temperature') for v in converted_values if v.get('temperature') is not None]
 
-    # Stamp series std dev (spread across all years, in the response unit) on every record
+    series_mean = sum(all_temps) / len(all_temps) if all_temps else 0.0
     series_std_dev = calculate_standard_deviation(all_temps)
     for v in converted_values:
-        v['standard_deviation'] = series_std_dev
-    
+        temp = v.get('temperature')
+        v['anomaly'] = round(temp - series_mean, 2) if temp is not None else None
+
     # Format average based on unit
     if all_temps:
         if unit_group.lower() == "fahrenheit":
@@ -794,6 +798,7 @@ def _rebuild_full_response_from_values(
         "unit_group": unit_group,
         "values": converted_values,
         "average": avg_data,
+        "standard_deviation": series_std_dev,
         "trend": trend_data,
         "summary": summary_text,
         "metadata": create_metadata(len(years), len(converted_values), rebuilt_missing_years, {"period_days": period_days, "end_date": end_date_obj.strftime("%Y-%m-%d")}),

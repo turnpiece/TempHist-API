@@ -9,7 +9,7 @@ class TemperatureValue(BaseModel):
     date: str = Field(..., description="Date in YYYY-MM-DD format")
     year: int = Field(..., description="Year")
     temperature: float = Field(..., description="Temperature value")
-    standard_deviation: Optional[float] = Field(None, description="Standard deviation of daily readings within the period")
+    anomaly: Optional[float] = Field(None, description="Deviation from the historical mean (temperature − mean)")
 
 
 class DateRange(BaseModel):
@@ -53,6 +53,7 @@ class RecordResponse(BaseModel):
     unit_group: str = Field("celsius", description="Temperature unit used")
     values: List[TemperatureValue] = Field(..., description="Temperature data points")
     average: AverageData = Field(..., description="Average temperature statistics")
+    standard_deviation: Optional[float] = Field(None, description="Population standard deviation of all values in the series")
     trend: TrendData = Field(..., description="Temperature trend analysis")
     summary: str = Field(..., description="Human-readable summary")
     metadata: Dict = Field(default_factory=dict, description="Additional metadata")
