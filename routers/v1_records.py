@@ -426,7 +426,6 @@ async def _collect_rolling_window_values(
                 date=anchor.strftime("%Y-%m-%d"),
                 year=anchor.year,
                 temperature=round(avg_temp, 1),
-                standard_deviation=calculate_standard_deviation(temps_converted),
             )
         )
 
@@ -529,6 +528,10 @@ async def get_temperature_data_v1(
         missing_years.extend(window_missing)
         coverage_details.extend(window_coverage)
     
+    # Stamp series std dev (spread across all years) on every record
+    series_std_dev = calculate_standard_deviation(all_temps)
+    values = [v.model_copy(update={'standard_deviation': series_std_dev}) for v in values]
+
     # Calculate date range
     if values:
         start_year_val = min(v.year for v in values)
@@ -705,7 +708,7 @@ def _rebuild_full_response_from_values(
     Returns:
         Full response dict with all fields, with temperatures converted to unit_group
     """
-    from utils.temperature import calculate_trend_slope, generate_summary
+    from utils.temperature import calculate_trend_slope, calculate_standard_deviation, generate_summary
     from utils.weather import create_metadata
     
     # Convert temperatures from Celsius to requested unit
@@ -714,11 +717,14 @@ def _rebuild_full_response_from_values(
         converted_v = dict(v)  # Make a copy
         if converted_v.get('temperature') is not None:
             converted_v['temperature'] = _convert_c_to_unit(converted_v['temperature'], unit_group)
-        if converted_v.get('standard_deviation') is not None and unit_group.lower() in ("fahrenheit", "us"):
-            converted_v['standard_deviation'] = round(converted_v['standard_deviation'] * 9.0 / 5.0, 2)
         converted_values.append(converted_v)
-    
+
     all_temps = [v.get('temperature') for v in converted_values if v.get('temperature') is not None]
+
+    # Stamp series std dev (spread across all years, in the response unit) on every record
+    series_std_dev = calculate_standard_deviation(all_temps)
+    for v in converted_values:
+        v['standard_deviation'] = series_std_dev
     
     # Format average based on unit
     if all_temps:
