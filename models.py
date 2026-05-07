@@ -24,6 +24,7 @@ class AverageData(BaseModel):
     mean: float = Field(..., description="Mean temperature")
     unit: str = Field("celsius", description="Temperature unit (celsius or fahrenheit)")
     data_points: int = Field(..., description="Number of data points used")
+    standard_deviation: Optional[float] = Field(None, description="Population standard deviation of all values in the series")
 
 
 class TrendData(BaseModel):
@@ -54,7 +55,6 @@ class RecordResponse(BaseModel):
     unit_group: str = Field("celsius", description="Temperature unit used")
     values: List[TemperatureValue] = Field(..., description="Temperature data points")
     average: AverageData = Field(..., description="Average temperature statistics")
-    standard_deviation: Optional[float] = Field(None, description="Population standard deviation of all values in the series")
     trend: TrendData = Field(..., description="Temperature trend analysis")
     summary: str = Field(..., description="Human-readable summary")
     metadata: Dict = Field(default_factory=dict, description="Additional metadata")

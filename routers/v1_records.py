@@ -547,7 +547,8 @@ async def get_temperature_data_v1(
         avg_data = AverageData(
             mean=round(series_mean, 1),
             unit=unit_group,
-            data_points=len(all_temps)
+            data_points=len(all_temps),
+            standard_deviation=series_std_dev
         )
     else:
         series_mean = 0.0
@@ -638,7 +639,6 @@ async def get_temperature_data_v1(
         "unit_group": unit_group,
         "values": [v.model_dump() for v in values],
         "average": avg_data.model_dump(),
-        "standard_deviation": series_std_dev,
         "trend": trend_data.model_dump(),
         "summary": summary_text,
         "metadata": create_metadata(len(years), len(values), missing_years, additional_metadata),
@@ -743,7 +743,8 @@ def _rebuild_full_response_from_values(
         avg_data = {
             "mean": avg_mean,
             "unit": unit_group,
-            "data_points": len(all_temps)
+            "data_points": len(all_temps),
+            "standard_deviation": series_std_dev
         }
     else:
         avg_data = {"mean": 0.0, "unit": unit_group, "data_points": 0}
@@ -800,7 +801,6 @@ def _rebuild_full_response_from_values(
         "unit_group": unit_group,
         "values": converted_values,
         "average": avg_data,
-        "standard_deviation": series_std_dev,
         "trend": trend_data,
         "summary": summary_text,
         "metadata": create_metadata(len(years), len(converted_values), rebuilt_missing_years, {"period_days": period_days, "end_date": end_date_obj.strftime("%Y-%m-%d")}),
