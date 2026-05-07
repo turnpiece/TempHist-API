@@ -1,0 +1,118 @@
+"""Unit tests for temperature calculation functions: mean, std dev, trend slope, slope error."""
+import math
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+import pytest
+from utils.temperature import calculate_standard_deviation, calculate_trend_slope
+
+
+class TestCalculateStandardDeviation:
+    def test_uniform_series_returns_zero(self):
+        assert calculate_standard_deviation([10.0, 10.0, 10.0]) == 0.0
+
+    def test_known_values(self):
+        # pop std dev of [2, 4, 4, 4, 5, 5, 7, 9] = 2.0
+        assert calculate_standard_deviation([2, 4, 4, 4, 5, 5, 7, 9]) == 2.0
+
+    def test_two_values(self):
+        # pop std dev of [0, 10] = 5.0
+        assert calculate_standard_deviation([0.0, 10.0]) == 5.0
+
+    def test_single_value_returns_none(self):
+        assert calculate_standard_deviation([15.0]) is None
+
+    def test_empty_list_returns_none(self):
+        assert calculate_standard_deviation([]) is None
+
+    def test_result_is_rounded_to_two_decimal_places(self):
+        result = calculate_standard_deviation([1.0, 2.0, 3.0])
+        assert result == round(result, 2)
+
+    def test_negative_temperatures(self):
+        result = calculate_standard_deviation([-10.0, -5.0, 0.0, 5.0, 10.0])
+        assert result is not None
+        assert result > 0
+
+
+class TestCalculateTrendSlope:
+    def _make_data(self, years, temps):
+        return [{"x": y, "y": t} for y, t in zip(years, temps)]
+
+    def test_perfect_positive_trend(self):
+        # 1°C per year = 10°C/decade
+        data = self._make_data([2000, 2001, 2002, 2003, 2004], [10, 11, 12, 13, 14])
+        slope, r_squared, slope_error = calculate_trend_slope(data)
+        assert slope == pytest.approx(10.0, abs=0.01)
+        assert r_squared == pytest.approx(1.0, abs=0.01)
+
+    def test_perfect_negative_trend(self):
+        data = self._make_data([2000, 2001, 2002, 2003, 2004], [14, 13, 12, 11, 10])
+        slope, r_squared, slope_error = calculate_trend_slope(data)
+        assert slope == pytest.approx(-10.0, abs=0.01)
+        assert r_squared == pytest.approx(1.0, abs=0.01)
+
+    def test_flat_series_returns_zero_slope(self):
+        data = self._make_data([2000, 2001, 2002, 2003], [15.0, 15.0, 15.0, 15.0])
+        slope, r_squared, slope_error = calculate_trend_slope(data)
+        assert slope == 0.0
+        # r_squared is None when ss_tot == 0 (no variance)
+        assert r_squared is None
+
+    def test_single_point_returns_defaults(self):
+        data = [{"x": 2020, "y": 15.0}]
+        slope, r_squared, slope_error = calculate_trend_slope(data)
+        assert slope == 0.0
+        assert r_squared is None
+        assert slope_error is None
+
+    def test_two_points_no_slope_error(self):
+        # slope_error requires n > 2
+        data = self._make_data([2000, 2001], [10.0, 11.0])
+        slope, r_squared, slope_error = calculate_trend_slope(data)
+        assert slope == pytest.approx(10.0, abs=0.01)
+        assert slope_error is None
+
+    def test_slope_error_present_for_three_or_more_points(self):
+        data = self._make_data([2000, 2001, 2002, 2003, 2004], [10, 11, 12, 13, 14])
+        _, _, slope_error = calculate_trend_slope(data)
+        # Perfect linear fit → residuals = 0 → slope_error = 0
+        assert slope_error == pytest.approx(0.0, abs=0.01)
+
+    def test_noisy_data_has_positive_slope_error(self):
+        data = self._make_data(
+            [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009],
+            [10.0, 11.5, 11.0, 13.0, 12.5, 14.5, 14.0, 15.5, 15.0, 17.0],
+        )
+        slope, r_squared, slope_error = calculate_trend_slope(data)
+        assert slope > 0
+        assert r_squared is not None and 0 < r_squared <= 1.0
+        assert slope_error is not None and slope_error > 0
+
+    def test_none_temperatures_are_skipped(self):
+        data = [{"x": 2000, "y": 10.0}, {"x": 2001, "y": None}, {"x": 2002, "y": 12.0}]
+        slope, r_squared, slope_error = calculate_trend_slope(data)
+        # Should work with the two valid points
+        assert slope == pytest.approx(10.0, abs=0.01)
+
+    def test_slope_is_per_decade(self):
+        # 0.3°C per year = 3°C/decade
+        data = self._make_data(
+            list(range(2000, 2011)),
+            [10.0 + i * 0.3 for i in range(11)],
+        )
+        slope, _, _ = calculate_trend_slope(data)
+        assert slope == pytest.approx(3.0, abs=0.05)
+
+    def test_r_squared_range(self):
+        data = self._make_data(
+            [2000, 2001, 2002, 2003, 2004, 2005],
+            [10.0, 10.5, 11.3, 11.8, 12.6, 13.1],
+        )
+        _, r_squared, _ = calculate_trend_slope(data)
+        assert r_squared is not None
+        assert 0.0 <= r_squared <= 1.0
