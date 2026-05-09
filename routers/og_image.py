@@ -25,12 +25,18 @@ _IMG_W, _IMG_H = 1200, 1200
 
 # Brand colours — match the website / mobile app
 _BG = "#242456"
-_BAR = "#ff6b6b"
 _REF_YEAR = "#51cf66"
-_AVG_LINE = "#4dabf7"
+_AVG_LINE = "#ffffff"
 _TICK_COLOR = "#cccccc"
-_TITLE_COLOR = "#ff6b6b"
+_TITLE_COLOR = (1.0, 1.0, 1.0, 0x8C / 0xFF)  # white at ~55% opacity
 _FONT_FAMILY = ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"]
+
+# Climate-stripes palette — matches web/src/constants/index.ts
+_NEUTRAL_RGB = (0x8E, 0x8E, 0x93)
+_WARM_RGB    = (0xFF, 0x3B, 0x30)
+_COOL_RGB    = (0x3B, 0x82, 0xF6)
+_BAR_NEUTRAL_Z    = 0.25
+_BAR_SATURATION_Z = 2.0
 
 
 def _share_cache_key(share_id: str) -> str:
@@ -150,6 +156,49 @@ def _celsius_to_fahrenheit(t: float) -> float:
     return t * 9 / 5 + 32
 
 
+def _lerp_color(
+    a: tuple,
+    b: tuple,
+    t: float,
+) -> tuple:
+    """Interpolate between two (0-255) RGB tuples; return matplotlib (0-1) tuple."""
+    return (
+        round(a[0] + (b[0] - a[0]) * t) / 255,
+        round(a[1] + (b[1] - a[1]) * t) / 255,
+        round(a[2] + (b[2] - a[2]) * t) / 255,
+    )
+
+
+def _bar_color_for_z_score(z: float) -> tuple:
+    """Map a Z-score to a cool/neutral/warm colour matching the frontend logic."""
+    magnitude = abs(z)
+    if magnitude <= _BAR_NEUTRAL_Z:
+        return tuple(c / 255 for c in _NEUTRAL_RGB)
+    blend = min(1.0, (magnitude - _BAR_NEUTRAL_Z) / (_BAR_SATURATION_Z - _BAR_NEUTRAL_Z))
+    return _lerp_color(_NEUTRAL_RGB, _WARM_RGB if z >= 0 else _COOL_RGB, blend)
+
+
+def _compute_bar_colors(years: list, temps: list, ref_year) -> list:
+    """Return one matplotlib color per bar using the climate-stripes Z-score scheme."""
+    hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
+    if not hist_temps:
+        return [_REF_YEAR if y == ref_year else tuple(c / 255 for c in _NEUTRAL_RGB)
+                for y in years]
+    mean = sum(hist_temps) / len(hist_temps)
+    # Population std dev — matches calculate_standard_deviation() in utils/temperature.py
+    variance = sum((t - mean) ** 2 for t in hist_temps) / len(hist_temps)
+    std_dev = variance ** 0.5
+    colors = []
+    for y, t in zip(years, temps):
+        if y == ref_year:
+            colors.append(_REF_YEAR)
+        elif std_dev > 0:
+            colors.append(_bar_color_for_z_score((t - mean) / std_dev))
+        else:
+            colors.append(tuple(c / 255 for c in _NEUTRAL_RGB))
+    return colors
+
+
 def _render_chart(share: dict, records: list) -> bytes:
     """Render a horizontal bar chart of per-year temperatures as PNG bytes."""
     import matplotlib
@@ -189,21 +238,21 @@ def _render_chart(share: dict, records: list) -> bytes:
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
 
-    # Historical average (excludes ref_year) — solid blue vertical line
+    # Historical average (excludes ref_year) — white dotted vertical line
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
     if hist_temps:
         avg = sum(hist_temps) / len(hist_temps)
         ax.axvline(
             avg,
             color=_AVG_LINE,
-            linestyle="-",
+            linestyle=":",
             linewidth=2,
             alpha=0.9,
             zorder=1,
         )
 
-    # Horizontal bars: ref_year in green, historical years in red
-    bar_colors = [_REF_YEAR if y == ref_year else _BAR for y in years]
+    # Horizontal bars: ref_year in green, historical years in climate-stripes colours
+    bar_colors = _compute_bar_colors(years, temps, ref_year)
     ax.barh(years, temps, color=bar_colors, height=0.75, zorder=2, alpha=0.9)
 
     # Annotate ref_year bar with its value
@@ -230,7 +279,7 @@ def _render_chart(share: dict, records: list) -> bytes:
     pad_high = max(span * 0.12, 1.5)
     ax.set_xlim(t_min - pad_low, t_max + pad_high)
 
-    # Title — city name + period heading, red, Arial, weight 400
+    # Title — city name + period heading
     city = location.split(",")[0].strip() if location else ""
     heading = _format_period_heading(period, identifier)
     title = f"{city} · {heading}" if city and heading else (city or heading)
@@ -245,6 +294,8 @@ def _render_chart(share: dict, records: list) -> bytes:
     )
 
     ax.set_xlabel(f"Temperature ({unit_symbol})", color=_TICK_COLOR, fontsize=14)
+    ax.xaxis.set_label_position("top")
+    ax.xaxis.tick_top()
     ax.set_ylabel("")
     ax.tick_params(colors=_TICK_COLOR, which="both", labelsize=13)
     ax.yaxis.set_major_locator(MultipleLocator(5))
