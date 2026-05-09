@@ -204,7 +204,7 @@ def _render_chart(share: dict, records: list) -> bytes:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.ticker import MultipleLocator
+    from matplotlib.ticker import MultipleLocator, FuncFormatter
 
     matplotlib.rcParams["font.family"] = "sans-serif"
     matplotlib.rcParams["font.sans-serif"] = _FONT_FAMILY
@@ -293,10 +293,10 @@ def _render_chart(share: dict, records: list) -> bytes:
         fontfamily=_FONT_FAMILY,
     )
 
-    ax.set_xlabel(f"Temperature ({unit_symbol})", color=_TICK_COLOR, fontsize=14)
-    ax.xaxis.set_label_position("top")
     ax.xaxis.tick_top()
+    ax.set_xlabel("")
     ax.set_ylabel("")
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0f}{unit_symbol}"))
     ax.tick_params(colors=_TICK_COLOR, which="both", labelsize=13)
     ax.yaxis.set_major_locator(MultipleLocator(5))
     for spine in ax.spines.values():
