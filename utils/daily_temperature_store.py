@@ -589,15 +589,12 @@ class DailyTemperatureStore:
 
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        "DailyTemperatureStore.fetch executing SQL for %s (location_id=%s) with %d dates: %s",
+                        "DailyTemperatureStore.fetch executing SQL for %s (location_id=%s) with %d dates (%s → %s)",
                         location,
                         location_row["id"],
                         len(date_texts),
-                        query.replace("\n", " ").strip(),
-                    )
-                    logger.debug(
-                        "DailyTemperatureStore.fetch dates requested: %s",
-                        date_texts,
+                        date_texts[0] if date_texts else "–",
+                        date_texts[-1] if date_texts else "–",
                     )
 
                 parameters = (location_row["id"], date_list)
@@ -619,11 +616,11 @@ class DailyTemperatureStore:
                     getattr(exc, "context", None),
                 )
                 logger.error(
-                    "DailyTemperatureStore.fetch query: %s | date_range=(%s -> %s) | requested_dates=%s",
+                    "DailyTemperatureStore.fetch query: %s | date_range=(%s -> %s) | requested_dates_count=%d",
                     query.replace("\n", " ").strip(),
                     start_date,
                     end_date,
-                    date_texts,
+                    len(date_texts),
                 )
                 logger.error("DailyTemperatureStore.fetch parameters: %s", parameters if 'parameters' in locals() else None)
             else:
