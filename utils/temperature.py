@@ -80,21 +80,24 @@ def get_friendly_date(date: datetime) -> str:
     return f"{day}{suffix} {date.strftime('%B')}"
 
 
-def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily", unit_group: str = "celsius") -> str:
+def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily", unit_group: str = "celsius", mean: Optional[float] = None) -> str:
     """Generate a summary text for temperature data in the requested unit.
-    
+
     Args:
         data: List of dicts with 'x' (year) and 'y' (temperature) keys. Temperatures should already be in the target unit.
         date: Reference date for the summary
         period: Data period ("daily", "weekly", "monthly", or "yearly")
         unit_group: Temperature unit ("celsius" or "fahrenheit")
-    
+        mean: Pre-calculated mean temperature. When provided, used directly so the
+              summary is consistent with the `anomaly` and `average.mean` fields in
+              the API response. If omitted, falls back to calculate_historical_average.
+
     Note: Time-sensitive summaries (e.g., "the past week/month/year") should have
     very short cache durations (minutes) as they become invalid quickly.
     """
     # Determine unit symbol
     unit_symbol = "°F" if unit_group.lower() == "fahrenheit" else "°C"
-    
+
     # Filter out data points with None temperature
     data = [d for d in data if d.get('y') is not None]
     if not data or len(data) < 2:
@@ -103,16 +106,16 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     # Check if we have data for the expected year (from the date parameter)
     expected_year = date.year
     latest = data[-1]
-    
+
     # Verify the latest data point is actually for the expected year
     if latest.get('x') != expected_year:
         # Current year data is missing - don't generate a misleading summary
         return f"Temperature data for {date.year} is not yet available."
-    
+
     if latest.get('y') is None:
         return "No valid temperature data for the latest year."
 
-    avg_temp = calculate_historical_average(data)
+    avg_temp = round(mean, 1) if mean is not None else calculate_historical_average(data)
     diff = latest['y'] - avg_temp
     is_fahrenheit = unit_group.lower() == "fahrenheit"
     rounded_diff = int(round(diff, 0)) if is_fahrenheit else round(diff, 1)
