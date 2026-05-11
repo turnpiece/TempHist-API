@@ -595,7 +595,7 @@ async def get_temperature_data_v1(
         })
     
     # Generate summary text with correct unit conversion
-    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group)
+    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group, mean=series_mean)
 
     # Ensure metadata reflects missing current year when data is unavailable
     available_years = {v.year for v in values}
@@ -766,7 +766,7 @@ def _rebuild_full_response_from_values(
     
     end_date_obj = datetime(current_year, month, day)
     summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in converted_values]
-    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group)
+    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group, mean=series_mean)
 
     # Replace bare date with period-prefixed version for non-daily periods
     if period == "weekly":
