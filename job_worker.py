@@ -357,9 +357,20 @@ class JobWorker:
         # Normalize location to slug
         slug = normalize_location_for_cache(location)
         current_year = datetime.now(timezone.utc).year
-        
+        oldest_year = current_year - 50
+
         # If year is specified, fetch only that year's data
         if year is not None:
+            # Discard jobs for years that have rolled off the 50-year window.
+            # This happens naturally each January: the previous year's oldest
+            # backfill jobs (e.g. year=1975 queued in 2025) become stale in 2026.
+            if year < oldest_year or year > current_year:
+                logger.warning(
+                    f"⏭️ Skipping out-of-window year {year} "
+                    f"(valid range {oldest_year}–{current_year})"
+                )
+                return {"skipped": True, "reason": f"year {year} outside window {oldest_year}–{current_year}"}
+
             logger.info(f"📅 Fetching data for year {year} only")
             
             # Fetch full data (get_temperature_data_v1 fetches all years, but we'll extract just the one we need)
