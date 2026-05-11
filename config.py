@@ -13,6 +13,10 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 # Obtain a public token from https://account.mapbox.com/
 # If unset, location search falls back to the small preapproved list (dev mode only).
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "").strip()
+if not MAPBOX_TOKEN:
+    logging.getLogger(__name__).warning(
+        "MAPBOX_TOKEN is not set — location search will only cover the preapproved list"
+    )
 
 # Cache configuration
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
