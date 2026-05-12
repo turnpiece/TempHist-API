@@ -405,7 +405,7 @@ class JobWorker:
             # the cache with a warm-biased average computed before cold months are backfilled.
             skip_cache = False
             if year == current_year:
-                coverage_details = full_data.get("coverage", {}).get("details", [])
+                coverage_details = full_data.get("coverage", {}).get("per_year", [])
                 year_detail = next((d for d in coverage_details if d.get("year") == year), None)
                 if year_detail and year_detail.get("coverage_ratio", 1.0) < 0.8:
                     skip_cache = True
@@ -457,7 +457,7 @@ class JobWorker:
                 pipeline = self.redis.pipeline()
 
                 coverage_by_year = {
-                    d["year"]: d for d in data.get("coverage", {}).get("details", [])
+                    d["year"]: d for d in data.get("coverage", {}).get("per_year", [])
                 }
 
                 for y, record_data in per_year_records.items():
