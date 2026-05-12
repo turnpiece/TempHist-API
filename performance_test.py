@@ -16,7 +16,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import only the calculation functions that don't require external dependencies
-from main import calculate_historical_average, calculate_trend_slope, build_visual_crossing_url
+from utils.temperature import calculate_historical_average, calculate_trend_slope
+from main import build_visual_crossing_url
 
 def profile_function(func, *args, iterations=1000, **kwargs):
     """Profile a function with multiple iterations."""
