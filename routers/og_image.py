@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
-_IMG_W, _IMG_H = 1200, 1200
+_IMG_W, _IMG_H = 1200, 630
 
 # Brand colours — match the website / mobile app
 _BG = "#242456"
@@ -234,8 +234,9 @@ def _render_chart(share: dict, records: list) -> bytes:
     if unit == "fahrenheit":
         temps = [_celsius_to_fahrenheit(t) for t in temps]
 
-    fig, ax = plt.subplots(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
+    fig = plt.figure(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
     fig.patch.set_facecolor(_BG)
+    ax = fig.add_axes([0.24, 0.06, 0.52, 0.80])
     ax.set_facecolor(_BG)
 
     # Historical average (excludes ref_year) — white dotted vertical line
@@ -266,7 +267,7 @@ def _render_chart(share: dict, records: list) -> bytes:
             textcoords="offset points",
             va="center",
             color=_REF_YEAR,
-            fontsize=15,
+            fontsize=13,
             fontweight="bold",
         )
 
@@ -287,8 +288,8 @@ def _render_chart(share: dict, records: list) -> bytes:
         title,
         loc="left",
         color=_TITLE_COLOR,
-        fontsize=26,
-        pad=20,
+        fontsize=22,
+        pad=12,
         fontweight="normal",
         fontfamily=_FONT_FAMILY,
     )
@@ -297,12 +298,10 @@ def _render_chart(share: dict, records: list) -> bytes:
     ax.set_xlabel("")
     ax.set_ylabel("")
     ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0f}{unit_symbol}"))
-    ax.tick_params(colors=_TICK_COLOR, which="both", labelsize=13)
+    ax.tick_params(colors=_TICK_COLOR, which="both", labelsize=11)
     ax.yaxis.set_major_locator(MultipleLocator(5))
     for spine in ax.spines.values():
         spine.set_edgecolor(_BG)
-
-    plt.tight_layout(pad=1.8)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor())
@@ -324,8 +323,9 @@ def _render_placeholder(share: dict) -> bytes:
     city = location.split(",")[0].strip() if location else ""
     heading = _format_period_heading(share.get("period", ""), share.get("identifier", ""))
 
-    fig, ax = plt.subplots(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
+    fig = plt.figure(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
     fig.patch.set_facecolor(_BG)
+    ax = fig.add_axes([0.24, 0.06, 0.52, 0.80])
     ax.set_facecolor(_BG)
     ax.axis("off")
 
@@ -350,7 +350,6 @@ def _render_placeholder(share: dict) -> bytes:
             fontfamily=_FONT_FAMILY,
         )
 
-    plt.tight_layout(pad=1.5)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor())
     plt.close(fig)

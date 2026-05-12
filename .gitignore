@@ -8,6 +8,7 @@ firebase-service-account.json
 venv/
 .venv/
 *_env_vars.json
+prewarm_results_*.json
 
 # Location image files
 data/locations/originals/
