@@ -8,7 +8,6 @@ Complete deployment instructions for the TempHist API.
 - [Railway Deployment](#railway-deployment)
 - [Environment Variables](#environment-variables)
 - [Troubleshooting](#troubleshooting)
-- [Migration from Render](#migration-from-render)
 
 ---
 
@@ -41,10 +40,10 @@ Railway deployment uses a single project with multiple services:
 ┌──────────────────────────────────┐
 │       TempHist Project           │
 │                                  │
-│  ┌────────┐  ┌────────┐         │
-│  │  API   │  │ Redis  │         │
-│  │Service │  │Database│         │
-│  └────────┘  └────────┘         │
+│  ┌────────┐  ┌────────┐          │
+│  │  API   │  │ Redis  │          │
+│  │Service │  │Database│          │
+│  └────────┘  └────────┘          │
 │                                  │
 │  All services communicate        │
 │  via private networking          │
@@ -129,23 +128,33 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | `VISUAL_CROSSING_API_KEY` | Visual Crossing weather API key                 | `abc123...`                                       |
 | `API_ACCESS_TOKEN`        | API access token for automated systems          | `ghi789...`                                       |
 | `REDIS_URL`               | Redis connection URL (auto-provided by Railway) | `redis://default:...@redis.railway.internal:6379` |
+| `MAPBOX_TOKEN`            | Mapbox public token for location geocoding      | `pk.eyJ1...`                                      |
 
 ### Optional Variables
 
 | Variable                   | Default | Description                           |
 | -------------------------- | ------- | ------------------------------------- |
-| `FIREBASE_SERVICE_ACCOUNT` | None    | Firebase credentials JSON (see below) |
-| `CACHE_ENABLED`            | `true`  | Enable/disable caching                |
-| `DEBUG`                    | `false` | Enable debug logging                  |
-| `RATE_LIMIT_ENABLED`       | `true`  | Enable rate limiting                  |
-| `MAX_LOCATIONS_PER_HOUR`   | `10`    | Max unique locations per hour         |
-| `MAX_REQUESTS_PER_HOUR`    | `100`   | Max requests per hour                 |
-| `RATE_LIMIT_WINDOW_HOURS`  | `1`     | Rate limit time window                |
-| `IP_WHITELIST`             | Empty   | Comma-separated whitelisted IPs       |
-| `IP_BLACKLIST`             | Empty   | Comma-separated blacklisted IPs       |
-| `FILTER_WEATHER_DATA`      | `true`  | Filter to essential temperature data  |
-| `CORS_ORIGINS`             | Default | Comma-separated allowed origins       |
-| `CORS_ORIGIN_REGEX`        | Default | Regex pattern for allowed origins     |
+| `FIREBASE_SERVICE_ACCOUNT`          | None          | Firebase credentials JSON (see below)                              |
+| `CACHE_ENABLED`                     | `true`        | Enable/disable caching                                             |
+| `DEBUG`                             | `false`       | Enable debug logging (forbidden when `ENVIRONMENT=production`)     |
+| `ENVIRONMENT`                       | `development` | Set to `production` to enable safety checks                        |
+| `LOG_VERBOSITY`                     | `normal`      | Logging detail: `minimal`, `normal`, or `verbose`                  |
+| `BASE_URL`                          | *(localhost)* | Public API URL used for job callbacks                              |
+| `RATE_LIMIT_ENABLED`                | `true`        | Enable rate limiting                                               |
+| `MAX_LOCATIONS_PER_HOUR`            | `10`          | Max unique locations per hour (standard tokens)                    |
+| `MAX_REQUESTS_PER_HOUR`             | `100`         | Max requests per hour (standard tokens)                            |
+| `RATE_LIMIT_WINDOW_HOURS`           | `1`           | Rate limit time window                                             |
+| `SERVICE_TOKEN_REQUESTS_PER_HOUR`   | `5000`        | Rate limit for service token requests                              |
+| `SERVICE_TOKEN_LOCATIONS_PER_HOUR`  | `500`         | Rate limit for service token locations                             |
+| `SERVICE_TOKEN_WINDOW_HOURS`        | `1`           | Service token rate limit window                                    |
+| `IP_WHITELIST`                      | Empty         | Comma-separated whitelisted IPs                                    |
+| `IP_BLACKLIST`                      | Empty         | Comma-separated blacklisted IPs                                    |
+| `FILTER_WEATHER_DATA`               | `true`        | Filter to essential temperature data                               |
+| `USAGE_TRACKING_ENABLED`            | `true`        | Enable usage tracking                                              |
+| `USAGE_RETENTION_DAYS`              | `7`           | Days to retain usage data                                          |
+| `ANALYTICS_RATE_LIMIT`              | `100`         | Max analytics requests per hour per IP                             |
+| `CORS_ORIGINS`                      | Default       | Comma-separated allowed origins                                    |
+| `CORS_ORIGIN_REGEX`                 | Default       | Regex pattern for allowed origins                                  |
 
 ### Firebase Configuration
 
@@ -290,121 +299,6 @@ curl https://your-app.railway.app/test-redis
 # Rate limit status
 curl https://your-app.railway.app/rate-limit-status
 ```
-
----
-
-## Migration from Render
-
-### Why Migrate to Railway?
-
-#### Current Issues on Render Free Tier
-
-- ❌ **Spin down when idle** → Background worker stops
-- ❌ **Background thread crashes** → Hard to debug
-- ❌ **Requires paid plan** for multiple services
-
-#### Benefits of Railway
-
-- ✅ **No spin down** on hobby plan
-- ✅ **Multiple services** supported affordably
-- ✅ **Better logging** → Easier debugging
-- ✅ **Private networking** between services
-- ✅ **Simpler configuration**
-
-### Migration Steps
-
-#### 1. Prepare Railway Project
-
-Follow the [Railway Deployment](#railway-deployment) steps above to set up your Railway project.
-
-#### 2. Migrate Environment Variables
-
-Export from Render and import to Railway:
-
-```bash
-# Render environment variables to migrate:
-VISUAL_CROSSING_API_KEY
-FIREBASE_SERVICE_ACCOUNT
-API_ACCESS_TOKEN
-CACHE_ENABLED
-DEBUG
-RATE_LIMIT_ENABLED
-MAX_LOCATIONS_PER_HOUR
-MAX_REQUESTS_PER_HOUR
-```
-
-#### 3. Test Railway Deployment
-
-Before switching over:
-
-```bash
-# Test health
-curl https://your-railway-app.up.railway.app/health
-
-# Test API endpoint
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-     https://your-railway-app.up.railway.app/v1/records/daily/London/01-15
-
-# Compare responses with Render
-diff <(curl https://your-render-app.onrender.com/health) \
-     <(curl https://your-railway-app.up.railway.app/health)
-```
-
-#### 4. Update Client Applications
-
-Update your client apps to use the new Railway URL:
-
-```javascript
-// Old
-const API_URL = "https://your-app.onrender.com";
-
-// New
-const API_URL = "https://your-app.up.railway.app";
-```
-
-#### 5. DNS/Domain Update (if applicable)
-
-If using a custom domain:
-
-1. Update DNS records to point to Railway
-2. Configure custom domain in Railway dashboard
-3. Wait for DNS propagation (up to 48 hours)
-
-#### 6. Monitor and Verify
-
-Keep both deployments running for 24-48 hours:
-
-- Monitor Railway logs for errors
-- Compare response times
-- Verify cache warming is working
-- Check background worker status
-
-#### 7. Decommission Render
-
-Once Railway is stable:
-
-1. Disable auto-deploy on Render
-2. Keep Render running for 1 week as backup
-3. Delete Render service after verification period
-
-### Cost Comparison
-
-| Platform          | Configuration      | Monthly Cost               |
-| ----------------- | ------------------ | -------------------------- |
-| **Render Free**   | API only, no Redis | $0 (with spin-down)        |
-| **Render Paid**   | API + Redis        | $14/month ($7 × 2)         |
-| **Railway Hobby** | API + Redis        | ~$6/month (with $5 credit) |
-
-Railway is more cost-effective for this use case.
-
-### Rollback Plan
-
-If issues arise:
-
-1. Keep Render deployment active during migration
-2. DNS/domain can be quickly switched back
-3. Client apps can revert to old URL
-4. Data is not migrated (API is stateless except Redis cache)
 
 ---
 
