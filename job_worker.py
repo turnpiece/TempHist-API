@@ -401,18 +401,32 @@ class JobWorker:
             # Generate ETag
             etag = ETagGenerator.generate_etag(year_record)
             
+            # Skip caching current-year results when coverage is below 80% to avoid poisoning
+            # the cache with a warm-biased average computed before cold months are backfilled.
+            skip_cache = False
+            if year == current_year:
+                coverage_details = full_data.get("coverage", {}).get("details", [])
+                year_detail = next((d for d in coverage_details if d.get("year") == year), None)
+                if year_detail and year_detail.get("coverage_ratio", 1.0) < 0.8:
+                    skip_cache = True
+                    logger.info(
+                        f"⏭️ Skipping cache for current year {year}: "
+                        f"coverage {year_detail['coverage_ratio']:.1%} < 80%"
+                    )
+
             # Store per-year record
-            try:
-                json_data = json.dumps(year_record, sort_keys=True, separators=(',', ':'))
-                self.redis.setex(year_key, ttl, json_data)
-                self.redis.setex(etag_key, ttl, etag)
-                logger.info(f"✅ Cached per-year record: {year_key} (TTL: {ttl}s)")
-            except (redis.RedisError, redis.ConnectionError) as redis_error:
-                logger.warning(f"Redis error caching per-year record {year_key}: {redis_error}")
-                raise
-            except (json.JSONEncodeError, TypeError) as serialize_error:
-                logger.warning(f"Serialization error caching per-year record {year_key}: {serialize_error}")
-                raise
+            if not skip_cache:
+                try:
+                    json_data = json.dumps(year_record, sort_keys=True, separators=(',', ':'))
+                    self.redis.setex(year_key, ttl, json_data)
+                    self.redis.setex(etag_key, ttl, etag)
+                    logger.info(f"✅ Cached per-year record: {year_key} (TTL: {ttl}s)")
+                except (redis.RedisError, redis.ConnectionError) as redis_error:
+                    logger.warning(f"Redis error caching per-year record {year_key}: {redis_error}")
+                    raise
+                except (json.JSONEncodeError, TypeError) as serialize_error:
+                    logger.warning(f"Serialization error caching per-year record {year_key}: {serialize_error}")
+                    raise
             
             # Rebuild single-year result in the requested unit for the response
             month, day = int(identifier.split("-")[0]), int(identifier.split("-")[1])
@@ -442,7 +456,21 @@ class JobWorker:
                 # Use pipeline to batch all cache operations
                 pipeline = self.redis.pipeline()
 
+                coverage_by_year = {
+                    d["year"]: d for d in data.get("coverage", {}).get("details", [])
+                }
+
                 for y, record_data in per_year_records.items():
+                    if y == current_year:
+                        detail = coverage_by_year.get(y, {})
+                        ratio = detail.get("coverage_ratio", 1.0)
+                        if ratio < 0.8:
+                            logger.info(
+                                f"⏭️ Skipping cache for current year {y}: "
+                                f"coverage {ratio:.1%} < 80%"
+                            )
+                            continue
+
                     year_key = rec_key(scope, slug, identifier, y)
                     etag_key = rec_etag_key(scope, slug, identifier, y)
 
