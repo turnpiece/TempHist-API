@@ -2,7 +2,7 @@
 import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
+from fastapi.exceptions import RequestValidationError, ResponseValidationError
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException
 from models import ErrorResponse
@@ -19,8 +19,11 @@ ERROR_CODES = {
     404: "NOT_FOUND",
     409: "CONFLICT",
     413: "PAYLOAD_TOO_LARGE",
+    415: "UNSUPPORTED_MEDIA_TYPE",
+    405: "METHOD_NOT_ALLOWED",
     422: "VALIDATION_ERROR",
     429: "RATE_LIMIT_EXCEEDED",
+    502: "BAD_GATEWAY",
     500: "INTERNAL_SERVER_ERROR",
     503: "SERVICE_UNAVAILABLE",
     504: "GATEWAY_TIMEOUT"
@@ -43,8 +46,7 @@ def register_exception_handlers(app):
             error_details.append({
                 "field": field,
                 "message": error['msg'],
-                "type": error['type'],
-                "input": error.get('input', 'N/A')
+                "type": error['type']
             })
         
         logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
@@ -76,8 +78,7 @@ def register_exception_handlers(app):
             error_details.append({
                 "field": field,
                 "message": error['msg'],
-                "type": error['type'],
-                "input": error.get('input', 'N/A')
+                "type": error['type']
             })
         
         logger.error(f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
@@ -94,6 +95,40 @@ def register_exception_handlers(app):
         
         return JSONResponse(
             status_code=422,
+            content=error_response.model_dump()
+        )
+
+    @app.exception_handler(ResponseValidationError)
+    async def response_validation_exception_handler(request: Request, exc: ResponseValidationError):
+        """Handle response model validation errors with standardized format."""
+        request_id = getattr(request.state, 'request_id', None)
+
+        error_details = []
+        for error in exc.errors():
+            field = " -> ".join(str(loc) for loc in error['loc'])
+            error_details.append({
+                "field": field,
+                "message": error['msg'],
+                "type": error['type']
+            })
+
+        logger.error(
+            f"❌ RESPONSE VALIDATION ERROR: {exc.errors()} | Path={request.url.path} | Request-ID={request_id}"
+        )
+
+        # Response validation failures are server-side contract bugs and should return 500.
+        error_response = ErrorResponse(
+            error="RESPONSE_VALIDATION_ERROR",
+            message="Response data validation failed",
+            code="RESPONSE_VALIDATION_ERROR",
+            details=error_details if DEBUG else None,
+            path=request.url.path,
+            method=request.method,
+            request_id=request_id
+        )
+
+        return JSONResponse(
+            status_code=500,
             content=error_response.model_dump()
         )
     
