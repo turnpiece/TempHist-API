@@ -25,8 +25,9 @@ Complete deployment instructions for the TempHist API.
 1. Create Railway project
 2. Add Redis database
 3. Deploy API service from GitHub
-4. Set environment variables
-5. Deploy and verify
+4. Deploy worker service from same repo
+5. Set environment variables
+6. Deploy and verify
 
 ---
 
@@ -71,7 +72,17 @@ Railway deployment uses a single project with multiple services:
 2. Select your `TempHist-api` repository
 3. Railway will detect Python and configure automatically
 
-### Step 4: Configure Environment Variables
+### Step 4: Deploy Worker Service
+
+1. Click **"+ New" → "GitHub Repo"**
+2. Select the **same repository** as the API service
+3. Name the service: `worker`
+4. Set custom start command: `python worker_service.py`
+5. Leave port empty (the worker doesn't expose HTTP)
+
+The worker processes background jobs from the Redis queue. Without it, jobs will queue up but never complete.
+
+### Step 5: Configure Environment Variables
 
 In your API service **Variables** tab, add a **reference variable** to Redis:
 
@@ -100,17 +111,20 @@ MAX_LOCATIONS_PER_HOUR=10
 MAX_REQUESTS_PER_HOUR=100
 ```
 
-### Step 5: Deploy
+### Step 6: Deploy
 
 1. Railway auto-deploys when you push to GitHub
 2. Or click **"Deploy"** in the Railway dashboard
 3. Railway will generate a public URL: `https://your-app.up.railway.app`
 
-### Step 6: Verify Deployment
+### Step 7: Verify Deployment
 
 ```bash
 # Check health
 curl https://your-app.up.railway.app/health
+
+# Check worker status (requires REDIS_URL in local .env)
+python check_worker_status.py
 
 # Test API (with your token)
 curl -H "Authorization: Bearer YOUR_TOKEN" \
@@ -153,6 +167,17 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | `USAGE_TRACKING_ENABLED`            | `true`        | Enable usage tracking                                              |
 | `USAGE_RETENTION_DAYS`              | `7`           | Days to retain usage data                                          |
 | `ANALYTICS_RATE_LIMIT`              | `100`         | Max analytics requests per hour per IP                             |
+| `CACHE_WARMING_ENABLED`             | `true`        | Enable cache warming on startup and interval                       |
+| `CACHE_WARMING_INTERVAL_HOURS`      | `4`           | How often cache warming runs (hours)                               |
+| `CACHE_WARMING_DAYS_BACK`           | `7`           | How many days back to warm                                         |
+| `CACHE_WARMING_CONCURRENT_REQUESTS` | `3`           | Concurrent requests during warming                                 |
+| `CACHE_WARMING_MAX_LOCATIONS`       | `15`          | Max locations to warm per cycle                                    |
+| `CACHE_STATS_ENABLED`               | `true`        | Enable cache hit/miss statistics                                   |
+| `CACHE_STATS_RETENTION_HOURS`       | `24`          | How long to retain cache stats                                     |
+| `CACHE_HEALTH_THRESHOLD`            | `0.7`         | Cache hit-rate threshold below which health is degraded            |
+| `CACHE_INVALIDATION_ENABLED`        | `true`        | Enable cache invalidation                                          |
+| `CACHE_INVALIDATION_DRY_RUN`        | `false`       | Log invalidations without deleting (for debugging)                 |
+| `CACHE_INVALIDATION_BATCH_SIZE`     | `100`         | Keys to process per invalidation batch                             |
 | `CORS_ORIGINS`                      | Default       | Comma-separated allowed origins                                    |
 | `CORS_ORIGIN_REGEX`                 | Default       | Regex pattern for allowed origins                                  |
 
@@ -245,7 +270,22 @@ REDIS_URL=redis://default:password@redis.railway.internal:6379
 
 **Solution**: Both services must be in the **same Railway project** for private networking to work.
 
-#### 5. Cache Warming Errors
+#### 5. Worker Service Not Processing Jobs
+
+**Symptom**: Jobs created but not completed; `check_worker_status.py` reports no heartbeat
+
+**Causes**:
+
+- Worker service not created in Railway
+- Worker service crashed at startup
+
+**Solutions**:
+
+- Check Railway dashboard — you should see both `api` and `worker` services
+- If worker service is missing, create it manually (see Step 4 above)
+- Check worker service logs for Python errors
+
+#### 6. Cache Warming Errors
 
 **Symptom**: `❌ CACHE WARMING FAILED: Error connecting to Redis`
 
@@ -307,9 +347,10 @@ curl https://your-app.railway.app/rate-limit-status
 - [ ] Health check passes (`/health`)
 - [ ] Redis connectivity works (`/test-redis`)
 - [ ] API endpoints return data
+- [ ] Both `api` and `worker` services are deployed and healthy in Railway
+- [ ] Worker heartbeat present (`python check_worker_status.py`)
 - [ ] Rate limiting is functioning
 - [ ] Cache warming is working (check logs)
-- [ ] Background worker is running (if using Redis)
 - [ ] Environment variables are set correctly
 - [ ] Custom domain configured (if applicable)
 - [ ] Client applications updated with new URL

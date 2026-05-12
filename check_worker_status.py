@@ -83,9 +83,9 @@ def check_worker_status():
         print("🚨 ISSUE: Jobs are being created but not processed")
         print("   This indicates the worker service is not running")
         print("\n💡 SOLUTION:")
-        print("   1. Check Railway dashboard for worker service")
-        print("   2. If no worker service exists, Railway didn't create it from Procfile")
-        print("   3. You may need to manually create a worker service in Railway")
+        print("   1. Check Railway dashboard — both 'api' and 'worker' services should be present")
+        print("   2. If worker service is missing, create it manually (see DEPLOYMENT.md Step 4)")
+        print("   3. Check worker service logs for startup errors")
     else:
         print("✅ No jobs in queue - system appears healthy")
 

@@ -26,7 +26,7 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 
 ## 📋 Requirements
 
-- Python 3.8+
+- Python 3.10+ (production uses **3.12.3**; see `.python-version` and `render.yaml`)
 - Redis server (local or cloud) - Required
 - PostgreSQL database (local or cloud) - Optional, for persistent cache with location aliasing
 - Visual Crossing API key
@@ -75,8 +75,8 @@ IP_BLACKLIST=192.168.1.200,10.0.0.99  # IPs blocked entirely
 # Data Filtering
 FILTER_WEATHER_DATA=true  # Filter to essential temperature data only
 
-# Authentication Tokens
-API_ACCESS_TOKEN=your_api_token_here  # API access token for automated systems
+# Location search (optional — without it, autocomplete uses a small preapproved list)
+MAPBOX_TOKEN=your_mapbox_public_token
 ```
 
 ## 🛠️ Installation
@@ -85,7 +85,7 @@ API_ACCESS_TOKEN=your_api_token_here  # API access token for automated systems
 
    ```bash
    git clone <repository-url>
-   cd TempHist-api
+   cd <repository-root>   # e.g. the `api` directory of your workspace
    ```
 
 2. **Create virtual environment**
@@ -107,10 +107,7 @@ API_ACCESS_TOKEN=your_api_token_here  # API access token for automated systems
 
 4. **Set up environment**
 
-   ```bash
-   cp .env.example .env  # Create from template
-   # Edit .env with your API keys
-   ```
+   Create a `.env` file in the **same directory as `main.py`** (the API loads it from there, not always from your shell’s current working directory). Copy variables from the **Configuration** section above into that file.
 
 5. **Start Redis** (if running locally)
 
@@ -140,6 +137,8 @@ API_ACCESS_TOKEN=your_api_token_here  # API access token for automated systems
    python worker_service.py
    ```
 
+   `worker_service.py` validates required env vars, initializes the cache layer, then runs the async `JobWorker` from `job_worker.py`. For a minimal dev run you can also use `python job_worker.py` directly (same underlying worker).
+
    The web/mobile clients use async job endpoints for temperature data.
    If the worker is not running, API calls can connect successfully but data
    will not complete loading because jobs stay pending/processing.
@@ -159,7 +158,7 @@ chmod +x start.sh
 ```
 
 `start.sh` activates `venv`, attempts to start Redis/PostgreSQL when available,
-then starts the API server and launches the worker.
+then starts the API server (`uvicorn`) and runs **`job_worker.py`** in the foreground (not `worker_service.py`). Use separate terminals if you prefer `worker_service.py` for stricter startup checks.
 
 Notes:
 - Redis/PostgreSQL startup is best-effort (the script won't fail if it cannot start them automatically).
@@ -1152,10 +1151,10 @@ The API includes comprehensive performance monitoring:
 # Run performance tests
 python performance_test.py
 
-# Profile specific functions
+# Profile specific functions (historical average lives in utils, not main)
 python -c "
 import cProfile
-from main import calculate_historical_average
+from utils.temperature import calculate_historical_average
 cProfile.run('calculate_historical_average([{\"x\": 2020, \"y\": 15.5}])')
 "
 ```
@@ -1189,43 +1188,39 @@ cProfile.run('calculate_historical_average([{\"x\": 2020, \"y\": 15.5}])')
 ### Quick Start
 
 ```bash
-# Run all tests (140+ tests)
-pytest -v
+# Run full suite (~200 tests; exact count varies as tests are added)
+python3 -m pytest tests/ -v
 
 # Run specific test categories
-pytest test_main.py -k "rate" -v  # Rate limiting tests
-pytest test_main.py -k "cache" -v  # Caching tests
-pytest test_main.py -k "performance" -v  # Performance tests
-pytest test_cache.py -v  # Enhanced caching system tests
-pytest tests/routers/ -v  # Router-specific tests
+python3 -m pytest tests/test_main.py -k "rate" -v   # Rate limiting tests
+python3 -m pytest tests/test_main.py -k "cache" -v  # Caching-related tests in test_main
+python3 -m pytest tests/test_main.py -k "performance" -v
+python3 -m pytest tests/test_temporal_cache.py -v   # Temporal / canonical cache (app/cache_utils)
+python3 -m pytest tests/test_job_dedup.py -v       # Job queue deduplication
+python3 -m pytest tests/routers/ -v                 # Router-specific tests
 ```
 
 ### Test Categories
 
-- **Unit Tests**: Individual component testing (test_main.py)
-- **Enhanced Caching Tests**: Cache utilities, ETags, jobs (test_cache.py)
-- **Integration Tests**: Full API endpoint testing
-- **Performance Tests**: Load and stress testing
-- **Rate Limiting Tests**: Rate limit validation
-- **Router Tests**: Endpoint-specific functionality
+- **Unit tests**: `tests/test_main.py`, `tests/utils/`
+- **Temporal / v1 cache helpers**: `tests/test_temporal_cache.py` (uses `app/cache_utils.py`)
+- **Job queue behaviour**: `tests/test_job_dedup.py`, `tests/test_deduplication.py`
+- **Router / HTTP tests**: `tests/routers/`
+- **Integration / performance**: `tests/test_async_jobs_integration.py`, `tests/test_batch_fetch_performance.py`, `load_test_script.py`
 
-### Enhanced Caching Tests
+### Cache and job tests (replaces legacy `test_cache.py`)
+
+The old monolithic `test_cache.py` described in older docs **is not in this repo**. Use these instead:
 
 ```bash
-# Test cache key normalization
-pytest test_cache.py::TestCacheKeyBuilder -v
+# Temporal cache keys, tolerance, get/set
+python3 -m pytest tests/test_temporal_cache.py -v
 
-# Test ETag generation and conditional requests
-pytest test_cache.py::TestETagGenerator -v
+# Job deduplication and lifecycle
+python3 -m pytest tests/test_job_dedup.py -v
 
-# Test async job processing
-pytest test_cache.py::TestJobWorker -v
-
-# Test single-flight protection
-pytest test_cache.py::TestSingleFlightLock -v
-
-# Test cache performance
-pytest test_cache.py::TestPerformance -v
+# ETag / HTTP caching on locations API
+python3 -m pytest tests/routers/test_locations.py -k "etag" -v
 ```
 
 ### Load Testing
@@ -1327,7 +1322,7 @@ grep "RATE" temphist.log
 
 **Minimum Requirements:**
 
-- **Python 3.8+** runtime environment
+- **Python 3.10+** runtime environment (3.12.x recommended; see `.python-version`)
 - **Redis database** (version 6.0+ recommended) - Required
 - **PostgreSQL database** (version 12+ recommended) - Optional, for persistent cache
 - **Memory**: 512MB RAM minimum, 1GB+ recommended (2GB+ if using PostgreSQL)

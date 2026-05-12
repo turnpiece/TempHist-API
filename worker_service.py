@@ -19,10 +19,12 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Same as main.py: load .env from project root (directory containing this file)
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
 # Import configuration
 from config import DEBUG
