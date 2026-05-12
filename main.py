@@ -13,7 +13,6 @@ import time
 import firebase_admin
 import redis
 import httpx
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,10 +21,8 @@ from starlette.responses import FileResponse
 from firebase_admin import auth, credentials
 from pydantic import BaseModel, Field
 
-# Load environment variables before importing routers
-# Use the directory where main.py is located to find .env file (more robust than current working directory)
-env_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(dotenv_path=env_path)
+# Load .env and populate os.environ before routers (see config.DOTENV_PATH).
+import config  # noqa: F401
 
 # Import routers
 from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions

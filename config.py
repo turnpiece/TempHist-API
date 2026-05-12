@@ -1,9 +1,13 @@
 """Application configuration and environment variables."""
-import os
 import logging
+import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
+# Single source of truth for .env location (same directory as this file / main.py).
+DOTENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=DOTENV_PATH)
 
 # Environment variables - strip whitespace/newlines from API keys
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()

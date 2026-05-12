@@ -19,14 +19,8 @@ import logging
 import os
 import signal
 import sys
-from pathlib import Path
 
-from dotenv import load_dotenv
-
-# Same as main.py: load .env from project root (directory containing this file)
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
-
-# Import configuration
+# Load .env from project root (config.DOTENV_PATH) before reading settings.
 from config import DEBUG
 
 # Setup logging

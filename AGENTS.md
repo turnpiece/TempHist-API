@@ -36,7 +36,7 @@ All tests use mocks and do not require external services. Redis does not need to
 ### Gotchas
 
 - `pip install` puts binaries in `~/.local/bin`; ensure this is on `PATH`.
-- The `.env` file is loaded relative to `main.py`'s directory, not the working directory.
+- The `.env` file is loaded from the project root via `config.DOTENV_PATH` (directory containing `config.py` / `main.py`), not from the process working directory.
 - Firebase auth is optional; `API_ACCESS_TOKEN` in the `Authorization: Bearer` header is sufficient for all endpoints during development.
 - The Swagger UI at `/docs` requires external CDN access (cdn.jsdelivr.net) for its JS/CSS assets.
 - `CACHE_WARMING_ENABLED` should be `false` for local dev to avoid background API calls to Visual Crossing.

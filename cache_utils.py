@@ -7,6 +7,10 @@ This module provides:
 - Single-flight protection to prevent cache stampedes
 - Cache hit/miss metrics and health monitoring
 - Deterministic JSON serialization for consistent ETags
+
+Relationship to ``app/cache_utils.py``:
+That package holds the **v1 temporal / canonical-location** Redis helpers (narrower scope).
+This module is the **primary** cache, job queue, ETag, and warming stack used across the API.
 """
 
 import hashlib
@@ -2495,9 +2499,6 @@ async def scheduled_cache_warming(cache_warmer: CacheWarmer):
     """Background task that schedules cache warming jobs on a schedule."""
     if not CACHE_WARMING_ENABLED or not cache_warmer:
         return
-    
-    # Import here to avoid circular imports
-    from cache_utils import get_job_manager
     
     while True:
         try:

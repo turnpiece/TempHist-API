@@ -13,13 +13,10 @@ Requirements:
 import asyncio
 import os
 import sys
-from pathlib import Path
 from typing import List, Tuple
 
-from dotenv import load_dotenv
-
-# Same as main.py: .env lives next to this file, not necessarily the process cwd.
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+# Load .env from project root (config.DOTENV_PATH — same directory as main.py).
+import config  # noqa: F401
 
 
 async def check_indexes() -> Tuple[bool, List[str]]:

@@ -8,9 +8,9 @@ import aiohttp
 import asyncio
 import json
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from project root (config.DOTENV_PATH).
+import config  # noqa: F401
 
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"

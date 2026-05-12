@@ -33,7 +33,9 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 
 ## ⚙️ Configuration
 
-Create a `.env` file with the following variables:
+Create a `.env` file in the project root (the same directory as `main.py` and `config.py`). It is loaded automatically whenever `config` is imported (`config.DOTENV_PATH`), including when you run `uvicorn main:app`, so you do not need to rely on the shell’s current working directory.
+
+Use the following variables:
 
 ```bash
 # Required API Keys

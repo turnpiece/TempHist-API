@@ -21,11 +21,10 @@ from typing import List, Dict, Any, Optional
 
 import aiohttp
 import redis
-from dotenv import load_dotenv
 from urllib.parse import quote  # URL-encode location path segments
 
-# Load environment variables
-load_dotenv()
+# Load .env from project root (config.DOTENV_PATH).
+import config  # noqa: F401
 
 # Setup logging
 logging.basicConfig(

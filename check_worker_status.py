@@ -7,9 +7,9 @@ import redis
 import json
 import os
 from datetime import datetime, timezone
-from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from project root (config.DOTENV_PATH).
+import config  # noqa: F401
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
