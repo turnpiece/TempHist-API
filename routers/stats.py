@@ -5,7 +5,7 @@ from config import (
     MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS, USAGE_TRACKING_ENABLED
 )
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
-from cache_utils import get_usage_tracker
+from cache.accessors import get_usage_tracker
 from routers.dependencies import (
     get_service_token_rate_limiter, get_location_monitor, get_request_monitor
 )

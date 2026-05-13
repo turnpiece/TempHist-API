@@ -16,7 +16,7 @@ def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[b
     has_min = any(record.temp_min_c is not None for record in records)
     return has_temp, has_max, has_min
 
-from cache_utils import normalize_location_for_cache
+from cache.keys import normalize_location_for_cache
 
 logger = logging.getLogger(__name__)
 

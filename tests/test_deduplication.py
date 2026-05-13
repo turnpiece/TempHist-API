@@ -8,7 +8,7 @@ import sys
 import redis
 import json
 import time
-from cache_utils import initialize_cache, get_job_manager
+from cache.accessors import initialize_cache, get_job_manager
 
 def main():
     print("=== Job Deduplication Test ===\n")

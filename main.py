@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field
 import config  # noqa: F401
 
 # Import routers
-from routers.records_agg import router as records_agg_router, daily_cache, cleanup_http_sessions
 from routers.locations import router as locations_router, initialize_locations_data
 from routers.weather import router as weather_router
 from routers.v1_records import router as v1_records_router
@@ -42,18 +41,10 @@ from routers.dependencies import initialize_dependencies
 from exceptions import register_exception_handlers
 
 # Import enhanced caching utilities
-from cache_utils import (
-    # Cache utility functions
-    get_cache_value, set_cache_value, generate_cache_key,
-    # Global instances
-    get_cache_stats, get_usage_tracker, get_cache_warmer,
-    # Cache configuration
-    CACHE_WARMING_ENABLED,
-    # Cache warming
-    scheduled_cache_warming,
-    # Cache initialization
-    initialize_cache
-)
+from cache.core import get_cache_value, set_cache_value
+from cache.keys import generate_cache_key
+from cache.accessors import get_cache_stats, get_usage_tracker, get_cache_warmer, initialize_cache
+from cache.warming import CACHE_WARMING_ENABLED, scheduled_cache_warming
 
 from version import __version__
 
@@ -795,7 +786,7 @@ async def lifespan(app: FastAPI):
             logger.info("🚀 STARTUP CACHE WARMING: Creating initial warming job")
         
         # Create initial warming job instead of running directly
-        from cache_utils import get_job_manager
+        from cache.accessors import get_job_manager
         job_manager = get_job_manager()
         if job_manager:
             try:
@@ -833,7 +824,8 @@ async def lifespan(app: FastAPI):
     
     # Clean up HTTP client sessions
     try:
-        await cleanup_http_sessions()
+        from utils.visual_crossing_timeline import close_client_session as close_timeline_client
+        await close_timeline_client()
         if DEBUG:
             logger.info("✅ HTTP client sessions closed successfully")
     except Exception as e:
@@ -848,7 +840,6 @@ register_exception_handlers(app)
 app.include_router(root_router)
 app.include_router(health_router)
 app.include_router(weather_router)
-app.include_router(records_agg_router)  # Must come before v1_records_router
 app.include_router(v1_records_router)
 app.include_router(locations_router)
 app.include_router(cache_router)
@@ -957,10 +948,6 @@ redis_client = create_redis_client(REDIS_URL)
 # Background worker is now handled by a separate service (worker_service.py)
 # This provides better isolation, scaling, and eliminates event loop conflicts
 logger.debug("ℹ️  Background worker runs as separate service - no in-process worker needed")
-
-# Wire up Redis cache for rolling bundle
-daily_cache.redis = redis_client
-
 
 # Initialize analytics storage
 analytics_storage = AnalyticsStorage()
@@ -1642,57 +1629,6 @@ async def is_valid_location(location: str) -> bool:
         # If request fails, assume location is invalid
         pass
     return False
-
-class InvalidLocationCache:
-    """Cache for invalid locations to avoid repeated API calls."""
-    
-    def __init__(self, redis_client, ttl_hours: int = 24):
-        self.redis_client = redis_client
-        self.ttl_seconds = ttl_hours * 3600
-        self.invalid_key_prefix = "invalid_location:"
-    
-    def is_invalid_location(self, location: str) -> bool:
-        """Check if a location is known to be invalid."""
-        if not self.redis_client:
-            return False
-        try:
-            key = f"{self.invalid_key_prefix}{location.lower()}"
-            return self.redis_client.exists(key) > 0
-        except Exception as e:
-            logger.error(f"Error checking invalid location cache: {e}")
-            return False
-    
-    def mark_location_invalid(self, location: str, reason: str = "no_data"):
-        """Mark a location as invalid with a reason."""
-        if not self.redis_client:
-            return
-        try:
-            key = f"{self.invalid_key_prefix}{location.lower()}"
-            data = {
-                "location": location,
-                "reason": reason,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            self.redis_client.setex(key, self.ttl_seconds, json.dumps(data))
-            logger.info(f"Marked location as invalid: {location} (reason: {reason})")
-        except Exception as e:
-            logger.error(f"Error marking location as invalid: {e}")
-    
-    def get_invalid_location_info(self, location: str) -> Optional[dict]:
-        """Get information about why a location was marked as invalid."""
-        if not self.redis_client:
-            return None
-        try:
-            key = f"{self.invalid_key_prefix}{location.lower()}"
-            data = self.redis_client.get(key)
-            if data:
-                return json.loads(data)
-        except Exception as e:
-            logger.error(f"Error getting invalid location info: {e}")
-        return None
-
-# Initialize invalid location cache
-invalid_location_cache = InvalidLocationCache(redis_client)
 
 def validate_location_response(data: dict, location: str) -> tuple[bool, str]:
     """

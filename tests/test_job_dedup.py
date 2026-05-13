@@ -12,7 +12,7 @@ import time
 import pytest
 from unittest.mock import MagicMock, patch, call
 
-from cache_utils import JobManager, JobStatus
+from jobs.manager import JobManager, JobStatus
 
 
 # ---------------------------------------------------------------------------

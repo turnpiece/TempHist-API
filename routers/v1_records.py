@@ -14,13 +14,16 @@ from models import (
 from config import (
     CACHE_ENABLED, DEBUG, API_KEY,
 )
-from cache_utils import (
-    normalize_location_for_cache, get_cache_updated_timestamp, _get_location_timezone,
+from cache.keys import (
+    normalize_location_for_cache, _get_location_timezone,
     rec_key, bundle_key, rec_etag_key, get_records, assemble_and_cache,
-    compute_bundle_etag, get_year_etags, TTL_STABLE, TTL_CURRENT_DAILY,
-    TTL_CURRENT_WEEKLY, TTL_CURRENT_MONTHLY, TTL_CURRENT_YEARLY,
-    get_job_manager
+    compute_bundle_etag, get_year_etags,
 )
+from cache.core import (
+    get_cache_updated_timestamp,
+    TTL_STABLE, TTL_CURRENT_DAILY, TTL_CURRENT_WEEKLY, TTL_CURRENT_MONTHLY, TTL_CURRENT_YEARLY,
+)
+from cache.accessors import get_job_manager
 
 from app.cache_utils import (
     cache_get as temporal_cache_get,
@@ -847,7 +850,7 @@ async def _store_per_year_records(
     current_year: int
 ):
     """Store per-year records in cache with appropriate TTLs."""
-    from cache_utils import ETagGenerator
+    from cache.core import ETagGenerator
     
     for year, record_data in per_year_records.items():
         year_key = rec_key(scope, slug, identifier, year)
@@ -1007,7 +1010,7 @@ async def get_record(
                     
                     # Check ETag conditional request
                     if if_none_match:
-                        from cache_utils import ETagGenerator
+                        from cache.core import ETagGenerator
                         if ETagGenerator.matches_etag(bundle_etag_str, if_none_match):
                             response.status_code = 304
                             response.headers["ETag"] = bundle_etag_str
@@ -1065,7 +1068,7 @@ async def get_record(
                     invalid_location_cache.mark_location_invalid(location, "no_data_cached")
                     raise HTTPException(status_code=400, detail=error_msg)
 
-                from cache_utils import ETagGenerator
+                from cache.core import ETagGenerator
                 etag = ETagGenerator.generate_etag(data)
 
                 if if_none_match and ETagGenerator.matches_etag(etag, if_none_match):
@@ -1125,7 +1128,7 @@ async def get_record(
                                 
                                 # Check ETag conditional request
                                 if if_none_match:
-                                    from cache_utils import ETagGenerator
+                                    from cache.core import ETagGenerator
                                     if ETagGenerator.matches_etag(bundle_etag_computed, if_none_match):
                                         response.status_code = 304
                                         response.headers["ETag"] = bundle_etag_computed
@@ -1171,7 +1174,7 @@ async def get_record(
                             year_key = rec_key(period, slug, identifier, current_year)
                             etag_key = rec_etag_key(period, slug, identifier, current_year)
                             ttl = _get_ttl_for_current_year(period)
-                            from cache_utils import ETagGenerator
+                            from cache.core import ETagGenerator
                             etag = ETagGenerator.generate_etag(per_year_records[current_year])
                             try:
                                 json_data = json.dumps(per_year_records[current_year], sort_keys=True, separators=(',', ':'))
@@ -1216,7 +1219,7 @@ async def get_record(
                             year_key = rec_key(period, slug, identifier, year)
                             etag_key = rec_etag_key(period, slug, identifier, year)
                             ttl = TTL_STABLE
-                            from cache_utils import ETagGenerator
+                            from cache.core import ETagGenerator
                             etag = ETagGenerator.generate_etag(per_year_records[year])
                             try:
                                 json_data = json.dumps(per_year_records[year], sort_keys=True, separators=(',', ':'))
@@ -1238,7 +1241,7 @@ async def get_record(
                 
                 # Check ETag conditional request
                 if if_none_match:
-                    from cache_utils import ETagGenerator
+                    from cache.core import ETagGenerator
                     if ETagGenerator.matches_etag(bundle_etag_computed, if_none_match):
                         response.status_code = 304
                         response.headers["ETag"] = bundle_etag_computed
@@ -1325,10 +1328,10 @@ async def get_record(
                     bundle_etag_computed = bundle_etag_stored.decode('utf-8') if isinstance(bundle_etag_stored, bytes) else bundle_etag_stored
                 else:
                     # Fallback: compute from data
-                    from cache_utils import ETagGenerator
+                    from cache.core import ETagGenerator
                     bundle_etag_computed = ETagGenerator.generate_etag(data)
             else:
-                from cache_utils import ETagGenerator
+                from cache.core import ETagGenerator
                 bundle_etag_computed = ETagGenerator.generate_etag(data)
         
         # Store in temporal cache for future approximate matching (always store celsius data)

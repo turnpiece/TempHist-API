@@ -65,7 +65,7 @@ def validate_environment():
 async def main():
     """Main entry point for the worker service."""
     import redis
-    from cache_utils import initialize_cache
+    from cache.accessors import initialize_cache
     from job_worker import JobWorker
     
     logger.info("=" * 60)

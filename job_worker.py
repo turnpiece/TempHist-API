@@ -14,7 +14,8 @@ import sys
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from cache_utils import get_job_manager, JobStatus
+from cache.accessors import get_job_manager
+from jobs.manager import JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ class JobWorker:
     
     def _store_cache_data(self, cache_key: str, data: dict, data_type: str = "data") -> str:
         """Helper function to store data in cache and generate ETag."""
-        from cache_utils import set_cache_value, CACHE_TTL_LONG
+        from cache.core import set_cache_value, CACHE_TTL_LONG
         from datetime import timedelta
         import hashlib
         
@@ -337,10 +338,8 @@ class JobWorker:
     async def process_record_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record computation job with per-year granularity."""
         from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year, _rebuild_full_response_from_values
-        from cache_utils import (
-            normalize_location_for_cache, rec_key, rec_etag_key,
-            get_ttl_for_year, ETagGenerator
-        )
+        from cache.keys import normalize_location_for_cache, rec_key, rec_etag_key
+        from cache.core import get_ttl_for_year, ETagGenerator
         from utils.weather import get_year_range
         from fastapi import HTTPException
 
@@ -513,7 +512,7 @@ class JobWorker:
     
     async def process_cache_warming_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a cache warming job."""
-        from cache_utils import get_cache_warmer
+        from cache.accessors import get_cache_warmer
         
         logger.info(f"🔥 Processing cache warming job with params: {params}")
         
@@ -672,7 +671,7 @@ async def main():
         return
     
     # Initialize cache system first (required for job manager)
-    from cache_utils import initialize_cache
+    from cache.accessors import initialize_cache
     initialize_cache(redis_client)
     logger.info("✅ Cache system initialized")
     

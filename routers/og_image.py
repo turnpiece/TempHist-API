@@ -13,7 +13,7 @@ import redis
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
-from cache_utils import bundle_key, normalize_location_for_cache, rec_key
+from cache.keys import bundle_key, normalize_location_for_cache, rec_key
 from routers.dependencies import get_redis_client
 from utils.share_store import get_share_store
 

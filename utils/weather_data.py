@@ -11,10 +11,9 @@ from config import (
     LONG_CACHE_DURATION_SECONDS, SHORT_CACHE_DURATION, LONG_CACHE_DURATION,
     HTTP_TIMEOUT, HTTP_TIMEOUT_VISUAL_CROSSING, DEBUG, MAX_CONCURRENT_REQUESTS
 )
-from cache_utils import (
-    get_cache_value, set_cache_value, get_weather_cache_key, generate_cache_key,
-    get_cache_stats, store_location_timezone
-)
+from cache.core import get_cache_value, set_cache_value
+from cache.keys import get_weather_cache_key, generate_cache_key, store_location_timezone
+from cache.accessors import get_cache_stats
 from utils.validation import build_visual_crossing_url
 from utils.sanitization import sanitize_url, sanitize_for_logging
 from utils.weather import is_today

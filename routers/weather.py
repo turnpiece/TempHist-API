@@ -7,9 +7,9 @@ from datetime import date as dt_date
 from fastapi import APIRouter, HTTPException, Path, Response, Depends
 from fastapi.responses import JSONResponse
 from config import CACHE_ENABLED, DEBUG
-from cache_utils import (
-    get_cache_value, set_cache_value, generate_cache_key, get_cache_stats
-)
+from cache.core import get_cache_value, set_cache_value
+from cache.keys import generate_cache_key
+from cache.accessors import get_cache_stats
 from utils.weather_data import get_weather_for_date, get_forecast_data
 from utils.sanitization import sanitize_for_logging
 from utils.cache_headers import set_weather_cache_headers

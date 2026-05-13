@@ -1,0 +1,482 @@
+{
+  "/Users/paul/Sites/temphist-workspace/api/prewarm.py": {
+    "mtime": 1778607283.695601,
+    "hash": "051471cd9ad4538eaacadc86da3f8664"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/rate_limiting.py": {
+    "mtime": 1770395957.7328765,
+    "hash": "efabeedb0e9ba6770e046f0828355b7f"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/config.py": {
+    "mtime": 1778607283.6921074,
+    "hash": "ede0e979dc3de8dee1eaf83e6e05d7fa"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/version.py": {
+    "mtime": 1778607283.700646,
+    "hash": "a859a23d16e0189ea87e1736328e91e8"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/check_worker_status.py": {
+    "mtime": 1778607283.6896384,
+    "hash": "af5a1bf1ffcef00316ec461e471608e6"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/models.py": {
+    "mtime": 1778607283.694944,
+    "hash": "04ac92b3154a28e7964523a3d3438e83"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/analytics_storage.py": {
+    "mtime": 1770395957.7234163,
+    "hash": "eb8a004754887d1cb7760f027d4e954a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/constants.py": {
+    "mtime": 1770395957.724126,
+    "hash": "f66f63442a31b2e19d072484374ae6b2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/worker_service.py": {
+    "mtime": 1778607283.7009053,
+    "hash": "2e6e29fa31378f26ed01b66d87ee4655"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/bump_version.py": {
+    "mtime": 1770395957.7237244,
+    "hash": "8b8fb80d5e13b625390ed753608bec4f"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/performance_test.py": {
+    "mtime": 1778607283.6953056,
+    "hash": "f3568ea74a2c1709253ad7e5a3950881"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/cache_utils.py": {
+    "mtime": 1778607283.6892016,
+    "hash": "73a59ba7565868af240f0e6f4cb53629"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/diagnose_jobs.py": {
+    "mtime": 1778607283.692742,
+    "hash": "05c606a2a8931d0e648437855f1c9062"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/load_test_script.py": {
+    "mtime": 1770395957.7294827,
+    "hash": "8d5df8f8f25ae366b2064efff7c95a3b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/verify_indexes.py": {
+    "mtime": 1778607283.7004218,
+    "hash": "e19b7d6ac11225438679a84f24f0b591"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/exceptions.py": {
+    "mtime": 1778607283.6931722,
+    "hash": "db79070fb26c05eb94b1b6b27052db66"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/job_worker.py": {
+    "mtime": 1778607283.693707,
+    "hash": "cddc6bbcb7120639644f02f8466a8b37"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/main.py": {
+    "mtime": 1778607283.6942718,
+    "hash": "2c606ca750d1b72b9f4170345fa33313"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/admin_clear_queue.py": {
+    "mtime": 1775137117.3137887,
+    "hash": "9450f1b1a40613d97034993a6de4926f"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/records_agg.py": {
+    "mtime": 1770395957.7340002,
+    "hash": "4664b089250b85b848cfea9e24a703fb"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/legacy.py": {
+    "mtime": 1770395957.7337642,
+    "hash": "a5b6d48e2f6bc6d8a0ecfda23fbaeebf"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/v1_records.py": {
+    "mtime": 1778607283.6969836,
+    "hash": "9a8a90cdef579aa6c43cbf348a1403cf"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/health.py": {
+    "mtime": 1774891924.181299,
+    "hash": "6121f4768c934be748316d0edad257c2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/og_image.py": {
+    "mtime": 1778607283.6964252,
+    "hash": "91175a91f5b7148c43371420192a9d59"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/weather.py": {
+    "mtime": 1770395957.7344093,
+    "hash": "6903bd454a87ada0be2cf790a79ff8d5"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/cache.py": {
+    "mtime": 1770395957.73346,
+    "hash": "e80cf9d361686d825177231ec707b7c0"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/__init__.py": {
+    "mtime": 1770395957.733113,
+    "hash": "b8e53938ff25815ca20ffdf44b7c5cc2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/jobs.py": {
+    "mtime": 1774891924.1814375,
+    "hash": "2d28f950bd25c5502628139315faf2a1"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/stats.py": {
+    "mtime": 1770395957.7341442,
+    "hash": "38c1c44034ed07b8b9333b243ae4092a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/analytics.py": {
+    "mtime": 1770395957.7333312,
+    "hash": "44d398289dbe4eebf39dfbfff0ad328e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/root.py": {
+    "mtime": 1774463014.6499019,
+    "hash": "d4a4f6b4925307248414a8c3b8a05bcc"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/shares.py": {
+    "mtime": 1774891924.18173,
+    "hash": "3214eb1cefa41966f59590e384efa1ad"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/locations.py": {
+    "mtime": 1778607283.6959958,
+    "hash": "7f19a1cbe3d4102d133fadbd6feee7d6"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/routers/dependencies.py": {
+    "mtime": 1770395957.7335353,
+    "hash": "aecc1721f87c01a29e496a31cab4f795"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/middleware/logging.py": {
+    "mtime": 1770395957.7300053,
+    "hash": "d24764207b99375a6dbb5b6d8668cf14"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/middleware/cors.py": {
+    "mtime": 1770395957.7299428,
+    "hash": "ee60dacfe93004ce4a3559812754cea2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/middleware/security.py": {
+    "mtime": 1770395957.7302587,
+    "hash": "36307c272a652be556df5d244c078f8d"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/middleware/request_size.py": {
+    "mtime": 1770395957.7301314,
+    "hash": "a42bb5a5cca72c2060fae4131cff5721"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/middleware/__init__.py": {
+    "mtime": 1770395957.7297077,
+    "hash": "b4a4260610aaee1c43938e0de3cbd3c9"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/middleware/request_id.py": {
+    "mtime": 1770395957.7300644,
+    "hash": "887b75f2e72aa4b9418c2881ed11b6ac"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/app/cache_utils.py": {
+    "mtime": 1774891924.1787703,
+    "hash": "c631ae6256db00e2a4c9a5835f03023b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_deduplication.py": {
+    "mtime": 1770395957.7353694,
+    "hash": "32e11121fb55526ccf6bb3755a685fed"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_async_jobs_integration.py": {
+    "mtime": 1770395957.7351582,
+    "hash": "bd3fc8db3cadf2de971ffeef7ea11835"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_dedup_realistic.py": {
+    "mtime": 1770395957.7353027,
+    "hash": "ad2b82a2396018b724ea0a4d21fec580"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/__init__.py": {
+    "mtime": 1770395957.734597,
+    "hash": "8d771d95e254e5e632c1dcfdef3bd38a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_batch_fetch_performance.py": {
+    "mtime": 1770395957.7352293,
+    "hash": "b88a2c14584f524de57348e9a2ff02ca"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_temporal_cache.py": {
+    "mtime": 1774891924.1836767,
+    "hash": "b1bbc2c85a69fb8054369720c3ff9c5d"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_vc_api.py": {
+    "mtime": 1778607283.6988225,
+    "hash": "0539f8ced4ac5194d1f3d9f9d6401122"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_main.py": {
+    "mtime": 1778607283.698114,
+    "hash": "0c427e9a48e38b915ca2c54dec435940"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_job_dedup.py": {
+    "mtime": 1774891924.1833348,
+    "hash": "d20781871dd11f30d90bb830f98d9c87"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_locations.py": {
+    "mtime": 1778607283.6972852,
+    "hash": "ff1c25f88f941b5aef2c783efb837798"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_records_agg.py": {
+    "mtime": 1774891924.1832333,
+    "hash": "5bc6ca16094b8eb7d1d2d778aa692ed9"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/routers/__init__.py": {
+    "mtime": 1770395957.7347004,
+    "hash": "a5be91506882f4b863ca8cca2d872a3a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_shares.py": {
+    "mtime": 1778607283.6976168,
+    "hash": "0010734417cade30d78f25b01205361a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_analytics.py": {
+    "mtime": 1774891924.183077,
+    "hash": "2f8a7c81b48f9e0a434f15d67a1ba6d7"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/utils/test_temperature_calculations.py": {
+    "mtime": 1778607283.6990583,
+    "hash": "f3700eee29d990c3fb93e87705f1050d"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/utils/test_daily_temperature_cache.py": {
+    "mtime": 1770395957.7356813,
+    "hash": "6dd9034dd64957f96ff88b5a29d90d40"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/cache_headers.py": {
+    "mtime": 1770395957.735866,
+    "hash": "5563aade8ab82e4ed106e88151fa2641"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/share_store.py": {
+    "mtime": 1774891924.183878,
+    "hash": "1468ead8ac4f26a1ea7b1dda3bcdd712"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/weather.py": {
+    "mtime": 1770395957.7366328,
+    "hash": "b14e15daaa2cf32f6435b1a6f7c6afd1"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/__init__.py": {
+    "mtime": 1770395957.7357867,
+    "hash": "416c0442380216249106a2d0958252ab"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/temperature.py": {
+    "mtime": 1778607283.6998637,
+    "hash": "c6ea99cd89591ef8a2cd6e93c6317b84"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/visual_crossing_timeline.py": {
+    "mtime": 1778607283.7001753,
+    "hash": "b666816dbbd93c0c957f78eff30c927b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/ip_utils.py": {
+    "mtime": 1770395957.736159,
+    "hash": "485baf2bc466de1ec7318271e5dcd9bb"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/redis_client.py": {
+    "mtime": 1770395957.73629,
+    "hash": "9b7be267c3c50f281f421efc7c0430f8"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/location_validation.py": {
+    "mtime": 1770395957.7362204,
+    "hash": "92228dffce471a8de0b7c1766eb2c4e6"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/firebase.py": {
+    "mtime": 1770395957.736085,
+    "hash": "4049cbe9c154d0dcedace0e8f192e748"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/weather_data.py": {
+    "mtime": 1770395957.7367342,
+    "hash": "99423067e98c328b7df8f7746499fd0a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/sanitization.py": {
+    "mtime": 1770395957.7363591,
+    "hash": "02b5a68c17a352894363201132e15d4d"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/daily_temperature_store.py": {
+    "mtime": 1778607283.6994636,
+    "hash": "1ec031398189b77d3a6464c3f8539a20"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/validation.py": {
+    "mtime": 1770395957.7364907,
+    "hash": "e5534e15a6699d5d5389bda07483e80c"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/render.yaml": {
+    "mtime": 1770395957.7329445,
+    "hash": "aa55fbf61d4f269a3a6ba3aad05eed53"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/requirements.txt": {
+    "mtime": 1775245054.9754264,
+    "hash": "1db958373ccbbe86b67ddb7681575e5a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/CHANGELOG.md": {
+    "mtime": 1778607283.6864545,
+    "hash": "61a8390d8fea5702a2d53ed2dff556e7"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/TROUBLESHOOTING.md": {
+    "mtime": 1774891924.1783698,
+    "hash": "255581bde45c6c20b549564a5466a875"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/README.md": {
+    "mtime": 1778607283.688369,
+    "hash": "9b7739c4eb7bf045b49fa0d5645d51b3"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/DEPLOYMENT.md": {
+    "mtime": 1778607283.6875346,
+    "hash": "d6a404f27ea59dfe7d57e5e2383f7bb8"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/MIGRATION_GUIDE.md": {
+    "mtime": 1770395957.7227569,
+    "hash": "478fd35556ba89656214fe516a58f13a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/AGENTS.md": {
+    "mtime": 1778607283.6861455,
+    "hash": "24c43fc50b9d2b6f6d74300c96d44d43"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/CLOUDFLARE_OPTIMIZATION.md": {
+    "mtime": 1778607283.6868973,
+    "hash": "87625bd9529b347aa297193158f94f7b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/manchester.webp": {
+    "mtime": 1774463014.645363,
+    "hash": "502b6e2a69221ed263360925e4b0a810"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/new-york.webp": {
+    "mtime": 1774463014.6459053,
+    "hash": "03715e3be9368442a62246377f792114"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/auckland.webp": {
+    "mtime": 1774463014.6417737,
+    "hash": "f466ea56fad30fb21292d40ef869da07"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/birmingham.jpg": {
+    "mtime": 1774463014.6422665,
+    "hash": "c1d744cdbdf0c3409242c33433eacc85"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/cape-town.jpg": {
+    "mtime": 1774463014.6427011,
+    "hash": "53e6ca6a8c5077656c4ed1d3311eae30"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/dublin.webp": {
+    "mtime": 1774463014.6436906,
+    "hash": "26c87d9d25983fb51eb0028e4daa25f2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/toronto.webp": {
+    "mtime": 1774463014.6471295,
+    "hash": "8c2c1fd926d6187d2d27930983683480"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/glasgow.jpg": {
+    "mtime": 1774463014.6439652,
+    "hash": "8c71d6295ce9b66cee64295c9b1f501a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/london.jpg": {
+    "mtime": 1774463014.6446986,
+    "hash": "5451f7f098e0edb39d1880391576a688"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/hong-kong.webp": {
+    "mtime": 1774463014.6444955,
+    "hash": "18c3df0bae78bb44d3e471c20e9ed777"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/edinburgh.webp": {
+    "mtime": 1774463014.6438727,
+    "hash": "c397c35eccf84944a451e7c61c336496"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/chicago.jpg": {
+    "mtime": 1774463014.6430888,
+    "hash": "38faad5d3434dc1186d1b6a68384a46e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/auckland.jpg": {
+    "mtime": 1774463014.641709,
+    "hash": "6bbb31ba28107c6eb4e13596d8e4701e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/belfast.webp": {
+    "mtime": 1774463014.6420803,
+    "hash": "e4bdfafcb860b417ac91b4e9679c40a9"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/edinburgh.jpg": {
+    "mtime": 1774463014.6437874,
+    "hash": "d80ccbbc4d3711fd94e76d4732655a90"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/melbourne.jpg": {
+    "mtime": 1774463014.6454585,
+    "hash": "b9641487fdf746e8bd9f517f399e4320"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/glasgow.webp": {
+    "mtime": 1774463014.6442008,
+    "hash": "486766b7809156bc1a267a7f51a4a71c"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/sydney.webp": {
+    "mtime": 1774463014.6465786,
+    "hash": "2386793ecfdbd5027b0b555526580461"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/san-francisco.jpg": {
+    "mtime": 1774463014.6460063,
+    "hash": "68100fb9a3f7d566794f7401324eb10b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/los-angeles.webp": {
+    "mtime": 1774463014.645022,
+    "hash": "e0100663c7c5864a14fb7735f40c83d2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/hong-kong.jpg": {
+    "mtime": 1774463014.644416,
+    "hash": "cf9920903270767e0132d2adaae188c6"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/london.webp": {
+    "mtime": 1774463014.6448395,
+    "hash": "bbfc10f9008585079e9acba2555f6e78"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/sydney.jpg": {
+    "mtime": 1774463014.646518,
+    "hash": "7e36437ae0cd6389301dfd2f5b955aa5"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/cardiff.jpg": {
+    "mtime": 1774463014.6428797,
+    "hash": "39b6b00e2fb7bbb3aa5c640d0700cec2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/san-francisco.webp": {
+    "mtime": 1774463014.6460762,
+    "hash": "3456d5e7c72e2551998b9d2c08e0c434"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/chicago.webp": {
+    "mtime": 1774463014.6433268,
+    "hash": "46342e0f47357c9e282bf38e6cc81bf0"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/los-angeles.jpg": {
+    "mtime": 1774463014.6449504,
+    "hash": "3351cdf0fa7d896b1842e1d95f88fe63"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/vancouver.webp": {
+    "mtime": 1774463014.647333,
+    "hash": "54a8ad22de8c8004a76beea5104b3e52"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/vancouver.jpg": {
+    "mtime": 1774463014.647264,
+    "hash": "e34d0a68b501b2ea7c34723ddcc0716e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/belfast.jpg": {
+    "mtime": 1774463014.641865,
+    "hash": "622bdc3155a9e8177cfee9454bda4149"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/new-york.jpg": {
+    "mtime": 1774463014.6458445,
+    "hash": "de12595971634f5081c8ee09ea46ca69"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/dublin.jpg": {
+    "mtime": 1774463014.643447,
+    "hash": "34c0b26adfd63fef38ae3a2c95ceabb0"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/singapore.webp": {
+    "mtime": 1774463014.6464071,
+    "hash": "b3d0c3783ecd300c21b46d4d2c2b4065"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/toronto.jpg": {
+    "mtime": 1774463014.6469443,
+    "hash": "48c2b4107cb1a27ad0cd78fc3416e9b5"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/melbourne.webp": {
+    "mtime": 1774463014.6456544,
+    "hash": "e88a9c328d349a55e197ea9bdfbbda9c"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/singapore.jpg": {
+    "mtime": 1774463014.646164,
+    "hash": "d34767039cc1e5c425be39e16fa27a8f"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/manchester.jpg": {
+    "mtime": 1774463014.6451235,
+    "hash": "c2b5156caec98aa6bc16a59c92a07a49"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/cape-town.webp": {
+    "mtime": 1774463014.6427915,
+    "hash": "5f4c882aa042cba3cc6d48b84e24bafb"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/cardiff.webp": {
+    "mtime": 1774463014.6430025,
+    "hash": "2975419995eb9b0db97083eb236803d1"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/birmingham.webp": {
+    "mtime": 1774463014.642566,
+    "hash": "5d8f9e7a41dc3f7dfc9cb256e88a286b"
+  }
+}

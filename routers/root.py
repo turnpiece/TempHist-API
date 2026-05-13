@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from version import __version__
 from config import CACHE_CONTROL_HEADER
-from cache_utils import set_cache_value, get_cache_value, get_cache_stats
+from cache.core import set_cache_value, get_cache_value
+from cache.accessors import get_cache_stats
 from routers.dependencies import get_redis_client
 
 router = APIRouter()

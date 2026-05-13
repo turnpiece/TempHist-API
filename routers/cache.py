@@ -3,11 +3,9 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Query, Depends
-from cache_utils import (
-    get_cache_stats, get_cache_warmer, get_cache_invalidator,
-    get_job_manager, CACHE_WARMING_ENABLED, CACHE_STATS_ENABLED,
-    CACHE_INVALIDATION_ENABLED, CACHE_WARMING_INTERVAL_HOURS
-)
+from cache.accessors import get_cache_stats, get_cache_warmer, get_cache_invalidator, get_job_manager
+from cache.warming import CACHE_WARMING_ENABLED, CACHE_STATS_ENABLED, CACHE_WARMING_INTERVAL_HOURS
+from cache.core import CACHE_INVALIDATION_ENABLED
 from utils.firebase import verify_firebase_token
 
 logger = logging.getLogger(__name__)

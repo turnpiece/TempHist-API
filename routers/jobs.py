@@ -5,7 +5,9 @@ import redis
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Path, Query, Response, Depends, Request
-from cache_utils import get_job_manager, JobStatus, JobQueueFullError
+from fastapi.responses import JSONResponse
+from cache.accessors import get_job_manager
+from jobs.manager import JobStatus, JobQueueFullError
 from routers.dependencies import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -160,14 +162,25 @@ async def create_rolling_bundle_job(
     unit_group: Literal["celsius", "fahrenheit"] = Query("celsius"),
 ):
     """This endpoint has been removed. Use individual period endpoints instead."""
-    from routers.records_agg import _rolling_bundle_gone_response
-    return _rolling_bundle_gone_response(
-        request,
-        "The rolling-bundle async job endpoint has been removed",
-        location,
-        anchor,
-        unit_group
-    )
+    from urllib.parse import quote
+    base_url = str(request.base_url).rstrip('/')
+    try:
+        from datetime import datetime as _dt
+        mmdd = _dt.strptime(anchor, "%Y-%m-%d").strftime("%m-%d")
+    except ValueError:
+        mmdd = "01-15"
+    enc = quote(location, safe='')
+    links = {
+        period: f"{base_url}/v1/records/{period}/{enc}/{mmdd}?unit_group={unit_group}"
+        for period in ["daily", "weekly", "monthly", "yearly"]
+    }
+    return JSONResponse(status_code=410, content={
+        "error": "GONE",
+        "message": "The rolling-bundle async job endpoint has been removed",
+        "code": "GONE",
+        "details": "This endpoint is no longer available. Please use the individual period endpoints instead.",
+        "links": links,
+    })
 
 
 @router.get("/v1/jobs/diagnostics/worker-status")
