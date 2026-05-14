@@ -25,3 +25,6 @@ profile_*.py
 
 # Node modules
 mode_modules/
+
+# graphify
+graphify-out/

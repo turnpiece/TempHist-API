@@ -1850,12 +1850,13 @@ class JobManager:
             self.redis.setex(job_key, self.job_ttl, json.dumps(job_data))
             logger.info(f"Job data stored in Redis with key: {job_key}")
 
-            # Store deduplication key (expires after 5 minutes)
-            self.redis.setex(dedup_key, 300, job_id)
+            # Store deduplication key — keep alive for the full job lifetime so a
+            # backed-up queue can't expire the key and allow re-enqueueing the same work.
+            self.redis.setex(dedup_key, self.job_ttl, job_id)
 
             # Add job to queue for worker processing
             job_queue_key = "job_queue"
-            self.redis.lpush(job_queue_key, job_id)
+            self.redis.rpush(job_queue_key, job_id)
             logger.info(f"Job {job_id} added to queue")
 
             return job_id

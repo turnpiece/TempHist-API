@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from cache_utils import get_job_manager, JobStatus
+from cache_utils import get_job_manager, JobStatus, CACHE_TTL_JOB
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +197,26 @@ class JobWorker:
                 if not job_data:
                     stale_ids.append(job_id)
                 else:
-                    status = json.loads(job_data).get("status")
-                    if status not in (JobStatus.PENDING, JobStatus.PROCESSING):
+                    job = json.loads(job_data)
+                    status = job.get("status")
+                    if status == JobStatus.PROCESSING:
+                        updated_at_str = job.get("updated_at")
+                        if updated_at_str:
+                            age_seconds = (
+                                datetime.now(timezone.utc)
+                                - datetime.fromisoformat(updated_at_str)
+                            ).total_seconds()
+                            if age_seconds > 600:
+                                logger.warning(
+                                    f"⏰ Job {job_id} stuck in PROCESSING for "
+                                    f"{age_seconds:.0f}s, timing out"
+                                )
+                                job["status"] = JobStatus.ERROR
+                                job["error"] = "Job timed out after 10 minutes in PROCESSING state"
+                                job["updated_at"] = datetime.now(timezone.utc).isoformat()
+                                self.redis.setex(f"job:{job_id}", CACHE_TTL_JOB, json.dumps(job))
+                                stale_ids.append(job_id)
+                    elif status not in (JobStatus.PENDING,):
                         stale_ids.append(job_id)
 
             for job_id in stale_ids:
