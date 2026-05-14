@@ -17,10 +17,6 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 # Obtain a public token from https://account.mapbox.com/
 # If unset, location search falls back to the small preapproved list (dev mode only).
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "").strip()
-if not MAPBOX_TOKEN:
-    logging.getLogger(__name__).warning(
-        "MAPBOX_TOKEN is not set — location search will only cover the preapproved list"
-    )
 
 # Cache configuration
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
@@ -105,10 +101,6 @@ def validate_cors_config():
         logging.basicConfig(level=log_level)
     
     logger = logging.getLogger(__name__)
-    
-    # Warn about permissive configurations
-    if not origins and not regex:
-        logger.warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
     
     if regex:
         # Test regex is valid and not too permissive

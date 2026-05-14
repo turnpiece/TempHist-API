@@ -60,6 +60,9 @@ from rate_limiting import ServiceTokenRateLimiter, LocationDiversityMonitor, Req
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 from utils.temperature import generate_summary
 
+if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
+    logging.getLogger(__name__).warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
+
 # Environment variables - strip whitespace/newlines from API keys
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
