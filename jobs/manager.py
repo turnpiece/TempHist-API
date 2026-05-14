@@ -14,7 +14,8 @@ from config import DEBUG
 logger = logging.getLogger(__name__)
 
 MAX_JOB_QUEUE_SIZE = int(os.getenv("MAX_JOB_QUEUE_SIZE", "1000"))
-_CACHE_TTL_JOB = int(os.getenv("CACHE_TTL_JOB", "7200"))
+CACHE_TTL_JOB = int(os.getenv("CACHE_TTL_JOB", "7200"))
+_CACHE_TTL_JOB = CACHE_TTL_JOB
 
 
 class JobQueueFullError(Exception):
