@@ -63,7 +63,7 @@ class TestDedupPendingProcessing:
 
         assert result == existing_id
         # Should NOT push to queue
-        mgr.redis.lpush.assert_not_called()
+        mgr.redis.rpush.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ class TestDedupReady:
         result = mgr.create_job(TEST_JOB_TYPE, TEST_PARAMS)
 
         assert result == existing_id
-        mgr.redis.lpush.assert_not_called()
+        mgr.redis.rpush.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ class TestDedupError:
         result = mgr.create_job(TEST_JOB_TYPE, TEST_PARAMS)
 
         assert result == existing_id
-        mgr.redis.lpush.assert_not_called()
+        mgr.redis.rpush.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ class TestNewJobCreation:
         job_id = mgr.create_job(TEST_JOB_TYPE, TEST_PARAMS)
 
         assert job_id.startswith("record_computation_")
-        mgr.redis.lpush.assert_called_once()
+        mgr.redis.rpush.assert_called_once()
         # Dedup key should be set
         dedup_calls = [c for c in mgr.redis.setex.call_args_list if "dedup" in str(c)]
         assert len(dedup_calls) >= 1
