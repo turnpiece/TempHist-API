@@ -401,7 +401,8 @@ class JobWorker:
             per_year_records = _extract_per_year_records(full_data)
             
             if year not in per_year_records:
-                raise ValueError(f"No data found for year {year}")
+                logger.warning(f"⏭️ No data available for year {year} at {location}, skipping")
+                return {"skipped": True, "reason": f"no data available for year {year}"}
             
             # Get the specific year's record
             year_record = per_year_records[year]
