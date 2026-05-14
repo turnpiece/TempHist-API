@@ -27,6 +27,9 @@ from config import BASE_URL, MAPBOX_TOKEN
 # Configure logging
 logger = logging.getLogger(__name__)
 
+if not MAPBOX_TOKEN:
+    logger.warning("MAPBOX_TOKEN is not set — location search will only cover the preapproved list")
+
 # Constants
 CACHE_TTL = 604800  # 7 days (data changes infrequently)
 RATE_LIMIT_REQUESTS = 60  # requests per minute
