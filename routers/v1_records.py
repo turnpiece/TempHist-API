@@ -40,6 +40,7 @@ from utils.daily_temperature_store import (
     get_daily_temperature_store,
 )
 from utils.visual_crossing_timeline import fetch_timeline_days, LocationNotFoundError
+from utils.vc_budget import check_and_consume as _vc_budget_check
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -331,6 +332,18 @@ async def _collect_rolling_window_values(
             if not coverage_ok:
                 for range_start, range_end in _collapse_consecutive_dates(missing_dates):
                     timeline_metadata = None
+                    # Guard: check daily VC record budget before each fetch
+                    records_needed = (range_end - range_start).days + 1
+                    _jm = get_job_manager()
+                    if _jm and not _vc_budget_check(_jm.redis, records_needed):
+                        logger.warning(
+                            "VC daily budget exhausted; skipping inline fetch for "
+                            "%s %s–%s (year %s). Backfill job already enqueued.",
+                            location, range_start, range_end, year,
+                        )
+                        track_missing_year(missing_years, year, "vc_budget_exhausted")
+                        timeline_failed = True
+                        break
                     try:
                         timeline_days, timeline_metadata = await fetch_timeline_days(
                             location, range_start, range_end

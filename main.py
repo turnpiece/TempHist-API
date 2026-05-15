@@ -2108,6 +2108,26 @@ async def admin_clear_job_queue(
         )
 
 
+@app.get("/admin/vc-budget")
+async def admin_vc_budget(
+    admin_key: str = Header(None, alias="X-Admin-Key")
+):
+    """Return today's Visual Crossing API record usage vs the daily budget."""
+    expected_key = os.getenv("ADMIN_API_KEY")
+    if not expected_key:
+        raise HTTPException(status_code=503, detail="Admin API not configured")
+    if admin_key != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+
+    from utils.vc_budget import current_usage
+    from routers.dependencies import get_redis_client as _get_rc
+    try:
+        stats = current_usage(_get_rc())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return stats
+
+
 # For local testing
 if __name__ == "__main__":
     import uvicorn

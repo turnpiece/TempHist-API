@@ -377,6 +377,22 @@ class JobWorker:
         current_year = datetime.now(timezone.utc).year
         oldest_year = current_year - 50
 
+        # Guard: only process jobs for preapproved locations.
+        # Non-preapproved locations can only reach the queue via a bug or abuse;
+        # processing them would burn VC API credits unnecessarily.
+        try:
+            from routers.v1_records import _is_preapproved_location
+            if not _is_preapproved_location(slug):
+                logger.warning(
+                    f"⛔ Skipping job for non-preapproved location: {location!r} "
+                    f"(slug={slug!r}) — dropping without VC API call"
+                )
+                return {"skipped": True, "reason": f"location not preapproved: {location}"}
+        except Exception as guard_exc:
+            # If the check itself fails, log and continue so we don't silently
+            # drop legitimate jobs due to a file-not-found or import error.
+            logger.warning(f"⚠️ Could not verify preapproved status for {location!r}: {guard_exc} — proceeding")
+
         # If year is specified, fetch only that year's data
         if year is not None:
             # Discard jobs for years that have rolled off the 50-year window.
