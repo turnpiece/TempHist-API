@@ -72,6 +72,45 @@ from utils.temperature import generate_summary
 if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
     logging.getLogger(__name__).warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
 
+# ---------------------------------------------------------------------------
+# Preapproved location allow-list for anonymous Firebase users
+# Anonymous tokens are issued to every website visitor so we restrict them
+# to the locations the website actually exposes.  App users (real sign-in)
+# are unrestricted.
+# ---------------------------------------------------------------------------
+def _load_preapproved_slugs() -> frozenset:
+    """Return a frozenset of normalised slugs for every preapproved location."""
+    try:
+        import json as _json
+        from cache_utils import normalize_location_for_cache as _norm
+        _data_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "preapproved_locations.json")
+        with open(_data_file, encoding="utf-8") as _f:
+            _items = _json.load(_f)
+        slugs = frozenset(
+            _norm(f"{item['name']}, {item['admin1']}, {item['country_name']}")
+            for item in _items
+            if "name" in item and "admin1" in item and "country_name" in item
+        )
+        logging.getLogger(__name__).info(f"Loaded {len(slugs)} preapproved location slugs")
+        return slugs
+    except Exception as exc:
+        logging.getLogger(__name__).warning(f"Could not load preapproved slugs: {exc}")
+        return frozenset()
+
+_PREAPPROVED_SLUGS: frozenset = _load_preapproved_slugs()
+
+
+def _location_from_path(path: str) -> str | None:
+    """Extract the location segment from a VC API request path."""
+    parts = path.split("/")
+    # /v1/records/{period}/{location}/...  → parts[4]
+    if len(parts) >= 5 and parts[1] == "v1" and parts[2] == "records":
+        return parts[4]
+    # /forecast/{location}  or  /weather/{location}/...  → parts[2]
+    if len(parts) >= 3 and parts[1] in ("forecast", "weather"):
+        return parts[2]
+    return None
+
 # Environment variables - strip whitespace/newlines from API keys
 API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
@@ -1359,9 +1398,24 @@ async def verify_token_middleware(request: Request, call_next):
         logger.info(f"[DEBUG] Middleware: Verifying Firebase token...")
         try:
             decoded_token = auth.verify_id_token(id_token)
-            logger.info(f"[DEBUG] Middleware: Firebase token verified successfully")
-            # Optionally, attach user info to request.state
+            provider = decoded_token.get("firebase", {}).get("sign_in_provider", "unknown")
+            uid = decoded_token.get("uid", "unknown")
+            logger.info(f"Auth: uid={uid} provider={provider} ip={client_ip} path={request.url.path}")
             request.state.user = decoded_token
+
+            if provider == "anonymous" and is_vc_api_endpoint:
+                location = _location_from_path(request.url.path)
+                if location:
+                    from cache_utils import normalize_location_for_cache
+                    if normalize_location_for_cache(location) not in _PREAPPROVED_SLUGS:
+                        logger.warning(
+                            f"Anonymous user blocked: non-preapproved location "
+                            f"{location!r} | ip={client_ip}"
+                        )
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Location not available"}
+                        )
         except Exception as e:
             logger.error(f"[DEBUG] Middleware: Firebase token verification failed: {e}")
             logger.error(f"[DEBUG] Middleware: Error type: {type(e).__name__}")

@@ -647,37 +647,35 @@ async def get_temperature_data_v1(
 
 
 def _is_preapproved_location(slug: str) -> bool:
-    """Check if a location slug is in the preapproved locations list.
-    
+    """Check if a normalized location slug is in the preapproved locations list.
+
     Args:
-        slug: Normalized location slug
-        
+        slug: normalize_location_for_cache() output, e.g. "london__england__united_kingdom"
+
     Returns:
         True if location is preapproved, False otherwise
     """
     try:
-        import os
-        import json
-        
-        # Find project root
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = current_dir
-        while project_root != os.path.dirname(project_root):
-            if os.path.exists(os.path.join(project_root, "pyproject.toml")):
-                break
-            project_root = os.path.dirname(project_root)
-        
-        data_file = os.path.join(project_root, "data", "preapproved_locations.json")
-        
-        with open(data_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
+        import os as _os
+        import json as _json
+
+        current_dir = _os.path.dirname(_os.path.abspath(__file__))
+        data_file = _os.path.join(current_dir, "..", "data", "preapproved_locations.json")
+
+        with open(data_file, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+
+        # Build normalized slugs the same way main.py's _load_preapproved_slugs() does:
+        # normalize_location_for_cache("Name, Admin1, Country") -> "name__admin1__country"
         slug_lower = slug.lower()
         for item in data:
-            item_slug = (item.get('slug') or item.get('id', '')).lower()
-            if item_slug == slug_lower:
-                return True
-        
+            if "name" in item and "admin1" in item and "country_name" in item:
+                normalized = normalize_location_for_cache(
+                    f"{item['name']}, {item['admin1']}, {item['country_name']}"
+                )
+                if normalized == slug_lower:
+                    return True
+
         return False
     except Exception:
         # If we can't check, assume not preapproved (safer)

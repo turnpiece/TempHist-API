@@ -1,5 +1,6 @@
 """Tests for app/cache_utils.py — canonicalization, temporal tolerance, and metadata."""
 
+import base64
 import gzip
 import json
 import pytest
@@ -68,9 +69,10 @@ def _make_redis_mock():
     return r, pipe
 
 
-def _compress(obj: dict) -> bytes:
-    """Gzip-compress a dict (same as cache_set internals)."""
-    return gzip.compress(json.dumps(obj, separators=(",", ":")).encode("utf-8"))
+def _compress(obj: dict) -> str:
+    """Gzip-compress a dict and base64-encode it (same as cache_set internals)."""
+    raw = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    return base64.b64encode(gzip.compress(raw)).decode("ascii")
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +95,9 @@ class TestCacheSet:
 
         assert result is True
         pipe.set.assert_called_once()
-        # Verify the stored value is gzip-compressed JSON containing the payload + meta
-        stored_gz = pipe.set.call_args[0][1]
-        stored = json.loads(gzip.decompress(stored_gz))
+        # Verify the stored value is base64(gzip(JSON)) containing the payload + meta
+        stored_b64 = pipe.set.call_args[0][1]
+        stored = json.loads(gzip.decompress(base64.b64decode(stored_b64)))
         assert stored["data"] == payload
         assert stored["meta"]["requested"]["location"] == "London, UK"
         assert stored["meta"]["served_from"]["canonical_location"] == "london_uk"
@@ -162,8 +164,8 @@ class TestCacheSet:
             resolved_address="London, England, United Kingdom",
         )
 
-        stored_gz = pipe.set.call_args[0][1]
-        stored = json.loads(gzip.decompress(stored_gz))
+        stored_b64 = pipe.set.call_args[0][1]
+        stored = json.loads(gzip.decompress(base64.b64decode(stored_b64)))
         assert stored["meta"]["served_from"]["canonical_location"] == "london_england_united_kingdom"
 
 
