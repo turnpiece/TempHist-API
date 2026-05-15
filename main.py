@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
-from firebase_admin import auth, credentials
+from firebase_admin import auth, app_check, credentials
 from pydantic import BaseModel, Field
 
 # Load .env and populate os.environ before routers (see config.DOTENV_PATH).
@@ -317,6 +317,17 @@ logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('asyncio').setLevel(logging.WARNING)
+
+# Firebase App Check enforcement mode
+# off     — skip verification entirely (safe default until frontend ships App Check)
+# monitor — verify token when present; log failures but never block (use while rolling out)
+# enforce — require a valid App Check token on every protected request
+APP_CHECK_ENFORCEMENT = os.getenv("APP_CHECK_ENFORCEMENT", "off").lower().strip()
+if APP_CHECK_ENFORCEMENT not in ("off", "monitor", "enforce"):
+    logging.getLogger(__name__).warning(
+        f"Unknown APP_CHECK_ENFORCEMENT value {APP_CHECK_ENFORCEMENT!r}; defaulting to 'off'"
+    )
+    APP_CHECK_ENFORCEMENT = "off"
 
 # Usage Tracking Configuration
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
@@ -1402,6 +1413,37 @@ async def verify_token_middleware(request: Request, call_next):
             uid = decoded_token.get("uid", "unknown")
             logger.info(f"Auth: uid={uid} provider={provider} ip={client_ip} path={request.url.path}")
             request.state.user = decoded_token
+
+            # Firebase App Check verification
+            if APP_CHECK_ENFORCEMENT != "off":
+                app_check_token = request.headers.get("X-Firebase-AppCheck")
+                app_check_valid = False
+                app_check_error = None
+                if app_check_token:
+                    try:
+                        app_check.verify_token(app_check_token)
+                        app_check_valid = True
+                    except Exception as ace:
+                        app_check_error = str(ace)
+                if app_check_valid:
+                    if DEBUG:
+                        logger.debug(f"App Check: valid token | uid={uid}")
+                elif APP_CHECK_ENFORCEMENT == "enforce":
+                    reason = app_check_error or "missing X-Firebase-AppCheck header"
+                    logger.warning(
+                        f"App Check: BLOCKED uid={uid} ip={client_ip} "
+                        f"path={request.url.path} reason={reason}"
+                    )
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "App Check verification failed"}
+                    )
+                else:  # monitor
+                    reason = app_check_error or "missing X-Firebase-AppCheck header"
+                    logger.warning(
+                        f"App Check: MONITOR uid={uid} ip={client_ip} "
+                        f"path={request.url.path} reason={reason}"
+                    )
 
             if provider == "anonymous" and is_vc_api_endpoint:
                 location = _location_from_path(request.url.path)
