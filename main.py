@@ -73,7 +73,7 @@ def _load_preapproved_slugs() -> frozenset:
     """Return a frozenset of normalised slugs for every preapproved location."""
     try:
         import json as _json
-        from cache_utils import normalize_location_for_cache as _norm
+        from cache.keys import normalize_location_for_cache as _norm
         _data_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "preapproved_locations.json")
         with open(_data_file, encoding="utf-8") as _f:
             _items = _json.load(_f)
@@ -1435,7 +1435,7 @@ async def verify_token_middleware(request: Request, call_next):
             if provider == "anonymous" and is_vc_api_endpoint:
                 location = _location_from_path(request.url.path)
                 if location:
-                    from cache_utils import normalize_location_for_cache
+                    from cache.keys import normalize_location_for_cache
                     if normalize_location_for_cache(location) not in _PREAPPROVED_SLUGS:
                         logger.warning(
                             f"Anonymous user blocked: non-preapproved location "
