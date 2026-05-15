@@ -13,6 +13,7 @@ Uses sync redis.Redis to match the rest of the codebase.
 
 from __future__ import annotations
 
+import base64
 import gzip
 import json
 import logging
@@ -130,10 +131,12 @@ def cache_set(
 
         raw = json.dumps(wrapped, separators=(",", ":")).encode("utf-8")
         gz = gzip.compress(raw)
+        # Store as base64 so it's safe with decode_responses=True Redis clients
+        stored = base64.b64encode(gz).decode("ascii")
 
         ttl = ttl_seconds if ttl_seconds and ttl_seconds > 0 else 86400 * 7
         pipe = r.pipeline()
-        pipe.set(vkey, gz, ex=ttl)
+        pipe.set(vkey, stored, ex=ttl)
         pipe.zadd(tkey, {end_iso: _epoch(date.fromisoformat(end_iso))})
         pipe.expire(tkey, ttl)
         pipe.execute()
@@ -173,9 +176,11 @@ def cache_get(
         vkey = _val_key(agg, canonical, end_iso)
 
         # Try exact match first
-        gz = r.get(vkey)
-        if gz:
-            obj = json.loads(gzip.decompress(gz))
+        stored = r.get(vkey)
+        if stored:
+            # Handle both base64-encoded string (new) and raw bytes (legacy)
+            raw_gz = base64.b64decode(stored) if isinstance(stored, str) else stored
+            obj = json.loads(gzip.decompress(raw_gz))
             # Update the requested location to match what the caller asked for
             obj["meta"]["requested"]["location"] = original_location
             logger.debug(f"Temporal cache hit (exact): {canonical}:{agg}:{end_iso}")
@@ -205,12 +210,13 @@ def cache_get(
         if isinstance(nearest_iso, bytes):
             nearest_iso = nearest_iso.decode()
 
-        gz2 = r.get(_val_key(agg, canonical, nearest_iso))
+        stored2 = r.get(_val_key(agg, canonical, nearest_iso))
 
-        if not gz2:
+        if not stored2:
             return None
 
-        obj = json.loads(gzip.decompress(gz2))
+        raw_gz2 = base64.b64decode(stored2) if isinstance(stored2, str) else stored2
+        obj = json.loads(gzip.decompress(raw_gz2))
         delta_days = abs((end_date - date.fromisoformat(nearest_iso)).days)
 
         obj["meta"]["approximate"]["temporal"] = True

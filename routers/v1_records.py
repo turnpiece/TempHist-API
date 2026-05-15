@@ -43,6 +43,7 @@ from utils.daily_temperature_store import (
     get_daily_temperature_store,
 )
 from utils.visual_crossing_timeline import fetch_timeline_days, LocationNotFoundError
+from utils.vc_budget import check_and_consume as _vc_budget_check
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -334,6 +335,18 @@ async def _collect_rolling_window_values(
             if not coverage_ok:
                 for range_start, range_end in _collapse_consecutive_dates(missing_dates):
                     timeline_metadata = None
+                    # Guard: check daily VC record budget before each fetch
+                    records_needed = (range_end - range_start).days + 1
+                    _jm = get_job_manager()
+                    if _jm and not _vc_budget_check(_jm.redis, records_needed):
+                        logger.warning(
+                            "VC daily budget exhausted; skipping inline fetch for "
+                            "%s %s–%s (year %s). Backfill job already enqueued.",
+                            location, range_start, range_end, year,
+                        )
+                        track_missing_year(missing_years, year, "vc_budget_exhausted")
+                        timeline_failed = True
+                        break
                     try:
                         timeline_days, timeline_metadata = await fetch_timeline_days(
                             location, range_start, range_end
@@ -650,37 +663,35 @@ async def get_temperature_data_v1(
 
 
 def _is_preapproved_location(slug: str) -> bool:
-    """Check if a location slug is in the preapproved locations list.
-    
+    """Check if a normalized location slug is in the preapproved locations list.
+
     Args:
-        slug: Normalized location slug
-        
+        slug: normalize_location_for_cache() output, e.g. "london__england__united_kingdom"
+
     Returns:
         True if location is preapproved, False otherwise
     """
     try:
-        import os
-        import json
-        
-        # Find project root
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = current_dir
-        while project_root != os.path.dirname(project_root):
-            if os.path.exists(os.path.join(project_root, "pyproject.toml")):
-                break
-            project_root = os.path.dirname(project_root)
-        
-        data_file = os.path.join(project_root, "data", "preapproved_locations.json")
-        
-        with open(data_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
+        import os as _os
+        import json as _json
+
+        current_dir = _os.path.dirname(_os.path.abspath(__file__))
+        data_file = _os.path.join(current_dir, "..", "data", "preapproved_locations.json")
+
+        with open(data_file, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+
+        # Build normalized slugs the same way main.py's _load_preapproved_slugs() does:
+        # normalize_location_for_cache("Name, Admin1, Country") -> "name__admin1__country"
         slug_lower = slug.lower()
         for item in data:
-            item_slug = (item.get('slug') or item.get('id', '')).lower()
-            if item_slug == slug_lower:
-                return True
-        
+            if "name" in item and "admin1" in item and "country_name" in item:
+                normalized = normalize_location_for_cache(
+                    f"{item['name']}, {item['admin1']}, {item['country_name']}"
+                )
+                if normalized == slug_lower:
+                    return True
+
         return False
     except Exception:
         # If we can't check, assume not preapproved (safer)
