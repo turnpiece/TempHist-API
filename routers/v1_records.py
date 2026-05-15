@@ -196,7 +196,7 @@ COVERAGE_TOLERANCE_CURRENT_YEAR = {
     # For current year, accept more sparse data since year is incomplete
     "weekly": {"min_ratio": 0.5, "min_days": 4},    # At least 4 of 7 days
     "monthly": {"min_ratio": 0.6, "min_days": 19},  # At least 19 of 31 days
-    "yearly": {"min_ratio": 0.5, "min_days": 183},  # At least half the year
+    "yearly": {"min_ratio": 0.8, "min_days": 292},  # At least 80% of the year
 }
 
 
