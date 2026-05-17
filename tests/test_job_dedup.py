@@ -167,7 +167,7 @@ class TestNewJobCreation:
         job_id = mgr.create_job(TEST_JOB_TYPE, TEST_PARAMS)
 
         assert job_id.startswith("record_computation_")
-        mgr.redis.rpush.assert_called_once()
+        mgr.redis.lpush.assert_called_once()
         # Dedup key should be set
         dedup_calls = [c for c in mgr.redis.setex.call_args_list if "dedup" in str(c)]
         assert len(dedup_calls) >= 1
