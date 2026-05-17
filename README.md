@@ -437,44 +437,63 @@ For detailed Cloudflare optimization guidance, see [CLOUDFLARE_OPTIMIZATION.md](
 
 ### Authentication
 
-The API supports multiple authentication methods depending on your use case:
+All end-user clients (websites and mobile apps) authenticate via **Firebase**. The `API_ACCESS_TOKEN` is not for client use — it's a server-side tool for automation and testing (see below).
 
-#### 1. Firebase Authentication (Users)
+#### 1. Web Clients (Firebase Anonymous Auth + App Check)
 
-For end-user applications, use Firebase authentication tokens:
+The TempHist website authenticates every visitor as an anonymous Firebase user. This lets the API apply per-user rate limiting without requiring a sign-in. Firebase App Check (reCAPTCHA v3) provides an additional proof-of-origin check that the request is coming from the real website.
+
+**How it works:**
+
+1. On load the web app calls `signInAnonymously()` to get a Firebase user
+2. `getIdToken()` returns a short-lived JWT sent as `Authorization: Bearer <token>`
+3. When `VITE_RECAPTCHA_SITE_KEY` is set, the Firebase SDK also attaches an `X-Firebase-AppCheck` token to every request
+
+**What you need to set up for a web deployment:**
+
+| Step | Where | What |
+|------|-------|------|
+| Enable Anonymous auth | Firebase Console → Authentication → Sign-in methods | Turn on Anonymous |
+| Register reCAPTCHA site key | [console.cloud.google.com/security/recaptcha](https://console.cloud.google.com/security/recaptcha) | Add your domain, copy the site key |
+| Enable App Check | Firebase Console → App Check → Apps | Register your web app with the reCAPTCHA v3 provider |
+| Set frontend env var | Web service environment variables | `VITE_RECAPTCHA_SITE_KEY=<your_site_key>` |
+| Set API enforcement | API service environment variables | `APP_CHECK_ENFORCEMENT=monitor` (log only) or `enforce` (block) |
 
 ```bash
-# Include Firebase token in Authorization header
-curl -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
+# Example request from a web client
+curl -H "Authorization: Bearer <firebase_id_token>" \
+     -H "X-Firebase-AppCheck: <app_check_token>" \
      https://api.temphist.com/v1/records/daily/New%20York/01-15
 ```
 
-#### 2. API Access Token (Automated Systems)
+#### 2. Mobile Clients (Firebase Anonymous Auth)
 
-For automated systems like cron jobs, server-side prefetching, or internal services, use the API access token:
+The TempHist mobile app (Flutter/iOS) also uses Firebase anonymous auth. It sends the same `Authorization: Bearer <token>` header. Firebase App Check for mobile uses platform attestation (DeviceCheck on iOS, Play Integrity on Android) rather than reCAPTCHA — this is **not yet implemented** in the mobile app.
+
+**What you need to set up for a mobile deployment:**
+
+| Step | Where | What |
+|------|-------|------|
+| Enable Anonymous auth | Firebase Console → Authentication → Sign-in methods | Turn on Anonymous |
+| Register iOS app | Firebase Console → App Check → Apps | Register with Apple DeviceCheck |
+| Add `firebase_app_check` package | `pubspec.yaml` | Initialise before `runApp()` |
+| Send token with each request | `temperature_service.dart` | Add `X-Firebase-AppCheck` header (see web implementation for reference) |
+| Set API enforcement | API service environment variables | `APP_CHECK_ENFORCEMENT=monitor` initially |
+
+#### 3. API Access Token (Automation & Testing Only)
+
+`API_ACCESS_TOKEN` is **not intended for web or mobile clients**. Use it for:
+
+- Manual testing in Postman or curl
+- Server-side cron jobs and cache warming scripts
+- Internal services that call the API directly (not on behalf of a user)
+
+It **bypasses rate limiting** entirely, which is why it must not be exposed to end-user clients.
 
 ```bash
-# Include API access token in Authorization header
+# Postman / curl testing
 curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
      https://api.temphist.com/v1/records/daily/New%20York/01-15
-```
-
-**Benefits of API Access Token:**
-
-- ✅ No Firebase authentication overhead
-- ✅ **Bypasses rate limiting** for efficient automated operations
-- ✅ Identified as system/admin usage in logs
-- ✅ Efficient for automated prefetching and cache warming
-- ✅ Perfect for cron jobs and background tasks
-
-#### 3. Test Token (Development)
-
-For development and testing:
-
-```bash
-# Include test token in Authorization header
-curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
-     http://localhost:8000/v1/records/daily/New%20York/01-15
 ```
 
 ### Base URLs

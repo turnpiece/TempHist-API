@@ -2,6 +2,35 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-05-17] - Firebase App Check & CORS Fix (v1.2.10)
+
+### Added
+
+- **Firebase App Check support**: New `APP_CHECK_ENFORCEMENT` environment variable (`off` / `monitor` / `enforce`). When enabled, the API verifies the `X-Firebase-AppCheck` token sent by web and mobile clients. `off` is the default; `monitor` logs failures without blocking; `enforce` rejects unauthenticated requests with 403.
+
+### Fixed
+
+- **CORS preflight 400 with App Check enabled**: Added `x-firebase-appcheck` to the CORS `allow_headers` list. Previously, any deployment where the web frontend had `VITE_RECAPTCHA_SITE_KEY` set would fail all OPTIONS preflight requests with 400 because the browser's `Access-Control-Request-Headers` included `x-firebase-appcheck`.
+
+### Changed
+
+- **Yearly coverage tolerance**: Relaxed from 50% to 80% for current-year data, so the yearly chart fills in earlier in the calendar year.
+- **Removed anonymous-user location guard**: Anonymous Firebase users are no longer restricted to the preapproved location list — rate limiting provides sufficient abuse protection.
+
+---
+
+## [2026-05-15] - App Check Middleware & Cache Key Fix (v1.2.9)
+
+### Added
+
+- **Firebase App Check verification in middleware**: Token verification runs inside `verify_token_middleware` after the Firebase ID token is validated. All three enforcement modes (`off`, `monitor`, `enforce`) are supported.
+
+### Fixed
+
+- **Cache key import path**: Corrected `from cache_utils import …` → `from cache.keys import …` after the cache module was reorganised.
+
+---
+
 ## [2026-04-11] - Social Sharing & OG Images (v1.1.5)
 
 ### Added
