@@ -403,6 +403,43 @@ echo $IP_WHITELIST
 
 ## API Errors
 
+### CORS Preflight 400 (Options Request Fails)
+
+**Symptom** (browser console):
+
+```
+Preflight response is not successful. Status code: 400
+Fetch API cannot load https://api.temphist.com/v1/... due to access control checks.
+```
+
+**Cause**: The browser sends an `OPTIONS` preflight before cross-origin requests that include custom headers (e.g. `X-Firebase-AppCheck`). A 400 means either the origin or a requested header is not in the API's CORS allow-list.
+
+**Solutions**:
+
+1. **Missing `x-firebase-appcheck` in `allow_headers`** — if App Check is enabled on the frontend (`VITE_RECAPTCHA_SITE_KEY` is set), the browser will include `X-Firebase-AppCheck` in its preflight. The API's `CORSMiddleware` must list this header. Check `main.py` → `allow_headers`.
+
+2. **Origin not allowed** — the website's domain must match either `CORS_ORIGINS` (exact list) or `CORS_ORIGIN_REGEX`. The default regex `^https://(.*\.)?temphist\.com$` covers all `*.temphist.com` subdomains. A Railway `.up.railway.app` URL must be added explicitly to `CORS_ORIGINS`.
+
+### 403 App Check Verification Failed
+
+**Symptom**:
+
+```json
+{"detail": "App Check verification failed"}
+```
+
+**Cause**: `APP_CHECK_ENFORCEMENT=enforce` is set on the API, but the request is missing a valid `X-Firebase-AppCheck` token.
+
+**Solutions**:
+
+1. **Frontend not sending token** — check that `VITE_RECAPTCHA_SITE_KEY` is set on the web service and the domain is registered in the [reCAPTCHA console](https://console.cloud.google.com/security/recaptcha) and in Firebase App Check.
+
+2. **Testing with curl / Postman** — use `API_ACCESS_TOKEN` instead of a Firebase token; it bypasses App Check entirely.
+
+3. **Start with `monitor` mode** — set `APP_CHECK_ENFORCEMENT=monitor` first. The API will log token failures without blocking, letting you verify everything is working before switching to `enforce`.
+
+4. **Mobile app** — App Check is not yet implemented in the mobile app. Keep `APP_CHECK_ENFORCEMENT` at `off` or `monitor` until mobile App Check is added.
+
 ### 401 Unauthorized
 
 **Symptoms**:
