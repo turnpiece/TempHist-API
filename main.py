@@ -1473,6 +1473,7 @@ app.add_middleware(
         "content-type",
         "accept",
         "x-requested-with",
+        "x-firebase-appcheck",
     ],
     expose_headers=["*"],
     max_age=600,  # Cache preflight requests for 10 minutes
