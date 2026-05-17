@@ -149,6 +149,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | Variable                   | Default | Description                           |
 | -------------------------- | ------- | ------------------------------------- |
 | `FIREBASE_SERVICE_ACCOUNT`          | None          | Firebase credentials JSON (see below)                              |
+| `APP_CHECK_ENFORCEMENT`             | `off`         | Firebase App Check mode: `off`, `monitor`, or `enforce`            |
 | `CACHE_ENABLED`                     | `true`        | Enable/disable caching                                             |
 | `DEBUG`                             | `false`       | Enable debug logging (forbidden when `ENVIRONMENT=production`)     |
 | `ENVIRONMENT`                       | `development` | Set to `production` to enable safety checks                        |
@@ -196,6 +197,20 @@ FIREBASE_SERVICE_ACCOUNT={"type":"service_account","project_id":"...","private_k
 ```
 
 **Note**: Railway handles JSON formatting automatically - just paste the content.
+
+### Firebase App Check Configuration
+
+Firebase App Check adds an extra layer of protection by verifying that requests come from your genuine app (using reCAPTCHA v3 on the web). It is **optional** and requires Firebase credentials to be configured first.
+
+| `APP_CHECK_ENFORCEMENT` value | Behaviour |
+|---|---|
+| `off` (default) | App Check tokens are ignored; all authenticated requests pass |
+| `monitor` | Tokens are verified and logged, but invalid/missing tokens are not blocked |
+| `enforce` | Requests without a valid `X-Firebase-AppCheck` token are rejected with `403` |
+
+**Web client setup**: set `VITE_RECAPTCHA_SITE_KEY` on the frontend service to your reCAPTCHA v3 site key. When set, the web app automatically obtains and attaches App Check tokens to every API request via the `X-Firebase-AppCheck` header. Register the domain in the [Google reCAPTCHA console](https://console.cloud.google.com/security/recaptcha) and enable App Check in the Firebase console.
+
+**CORS note**: the `X-Firebase-AppCheck` header is included in the API's CORS `allow_headers`, so browser preflight requests succeed when App Check is enabled on the frontend.
 
 ### Redis Configuration
 

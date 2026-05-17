@@ -70,6 +70,9 @@ SERVICE_TOKEN_WINDOW_HOURS=1  # Defaults to 1 hour sliding window
 CORS_ORIGINS=https://yourdomain.com,https://staging.yourdomain.com  # Comma-separated list of allowed origins
 CORS_ORIGIN_REGEX=^https://.*\.yourdomain\.com$  # Regex pattern for allowed origins
 
+# Firebase App Check (optional)
+APP_CHECK_ENFORCEMENT=off  # off | monitor | enforce
+
 # IP Address Management
 IP_WHITELIST=192.168.1.100,10.0.0.5  # IPs exempt from rate limiting
 IP_BLACKLIST=192.168.1.200,10.0.0.99  # IPs blocked entirely
@@ -1419,6 +1422,12 @@ CORS_ORIGIN_REGEX=^https://.*\.yourdomain\.com$                     # Regex patt
 FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}  # Firebase service account JSON
 # OR
 FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}  # Alternative variable name
+
+# Firebase App Check (optional - requires Firebase credentials above)
+APP_CHECK_ENFORCEMENT=off  # off | monitor | enforce (default: off)
+# off:     App Check tokens are ignored
+# monitor: Invalid/missing tokens are logged but not blocked
+# enforce: Requests without a valid token are rejected with 403
 ```
 
 #### ⚙️ **Job Worker Service Variables**
