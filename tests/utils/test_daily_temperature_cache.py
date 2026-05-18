@@ -44,6 +44,9 @@ async def test_collect_rolling_window_weekly_caches(monkeypatch):
         return store
 
     monkeypatch.setattr("routers.v1_records.get_daily_temperature_store", fake_get_store)
+    # Prevent get_job_manager() from raising when cache is uninitialised, and
+    # prevent accumulated VC budget state from other tests affecting this one.
+    monkeypatch.setattr("routers.v1_records.get_job_manager", lambda: None)
 
     fetched_ranges = []
 

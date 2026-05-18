@@ -66,17 +66,17 @@ def validate_location_response(data: dict, location: str) -> Tuple[bool, str]:
     """
     # Check if values array is empty
     if not data.get("values") or len(data["values"]) == 0:
-        return False, f"No temperature data found for location '{location}'. The location may be invalid or not supported by the weather service."
-    
+        return False, f"No temperature data is currently available for '{location}'. Please try again later."
+
     # Check if all temperature values are None or 0
     values = data.get("values", [])
     valid_temps = [v for v in values if v.get("temperature") is not None and v.get("temperature") != 0]
     if not valid_temps:
-        return False, f"No valid temperature data found for location '{location}'. The location may be invalid or not supported by the weather service."
-    
+        return False, f"No valid temperature data is currently available for '{location}'. Please try again later."
+
     # Check if data points count is 0
     if data.get("average", {}).get("data_points", 0) == 0:
-        return False, f"No data points available for location '{location}'. The location may be invalid or not supported by the weather service."
+        return False, f"No data points are currently available for '{location}'. Please try again later."
     
     return True, ""
 

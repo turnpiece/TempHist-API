@@ -2,6 +2,16 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-05-18] - Search Results Include Canonical Location ID (v1.2.15)
+
+### Added
+
+- **`location_id` field in `/v1/locations/search` results**: Each result now includes a `location_id` field — the canonical preapproved location ID when the result matches a preapproved location, or `null` otherwise. Clients should pass this value to `POST /v1/locations/selections` when non-null. This removes the need for clients to know anything about canonical IDs; they simply reflect back what the search endpoint provides.
+  - Mapbox path: matched against preapproved list by name + country code after geocoding
+  - Preapproved fallback path: always populated (every fallback result is a preapproved location)
+
+---
+
 ## [2026-05-18] - Popular Locations Ordering, Image Opt-in & Stats (v1.2.14)
 
 ### Fixed
