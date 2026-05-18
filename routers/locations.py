@@ -247,6 +247,15 @@ def _loc_to_dict(loc: LocationItem, include_images: bool) -> dict:
     return d
 
 
+def _find_preapproved_id(name: str, country_code: str) -> Optional[str]:
+    """Return the canonical location ID if name+country_code matches a preapproved location."""
+    target = (name.lower(), country_code.upper())
+    for loc in locations_data:
+        if (loc.name.lower(), loc.country_code) == target:
+            return loc.id
+    return None
+
+
 def convert_image_urls(image_urls: Dict[str, str]) -> Dict[str, str]:
     """Convert relative image URLs to full URLs."""
     return {
@@ -509,6 +518,9 @@ async def search_locations(
       - admin1        first-level subdivision (state, province, etc.)
       - country_name  full country name
       - country_code  ISO 3166-1 alpha-2 code
+      - location_id   canonical ID if the result matches a preapproved location,
+                      otherwise null. Clients should pass this value to
+                      POST /v1/locations/selections when non-null.
     """
     # Rate limiting (shared bucket with preapproved endpoint)
     client_ip = request.client.host
@@ -519,6 +531,12 @@ async def search_locations(
     # --- Mapbox path ---
     if MAPBOX_TOKEN:
         results = await _geocode_mapbox(q, limit=limit)
+        # _geocode_mapbox returns fresh dicts (JSON-deserialised on each call),
+        # so mutation here is safe.
+        for result in results:
+            result["location_id"] = _find_preapproved_id(
+                result.get("name", ""), result.get("country_code", "")
+            )
         return {
             "count": len(results),
             "locations": results,
@@ -560,6 +578,7 @@ async def search_locations(
                 "admin1": loc.admin1,
                 "country_name": loc.country_name,
                 "country_code": loc.country_code,
+                "location_id": loc.id,  # fallback results are always preapproved
             }
             for loc in ranked
         ],

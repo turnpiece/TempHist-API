@@ -34,6 +34,7 @@ from routers.locations import (
     generate_etag,
     filter_locations,
     convert_image_urls,
+    _find_preapproved_id,
     EU_MEMBER_CODES,
     COUNTRY_CODE_ALIASES,
 )
@@ -672,6 +673,56 @@ class TestPopularStatusEndpoint:
         assert data["fallback"] == "preapproved"
         assert "cache_enabled" in data
         assert "rate_limit" in data
+
+
+class TestSearchEndpoint:
+    """Test GET /v1/locations/search — location_id enrichment."""
+
+    def test_fallback_results_include_location_id(self, client, mock_locations_data):
+        """Fallback path (no Mapbox token) always returns location_id."""
+        response = client.get("/v1/locations/search?q=London")
+        assert response.status_code == 200
+        locs = response.json()["locations"]
+        assert len(locs) > 0
+        for loc in locs:
+            assert "location_id" in loc
+        london = next(l for l in locs if l["name"] == "London")
+        assert london["location_id"] == "london"
+
+    def test_fallback_no_match_still_has_location_id(self, client, mock_locations_data):
+        """All fallback results are preapproved locations so location_id is always set."""
+        response = client.get("/v1/locations/search?q=Paris")
+        assert response.status_code == 200
+        for loc in response.json()["locations"]:
+            assert loc["location_id"] is not None
+
+    def test_find_preapproved_id_match(self, sample_locations):
+        """Helper returns canonical id for exact name+country match."""
+        with patch("routers.locations.locations_data", sample_locations):
+            assert _find_preapproved_id("London", "GB") == "london"
+            assert _find_preapproved_id("london", "GB") == "london"   # case-insensitive
+            assert _find_preapproved_id("Paris", "FR") == "paris"
+            assert _find_preapproved_id("New York", "US") == "new_york"
+
+    def test_find_preapproved_id_no_match(self, sample_locations):
+        """Helper returns None when no preapproved location matches."""
+        with patch("routers.locations.locations_data", sample_locations):
+            assert _find_preapproved_id("Shoreditch", "GB") is None
+            assert _find_preapproved_id("London", "US") is None   # wrong country
+
+    def test_mapbox_path_enriches_location_id(self, client, mock_locations_data):
+        """Mapbox path attaches location_id when result matches a preapproved location."""
+        mapbox_results = [
+            {"name": "London", "admin1": "England", "country_name": "United Kingdom", "country_code": "GB"},
+            {"name": "Shoreditch", "admin1": "England", "country_name": "United Kingdom", "country_code": "GB"},
+        ]
+        with patch("routers.locations.MAPBOX_TOKEN", "fake-token"), \
+             patch("routers.locations._geocode_mapbox", new=AsyncMock(return_value=mapbox_results)):
+            response = client.get("/v1/locations/search?q=London")
+        assert response.status_code == 200
+        locs = {l["name"]: l for l in response.json()["locations"]}
+        assert locs["London"]["location_id"] == "london"
+        assert locs["Shoreditch"]["location_id"] is None
 
 
 class TestPopularStatsEndpoint:

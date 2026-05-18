@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BUDGET = 100_000  # records/day — roughly 5 full yearly-period refetches
+_DEFAULT_BUDGET = 0  # disabled by default — set VC_DAILY_RECORD_BUDGET to a positive integer to enable
 
 
 def _daily_budget() -> int:
