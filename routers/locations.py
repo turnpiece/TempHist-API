@@ -418,12 +418,17 @@ async def get_preapproved_locations(
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
 
-    # Normalise and validate country code
+    # Normalise, validate, and resolve country code
+    resolved_country = None
+    cache_country_key = None
     if country_code:
         country_code = country_code.upper()
         valid, error_msg = validate_country_code(country_code)
         if not valid:
             raise HTTPException(status_code=400, detail=error_msg)
+        resolved_country = resolve_country_code(country_code)
+        # Aliases (e.g. UK→GB) share the canonical code's cache entry; EU keeps its own
+        cache_country_key = country_code if isinstance(resolved_country, frozenset) else resolved_country
 
     if limit and not validate_limit(limit):
         raise HTTPException(status_code=400, detail=f"Invalid limit. Must be between 1 and {MAX_LIMIT}")
@@ -438,8 +443,7 @@ async def get_preapproved_locations(
     if if_modified_since and if_modified_since == locations_last_modified:
         return Response(status_code=304)
 
-    # Cache key uses the normalised user input (e.g. "EU", "GB") before alias resolution
-    cache_key = get_cache_key(country_code, tier)
+    cache_key = get_cache_key(cache_country_key, tier)
     cached_response = await get_cached_response(cache_key)
 
     if cached_response:
@@ -448,9 +452,7 @@ async def get_preapproved_locations(
         response.headers["Last-Modified"] = locations_last_modified
         return PreapprovedResponse(**cached_response)
 
-    # Resolve alias / EU grouping for filtering
-    resolved = resolve_country_code(country_code) if country_code else None
-    filtered_locations = filter_locations(locations_data, resolved, tier, limit)
+    filtered_locations = filter_locations(locations_data, resolved_country, tier, limit)
     
     # Build response
     response_data = {
@@ -587,11 +589,15 @@ async def get_popular_locations(
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
 
+    resolved_country = None
+    cache_country_key = None
     if country_code:
         country_code = country_code.upper()
         valid, error_msg = validate_country_code(country_code)
         if not valid:
             raise HTTPException(status_code=400, detail=error_msg)
+        resolved_country = resolve_country_code(country_code)
+        cache_country_key = country_code if isinstance(resolved_country, frozenset) else resolved_country
 
     if limit and not validate_limit(limit):
         raise HTTPException(status_code=400, detail=f"Invalid limit. Must be between 1 and {MAX_LIMIT}")
@@ -604,7 +610,7 @@ async def get_popular_locations(
     if if_modified_since and if_modified_since == locations_last_modified:
         return Response(status_code=304)
 
-    cache_key = get_popular_cache_key(country_code, tier)
+    cache_key = get_popular_cache_key(cache_country_key, tier)
     cached_response = await get_cached_response(cache_key)
 
     if cached_response:
@@ -613,8 +619,7 @@ async def get_popular_locations(
         response.headers["Last-Modified"] = locations_last_modified
         return PopularResponse(**cached_response)
 
-    resolved = resolve_country_code(country_code) if country_code else None
-    filtered_locations = filter_locations(locations_data, resolved, tier, limit)
+    filtered_locations = filter_locations(locations_data, resolved_country, tier, limit)
 
     response_data = {
         "version": 1,
