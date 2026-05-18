@@ -13,11 +13,12 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Union
 from collections import defaultdict
 from urllib.parse import quote
 
 import aiohttp
+import pycountry
 import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
 from pydantic import BaseModel, Field, field_validator
@@ -35,7 +36,20 @@ CACHE_TTL = 604800  # 7 days (data changes infrequently)
 RATE_LIMIT_REQUESTS = 60  # requests per minute
 RATE_LIMIT_WINDOW = 60  # 1 minute window
 CACHE_PREFIX = "preapproved:v1"
+POPULAR_CACHE_PREFIX = "popular:v1"
 MAX_LIMIT = 500
+
+# Country code aliases: non-ISO codes that users commonly try
+COUNTRY_CODE_ALIASES: Dict[str, str] = {
+    "UK": "GB",  # UK is colloquial; the ISO 3166-1 code for the United Kingdom is GB
+}
+
+# EU member state codes for the "EU" convenience grouping
+EU_MEMBER_CODES: FrozenSet[str] = frozenset([
+    "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
+    "FR", "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT",
+    "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+])
 
 # Pydantic Models
 class ImageUrl(BaseModel):
@@ -84,6 +98,13 @@ class PreapprovedResponse(BaseModel):
     generated_at: datetime = Field(..., description="Response generation timestamp")
     locations: List[LocationItem] = Field(..., description="List of location items")
 
+class PopularResponse(BaseModel):
+    """Response model for popular locations endpoint."""
+    version: int = Field(default=1, description="API version")
+    count: int = Field(..., description="Number of locations returned")
+    generated_at: datetime = Field(..., description="Response generation timestamp")
+    locations: List[LocationItem] = Field(..., description="List of location items")
+
 # Global state
 locations_data: List[LocationItem] = []
 locations_etag: str = ""
@@ -103,9 +124,33 @@ def get_redis_client() -> redis.Redis:
         raise HTTPException(status_code=500, detail="Redis client not initialized")
     return redis_client
 
-def validate_country_code(country_code: str) -> bool:
-    """Validate ISO 3166-1 alpha-2 country code format."""
-    return bool(re.match(r'^[A-Z]{2}$', country_code))
+def validate_country_code(country_code: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate a country code input. Returns (is_valid, error_message).
+
+    Accepts ISO 3166-1 alpha-2 codes, known aliases (e.g. UK→GB), and the
+    special grouping 'EU'. Input is expected to already be uppercased.
+    """
+    if country_code == "EU":
+        return True, None
+    if country_code in COUNTRY_CODE_ALIASES:
+        return True, None
+    if not re.match(r'^[A-Z]{2}$', country_code):
+        return False, f"Invalid country code '{country_code}'. Use a 2-letter ISO 3166-1 code (e.g. 'GB', 'US'), 'EU' for all EU members, or 'UK' as an alias for 'GB'."
+    if pycountry.countries.get(alpha_2=country_code) is None:
+        suggestion = COUNTRY_CODE_ALIASES.get(country_code)
+        msg = f"Unknown country code '{country_code}'."
+        if suggestion:
+            msg += f" Did you mean '{suggestion}'?"
+        return False, msg
+    return True, None
+
+
+def resolve_country_code(country_code: str) -> Union[str, FrozenSet[str]]:
+    """Resolve alias or EU grouping. Returns a single ISO code or a frozenset of codes."""
+    if country_code == "EU":
+        return EU_MEMBER_CODES
+    return COUNTRY_CODE_ALIASES.get(country_code, country_code)
 
 def validate_limit(limit: int) -> bool:
     """Validate limit parameter."""
@@ -125,6 +170,17 @@ def get_cache_key(country_code: Optional[str] = None, tier: Optional[str] = None
         return f"{CACHE_PREFIX}:tier:{tier}"
     else:
         return f"{CACHE_PREFIX}:all"
+
+def get_popular_cache_key(country_code: Optional[str] = None, tier: Optional[str] = None) -> str:
+    """Generate cache key for popular locations filtered data."""
+    if country_code and tier:
+        return f"{POPULAR_CACHE_PREFIX}:country:{country_code}:tier:{tier}"
+    elif country_code:
+        return f"{POPULAR_CACHE_PREFIX}:country:{country_code}"
+    elif tier:
+        return f"{POPULAR_CACHE_PREFIX}:tier:{tier}"
+    else:
+        return f"{POPULAR_CACHE_PREFIX}:all"
 
 async def check_rate_limit(ip: str) -> Tuple[bool, str]:
     """Check if IP is within rate limits."""
@@ -148,15 +204,18 @@ async def check_rate_limit(ip: str) -> Tuple[bool, str]:
 
 def filter_locations(
     locations: List[LocationItem],
-    country_code: Optional[str] = None,
+    country_code: Optional[Union[str, FrozenSet[str]]] = None,
     tier: Optional[str] = None,
     limit: Optional[int] = None
 ) -> List[LocationItem]:
     """Filter locations based on criteria."""
     filtered = locations
-    
+
     if country_code:
-        filtered = [loc for loc in filtered if loc.country_code == country_code]
+        if isinstance(country_code, frozenset):
+            filtered = [loc for loc in filtered if loc.country_code in country_code]
+        else:
+            filtered = [loc for loc in filtered if loc.country_code == country_code]
     
     if tier:
         filtered = [loc for loc in filtered if loc.tier == tier]
@@ -243,15 +302,15 @@ async def set_cached_response(cache_key: str, data: Dict, ttl: int = CACHE_TTL) 
 async def warm_cache() -> None:
     """Warm the cache with all locations data."""
     try:
-        cache_key = get_cache_key()
         response_data = {
             "version": 1,
             "count": len(locations_data),
             "generated_at": datetime.now().isoformat(),
             "locations": [loc.model_dump() for loc in locations_data]
         }
-        await set_cached_response(cache_key, response_data)
-        logger.info("Warmed preapproved locations cache")
+        await set_cached_response(get_cache_key(), response_data)
+        await set_cached_response(get_popular_cache_key(), response_data)
+        logger.info("Warmed preapproved and popular locations caches")
     except Exception as e:
         logger.error(f"Error warming cache: {e}")
 
@@ -358,38 +417,40 @@ async def get_preapproved_locations(
     allowed, reason = await check_rate_limit(client_ip)
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
-    
-    # Validate parameters
-    if country_code and not validate_country_code(country_code):
-        raise HTTPException(status_code=400, detail="Invalid country code format. Must be ISO 3166-1 alpha-2")
-    
+
+    # Normalise and validate country code
+    if country_code:
+        country_code = country_code.upper()
+        valid, error_msg = validate_country_code(country_code)
+        if not valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+
     if limit and not validate_limit(limit):
         raise HTTPException(status_code=400, detail=f"Invalid limit. Must be between 1 and {MAX_LIMIT}")
-    
+
     # Check for ETag match
     if_none_match = request.headers.get("if-none-match")
     if if_none_match and if_none_match == locations_etag:
         return Response(status_code=304)
-    
+
     # Check for Last-Modified match
     if_modified_since = request.headers.get("if-modified-since")
     if if_modified_since and if_modified_since == locations_last_modified:
         return Response(status_code=304)
-    
-    # Try cache first
+
+    # Cache key uses the normalised user input (e.g. "EU", "GB") before alias resolution
     cache_key = get_cache_key(country_code, tier)
     cached_response = await get_cached_response(cache_key)
-    
+
     if cached_response:
-        # Set cache headers (7 days for CDN/shared caches, 1 hour for browsers)
         response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
         response.headers["ETag"] = locations_etag
         response.headers["Last-Modified"] = locations_last_modified
-
         return PreapprovedResponse(**cached_response)
-    
-    # Filter locations
-    filtered_locations = filter_locations(locations_data, country_code, tier, limit)
+
+    # Resolve alias / EU grouping for filtering
+    resolved = resolve_country_code(country_code) if country_code else None
+    filtered_locations = filter_locations(locations_data, resolved, tier, limit)
     
     # Build response
     response_data = {
@@ -498,6 +559,95 @@ async def get_locations_status():
             "window_seconds": RATE_LIMIT_WINDOW
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# Popular locations endpoint
+# ---------------------------------------------------------------------------
+
+@router.get("/v1/locations/popular", response_model=PopularResponse)
+async def get_popular_locations(
+    request: Request,
+    response: Response,
+    country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code"),
+    tier: Optional[str] = Query(None, description="Filter by location tier"),
+    limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})")
+):
+    """
+    Get popular locations with optional filtering.
+
+    Returns the most popular locations for use with the weather API.
+    Currently falls back to the preapproved list; will reflect usage-based
+    ranking once popularity tracking is implemented.
+
+    Supports the same filtering parameters as /v1/locations/preapproved.
+    """
+    client_ip = request.client.host
+    allowed, reason = await check_rate_limit(client_ip)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
+
+    if country_code:
+        country_code = country_code.upper()
+        valid, error_msg = validate_country_code(country_code)
+        if not valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+
+    if limit and not validate_limit(limit):
+        raise HTTPException(status_code=400, detail=f"Invalid limit. Must be between 1 and {MAX_LIMIT}")
+
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match == locations_etag:
+        return Response(status_code=304)
+
+    if_modified_since = request.headers.get("if-modified-since")
+    if if_modified_since and if_modified_since == locations_last_modified:
+        return Response(status_code=304)
+
+    cache_key = get_popular_cache_key(country_code, tier)
+    cached_response = await get_cached_response(cache_key)
+
+    if cached_response:
+        response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
+        response.headers["ETag"] = locations_etag
+        response.headers["Last-Modified"] = locations_last_modified
+        return PopularResponse(**cached_response)
+
+    resolved = resolve_country_code(country_code) if country_code else None
+    filtered_locations = filter_locations(locations_data, resolved, tier, limit)
+
+    response_data = {
+        "version": 1,
+        "count": len(filtered_locations),
+        "generated_at": datetime.now().isoformat(),
+        "locations": [loc.model_dump() for loc in filtered_locations]
+    }
+
+    await set_cached_response(cache_key, response_data)
+
+    response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
+    response.headers["ETag"] = locations_etag
+    response.headers["Last-Modified"] = locations_last_modified
+
+    return PopularResponse(**response_data)
+
+
+@router.get("/v1/locations/popular/status")
+async def get_popular_locations_status():
+    """Get status information about the popular locations service."""
+    return {
+        "status": "healthy",
+        "locations_loaded": len(locations_data),
+        "etag": locations_etag,
+        "last_modified": locations_last_modified,
+        "cache_enabled": redis_client is not None,
+        "fallback": "preapproved",
+        "rate_limit": {
+            "requests_per_minute": RATE_LIMIT_REQUESTS,
+            "window_seconds": RATE_LIMIT_WINDOW
+        }
+    }
+
 
 async def initialize_locations_data(redis: redis.Redis):
     """Initialize locations data and warm cache."""

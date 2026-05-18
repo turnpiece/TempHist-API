@@ -1054,6 +1054,42 @@ GET /v1/locations/preapproved?country_code=GB&tier=global&limit=5
 
 Returns service health and configuration information.
 
+#### Popular Locations Endpoint
+
+The popular locations endpoint surfaces the locations most relevant to users. It is distinct from the preapproved endpoint: preapproved is a curated editorial list, while popular will reflect actual usage once popularity tracking is implemented. Until then, it falls back to the preapproved list.
+
+**Endpoint:** `GET /v1/locations/popular`
+
+**Query Parameters:**
+
+- `country_code` (optional): Filter by ISO 3166-1 alpha-2 country code (e.g., "US", "GB")
+- `tier` (optional): Filter by location tier (e.g., "global")
+- `limit` (optional): Limit results (1-500, default: no limit)
+
+**Example Requests:**
+
+```bash
+# Get all popular locations
+GET /v1/locations/popular
+
+# Get popular locations in the United States
+GET /v1/locations/popular?country_code=US
+
+# Get global tier popular locations
+GET /v1/locations/popular?tier=global
+
+# Combined filters
+GET /v1/locations/popular?country_code=GB&tier=global&limit=5
+```
+
+**Response Format:** Same as `/v1/locations/preapproved`.
+
+**Fallback behaviour:** Until usage-based popularity tracking is implemented, this endpoint returns the preapproved list. The response shape is identical so clients can switch without code changes.
+
+**Status Endpoint:** `GET /v1/locations/popular/status`
+
+Returns service health, including a `fallback` field indicating the current data source.
+
 ## 🛡️ Rate Limiting
 
 The API includes comprehensive rate limiting to prevent abuse:

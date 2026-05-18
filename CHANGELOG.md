@@ -2,6 +2,15 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-05-18] - Popular Locations Endpoint (v1.2.12)
+
+### Added
+
+- **`GET /v1/locations/popular`**: New endpoint returning popular locations. Currently falls back to the preapproved list; will surface usage-derived results once popularity tracking is implemented. Supports the same `country_code`, `tier`, and `limit` query parameters as `/v1/locations/preapproved`.
+- **`GET /v1/locations/popular/status`**: Status/health endpoint for the popular locations service. Includes a `fallback` field indicating the current data source.
+
+---
+
 ## [2026-05-17] - Firebase App Check & CORS Fix (v1.2.10)
 
 ### Added

@@ -25,11 +25,15 @@ from routers.locations import (
     LocationItem,
     initialize_locations_data,
     get_cache_key,
+    get_popular_cache_key,
     validate_country_code,
+    resolve_country_code,
     validate_limit,
     generate_etag,
     filter_locations,
-    convert_image_urls
+    convert_image_urls,
+    EU_MEMBER_CODES,
+    COUNTRY_CODE_ALIASES,
 )
 
 # Test data
@@ -163,11 +167,25 @@ class TestUtilityFunctions:
     
     def test_validate_country_code(self):
         """Test country code validation."""
-        assert validate_country_code("US") == True
-        assert validate_country_code("GB") == True
-        assert validate_country_code("INVALID") == False
-        assert validate_country_code("us") == False  # lowercase
-        assert validate_country_code("USA") == False  # 3 letters
+        assert validate_country_code("US") == (True, None)
+        assert validate_country_code("GB") == (True, None)
+        assert validate_country_code("EU") == (True, None)   # special grouping
+        assert validate_country_code("UK") == (True, None)   # alias for GB
+
+        valid, msg = validate_country_code("INVALID")
+        assert valid is False
+        assert msg is not None
+
+        valid, msg = validate_country_code("XX")             # format ok, not a real code
+        assert valid is False
+        assert "Unknown country code" in msg
+
+    def test_resolve_country_code(self):
+        """Test alias and EU resolution."""
+        assert resolve_country_code("GB") == "GB"
+        assert resolve_country_code("UK") == "GB"
+        assert resolve_country_code("EU") == EU_MEMBER_CODES
+        assert isinstance(resolve_country_code("EU"), frozenset)
     
     def test_validate_limit(self):
         """Test limit validation."""
@@ -312,23 +330,41 @@ class TestPreapprovedLocationsEndpoint:
         assert len(data["locations"]) == 2
     
     def test_invalid_country_code(self, client, mock_locations_data):
-        """Test invalid country code validation."""
         response = client.get("/v1/locations/preapproved?country_code=INVALID")
-        
         assert response.status_code == 400
-        assert "Invalid country code format" in response.json()["detail"]
-    
+
+    def test_unknown_country_code(self, client, mock_locations_data):
+        response = client.get("/v1/locations/preapproved?country_code=XX")
+        assert response.status_code == 400
+        assert "Unknown country code" in response.json()["detail"]
+
+    def test_uk_alias_accepted(self, client, mock_locations_data):
+        """UK should be silently resolved to GB."""
+        response = client.get("/v1/locations/preapproved?country_code=UK")
+        assert response.status_code == 200
+
+    def test_lowercase_country_code_normalised(self, client, mock_locations_data):
+        response = client.get("/v1/locations/preapproved?country_code=gb")
+        assert response.status_code == 200
+        data = response.json()
+        assert all(loc["country_code"] == "GB" for loc in data["locations"])
+
+    def test_eu_grouping(self, client, mock_locations_data):
+        """EU should return locations from any EU member state."""
+        response = client.get("/v1/locations/preapproved?country_code=EU")
+        assert response.status_code == 200
+        data = response.json()
+        # Sample data has FR (Paris); all returned codes must be EU members
+        for loc in data["locations"]:
+            assert loc["country_code"] in EU_MEMBER_CODES
+
     def test_invalid_limit_too_low(self, client, mock_locations_data):
-        """Test invalid limit (too low)."""
         response = client.get("/v1/locations/preapproved?limit=0")
-        
-        assert response.status_code == 422  # Pydantic validation error
-    
+        assert response.status_code == 422
+
     def test_invalid_limit_too_high(self, client, mock_locations_data):
-        """Test invalid limit (too high)."""
         response = client.get("/v1/locations/preapproved?limit=501")
-        
-        assert response.status_code == 422  # Pydantic validation error
+        assert response.status_code == 422
 
 class TestCaching:
     """Test caching behavior."""
@@ -439,8 +475,8 @@ class TestDataLoading:
         with patch('routers.locations.os.path.join', return_value=str(data_file)):
             await initialize_locations_data(mock_redis)
         
-        # Verify cache was warmed
-        mock_redis.setex.assert_called_once()
+        # Verify cache was warmed (preapproved:v1:all and popular:v1:all)
+        assert mock_redis.setex.call_count == 2
     
     @pytest.mark.asyncio
     async def test_initialize_locations_data_file_not_found(self, mock_redis):
@@ -502,6 +538,119 @@ class TestErrorHandling:
             # Should fall back to generating response from data
             response = client.get("/v1/locations/preapproved")
             assert response.status_code == 200
+
+class TestPopularCacheKey:
+    """Test popular cache key generation."""
+
+    def test_get_popular_cache_key(self):
+        assert get_popular_cache_key() == "popular:v1:all"
+        assert get_popular_cache_key("US") == "popular:v1:country:US"
+        assert get_popular_cache_key(tier="global") == "popular:v1:tier:global"
+        assert get_popular_cache_key("US", "global") == "popular:v1:country:US:tier:global"
+
+
+class TestPopularLocationsEndpoint:
+    """Test the popular locations endpoint (currently falls back to preapproved data)."""
+
+    def test_get_all_locations(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["version"] == 1
+        assert data["count"] == 3
+        assert len(data["locations"]) == 3
+        assert "generated_at" in data
+        assert "Cache-Control" in response.headers
+
+    def test_filter_by_country(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?country_code=US")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["locations"][0]["country_code"] == "US"
+
+    def test_filter_by_tier(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?tier=global")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 3
+
+    def test_combined_filters(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?country_code=GB&tier=global")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["locations"][0]["country_code"] == "GB"
+
+    def test_limit(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?limit=2")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 2
+        assert len(data["locations"]) == 2
+
+    def test_invalid_country_code(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?country_code=INVALID")
+        assert response.status_code == 400
+
+    def test_unknown_country_code(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?country_code=XX")
+        assert response.status_code == 400
+        assert "Unknown country code" in response.json()["detail"]
+
+    def test_uk_alias_accepted(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?country_code=UK")
+        assert response.status_code == 200
+
+    def test_lowercase_country_code_normalised(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?country_code=gb")
+        assert response.status_code == 200
+
+    def test_eu_grouping(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?country_code=EU")
+        assert response.status_code == 200
+        data = response.json()
+        for loc in data["locations"]:
+            assert loc["country_code"] in EU_MEMBER_CODES
+
+    def test_invalid_limit_zero(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?limit=0")
+        assert response.status_code == 422
+
+    def test_invalid_limit_too_large(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular?limit=501")
+        assert response.status_code == 422
+
+    def test_returns_same_data_as_preapproved(self, client, mock_locations_data):
+        """Popular falls back to preapproved data until usage tracking is implemented."""
+        popular = client.get("/v1/locations/popular").json()
+        preapproved = client.get("/v1/locations/preapproved").json()
+
+        assert popular["count"] == preapproved["count"]
+        popular_names = sorted(loc["name"] for loc in popular["locations"])
+        preapproved_names = sorted(loc["name"] for loc in preapproved["locations"])
+        assert popular_names == preapproved_names
+
+
+class TestPopularStatusEndpoint:
+    """Test the popular locations status endpoint."""
+
+    def test_get_status(self, client, mock_locations_data):
+        response = client.get("/v1/locations/popular/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["locations_loaded"] == 3
+        assert data["fallback"] == "preapproved"
+        assert "cache_enabled" in data
+        assert "rate_limit" in data
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
