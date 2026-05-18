@@ -14,10 +14,12 @@ import json
 import pytest
 import redis
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
+
+from main import app as main_app
 
 # Import the router and models
 from routers.locations import (
@@ -626,15 +628,35 @@ class TestPopularLocationsEndpoint:
         response = client.get("/v1/locations/popular?limit=501")
         assert response.status_code == 422
 
-    def test_returns_same_data_as_preapproved(self, client, mock_locations_data):
+    def test_returns_same_locations_as_preapproved(self, client, mock_locations_data):
         """Popular falls back to preapproved data until usage tracking is implemented."""
-        popular = client.get("/v1/locations/popular").json()
+        with patch("routers.locations.get_usage_tracker", return_value=None):
+            popular = client.get("/v1/locations/popular").json()
         preapproved = client.get("/v1/locations/preapproved").json()
 
         assert popular["count"] == preapproved["count"]
-        popular_names = sorted(loc["name"] for loc in popular["locations"])
-        preapproved_names = sorted(loc["name"] for loc in preapproved["locations"])
-        assert popular_names == preapproved_names
+        popular_ids = sorted(loc["id"] for loc in popular["locations"])
+        preapproved_ids = sorted(loc["id"] for loc in preapproved["locations"])
+        assert popular_ids == preapproved_ids
+
+    def test_no_image_fields_by_default(self, client, mock_locations_data):
+        """Image fields are omitted from the popular response by default."""
+        with patch("routers.locations.get_usage_tracker", return_value=None):
+            response = client.get("/v1/locations/popular")
+        assert response.status_code == 200
+        for loc in response.json()["locations"]:
+            assert "imageUrl" not in loc
+            assert "imageAlt" not in loc
+            assert "imageAttribution" not in loc
+
+    def test_include_images_returns_image_fields(self, client, mock_locations_data):
+        """include_images=true includes image fields."""
+        with patch("routers.locations.get_usage_tracker", return_value=None):
+            response = client.get("/v1/locations/popular?include_images=true")
+        assert response.status_code == 200
+        for loc in response.json()["locations"]:
+            assert "imageUrl" in loc
+            assert "imageAlt" in loc
 
 
 class TestPopularStatusEndpoint:
@@ -650,6 +672,150 @@ class TestPopularStatusEndpoint:
         assert data["fallback"] == "preapproved"
         assert "cache_enabled" in data
         assert "rate_limit" in data
+
+
+class TestPopularStatsEndpoint:
+    """Test GET /v1/locations/popular/stats."""
+
+    def test_returns_unavailable_when_no_tracker(self, client, mock_locations_data):
+        with patch("routers.locations.get_usage_tracker", return_value=None):
+            response = client.get("/v1/locations/popular/stats")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "unavailable"
+        assert data["total_selections"] == 0
+        assert data["using_signal"] is False
+        assert data["locations"] == []
+
+    def test_returns_ranked_locations_with_counts(self, client, mock_locations_data):
+        tracker = MagicMock()
+        tracker.get_popular_from_selections.return_value = [
+            ("london", 50),
+            ("paris", 30),
+        ]
+        tracker.get_total_selections.return_value = 80
+        with patch("routers.locations.get_usage_tracker", return_value=tracker):
+            response = client.get("/v1/locations/popular/stats")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["total_selections"] == 80
+        assert data["locations"][0]["location_id"] == "london"
+        assert data["locations"][0]["count"] == 50
+        assert data["locations"][1]["location_id"] == "paris"
+        assert data["locations"][1]["count"] == 30
+
+    def test_using_signal_false_below_threshold(self, client, mock_locations_data):
+        tracker = MagicMock()
+        tracker.get_popular_from_selections.return_value = []
+        tracker.get_total_selections.return_value = 5
+        with patch("routers.locations.get_usage_tracker", return_value=tracker):
+            response = client.get("/v1/locations/popular/stats")
+        data = response.json()
+        assert data["using_signal"] is False
+
+    def test_using_signal_true_above_threshold(self, client, mock_locations_data):
+        from config import POPULARITY_MIN_SELECTIONS
+        tracker = MagicMock()
+        tracker.get_popular_from_selections.return_value = []
+        tracker.get_total_selections.return_value = POPULARITY_MIN_SELECTIONS
+        with patch("routers.locations.get_usage_tracker", return_value=tracker):
+            response = client.get("/v1/locations/popular/stats")
+        data = response.json()
+        assert data["using_signal"] is True
+
+    def test_in_preapproved_flag(self, client, mock_locations_data):
+        tracker = MagicMock()
+        tracker.get_popular_from_selections.return_value = [
+            ("london", 10),
+            ("unknown_place", 5),
+        ]
+        tracker.get_total_selections.return_value = 15
+        with patch("routers.locations.get_usage_tracker", return_value=tracker):
+            response = client.get("/v1/locations/popular/stats")
+        locs = {loc["location_id"]: loc for loc in response.json()["locations"]}
+        assert locs["london"]["in_preapproved"] is True
+        assert locs["unknown_place"]["in_preapproved"] is False
+        assert locs["unknown_place"]["name"] is None
+
+
+class TestSelectionEndpoint:
+    """Test POST /v1/locations/selections endpoint."""
+
+    @pytest.fixture
+    def main_client(self):
+        with TestClient(main_app) as c:
+            yield c
+
+    @pytest.fixture(autouse=True)
+    def _mock_env(self):
+        with patch.dict("os.environ", {
+            "VISUAL_CROSSING_API_KEY": "test_key",
+            "CACHE_ENABLED": "true",
+            "API_ACCESS_TOKEN": "test_api_token",
+        }):
+            yield
+
+    @pytest.fixture(autouse=True)
+    def _mock_firebase(self):
+        with patch("firebase_admin.auth.verify_id_token", return_value={"uid": "testuser"}):
+            yield
+
+    @pytest.fixture
+    def mock_tracker(self):
+        tracker = MagicMock()
+        with patch("routers.locations.get_usage_tracker", return_value=tracker):
+            yield tracker
+
+    def test_record_selection_success(self, main_client, mock_tracker):
+        """204 returned and tracker.record_selection called with correct args."""
+        response = main_client.post(
+            "/v1/locations/selections",
+            json={"location_id": "london"},
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 204
+        mock_tracker.record_selection.assert_called_once_with("london", "testuser")
+
+    def test_record_selection_no_auth(self, main_client):
+        """Unauthenticated request should be rejected."""
+        response = main_client.post(
+            "/v1/locations/selections",
+            json={"location_id": "london"},
+        )
+        assert response.status_code == 401
+
+    def test_record_selection_empty_location_id(self, main_client):
+        """Empty location_id fails Pydantic min_length validation."""
+        response = main_client.post(
+            "/v1/locations/selections",
+            json={"location_id": ""},
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 422
+
+    def test_record_selection_tracker_unavailable(self, main_client):
+        """204 returned silently when tracker is None."""
+        with patch("routers.locations.get_usage_tracker", return_value=None):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"location_id": "london"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+
+    def test_record_selection_rate_limited(self, main_client, mock_tracker):
+        """429 returned when rate limit is exceeded."""
+        with patch(
+            "routers.locations.check_rate_limit",
+            new=AsyncMock(return_value=(False, "Rate limit exceeded")),
+        ):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"location_id": "london"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 429
 
 
 if __name__ == "__main__":

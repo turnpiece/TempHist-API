@@ -814,6 +814,17 @@ GET /v1/records/daily/london/01-15/trend
 | `GET /weather/{location}/{date}` | Weather for specific date | `YYYY-MM-DD` |
 | `GET /forecast/{location}`       | Current weather forecast  | -            |
 
+### Locations Endpoints
+
+| Endpoint | Description | Auth |
+| -------- | ----------- | ---- |
+| `GET /v1/locations/preapproved` | Curated list of locations guaranteed to work with the weather endpoints | Public |
+| `GET /v1/locations/preapproved/status` | Service health for the preapproved list | Public |
+| `GET /v1/locations/popular` | Popular locations, ranked by usage (falls back to preapproved until enough signal exists) | Public |
+| `GET /v1/locations/popular/status` | Service health for the popular locations service | Public |
+| `GET /v1/locations/search` | Search for locations by city name | Public |
+| `POST /v1/locations/selections` | Record that a user selected a location — powers the popular ranking | Firebase |
+
 ### Social Sharing Endpoints
 
 | Endpoint                    | Description                                    | Auth     |
@@ -1089,6 +1100,51 @@ GET /v1/locations/popular?country_code=GB&tier=global&limit=5
 **Status Endpoint:** `GET /v1/locations/popular/status`
 
 Returns service health, including a `fallback` field indicating the current data source.
+
+#### Recording Location Selections
+
+Clients should notify the API whenever a user selects a location. This signal powers the dynamic popular locations ranking.
+
+**Endpoint:** `POST /v1/locations/selections`
+
+**Auth:** Firebase ID token required (same as weather endpoints)
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `location_id` | string | Yes | Canonical location ID (1–100 chars) — the `id` field from the preapproved list or weather API response |
+
+```json
+{
+  "location_id": "london"
+}
+```
+
+**Example request:**
+
+```bash
+curl -X POST https://api.temphist.com/v1/locations/selections \
+     -H "Authorization: Bearer <firebase-id-token>" \
+     -H "Content-Type: application/json" \
+     -d '{"location_id": "london"}'
+```
+
+**Important — send the canonical ID, not raw user input:**
+
+The API merges nearby locations (within 25km) to a single canonical identifier. A selection must be sent using the **resolved canonical ID** — the `id` or `slug` returned in the weather API response or from the preapproved list — not the raw string the user typed.
+
+For example, if a user searches for "Lambeth" and the API resolves that to the "london" canonical location, the client should send `"location_id": "london"`. Sending "lambeth" would record a counter for an identifier with no metadata, which cannot appear in the popular list.
+
+**When to call this endpoint:**
+
+- After a user explicitly selects a location from search results or a suggestions list
+- After the weather data for that location has successfully loaded (so you have the canonical ID from the response)
+- Do **not** call it for background prefetches, cache warming, or automated requests
+
+**Response:** `204 No Content`
+
+**Rate limiting:** Subject to the same per-IP/per-user limits as other endpoints. Automated or repeated calls for the same location within a short window are collapsed server-side.
 
 ## 🛡️ Rate Limiting
 
@@ -1532,6 +1588,14 @@ CACHE_INVALIDATION_BATCH_SIZE=100                 # Batch size for invalidation 
 ```bash
 USAGE_TRACKING_ENABLED=true                        # Enable usage tracking (default: true)
 USAGE_RETENTION_DAYS=7                             # Days to retain usage data (default: 7)
+```
+
+**Popular Locations:**
+
+```bash
+POPULARITY_WINDOW_DAYS=30                          # Rolling window for selection aggregation (default: 30)
+POPULARITY_MIN_SELECTIONS=100                      # Min selections before switching from preapproved fallback (default: 100)
+POPULARITY_MAX_LOCATIONS=20                        # Max locations returned by /v1/locations/popular (default: 20)
 ```
 
 ### Platform-Specific Examples

@@ -1,10 +1,11 @@
 import logging
 import time
-from typing import Dict, List
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Tuple
 
 import redis
 
-from config import USAGE_TRACKING_ENABLED, DEBUG
+from config import USAGE_TRACKING_ENABLED, DEBUG, POPULARITY_WINDOW_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +110,69 @@ class LocationUsageTracker:
             all_stats[location] = self.get_location_stats(location)
 
         return all_stats
+
+    def record_selection(self, location_id: str, user_uid: str) -> None:
+        """Record a location selection from a user (for popularity ranking)."""
+        if not USAGE_TRACKING_ENABLED:
+            return
+
+        today = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+        dedup_key = f"selection_dedup:{user_uid}:{location_id}:{today}"
+        if self.redis_client.exists(dedup_key):
+            logger.debug("selection dedup hit — skipped: uid=%s location=%s key=%s", user_uid, location_id, dedup_key)
+            return
+
+        # Mark dedup with 25-hour TTL so it spans day boundaries safely
+        self.redis_client.set(dedup_key, 1, ex=25 * 3600)
+
+        daily_key = f"selections:{today}"
+        self.redis_client.zincrby(daily_key, 1, location_id)
+        self.redis_client.expire(daily_key, (POPULARITY_WINDOW_DAYS + 5) * 86400)
+        logger.debug("selection recorded: uid=%s location=%s dedup_key=%s", user_uid, location_id, dedup_key)
+
+    def get_popular_from_selections(self, limit: int = 20, days: int = 30) -> List[Tuple[str, int]]:
+        """Return ranked location IDs from the rolling selection window."""
+        daily_keys = []
+        for i in range(days):
+            date = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y%m%d")
+            key = f"selections:{date}"
+            if self.redis_client.exists(key):
+                daily_keys.append(key)
+
+        if not daily_keys:
+            return []
+
+        tmp_key = "selections:union:tmp"
+        self.redis_client.zunionstore(tmp_key, daily_keys, aggregate="SUM")
+        self.redis_client.expire(tmp_key, 60)
+
+        raw = self.redis_client.zrevrange(tmp_key, 0, limit - 1, withscores=True)
+        self.redis_client.delete(tmp_key)
+
+        return [
+            (item.decode() if isinstance(item, bytes) else item, int(score))
+            for item, score in raw
+        ]
+
+    def get_total_selections(self, days: int = 30) -> int:
+        """Return total number of selections recorded in the rolling window."""
+        daily_keys = []
+        for i in range(days):
+            date = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y%m%d")
+            key = f"selections:{date}"
+            if self.redis_client.exists(key):
+                daily_keys.append(key)
+
+        if not daily_keys:
+            return 0
+
+        tmp_key = "selections:total:tmp"
+        self.redis_client.zunionstore(tmp_key, daily_keys, aggregate="SUM")
+        self.redis_client.expire(tmp_key, 60)
+
+        total = sum(
+            int(score) for _, score in self.redis_client.zrange(tmp_key, 0, -1, withscores=True)
+        )
+        self.redis_client.delete(tmp_key)
+        return total

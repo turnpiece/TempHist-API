@@ -2,6 +2,41 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-05-18] - Popular Locations Ordering, Image Opt-in & Stats (v1.2.14)
+
+### Fixed
+
+- **Popular locations ordering**: `GET /v1/locations/popular` was silently discarding the popularity rank because the shared `filter_locations()` helper sorted results alphabetically. Popularity order is now preserved when filtering.
+
+### Added
+
+- **`GET /v1/locations/popular/stats`**: Debug/ops endpoint returning each location ID ranked by total selections in the rolling window, along with `total_selections`, `min_selections_threshold`, `using_signal` (whether live signal or preapproved fallback is currently active), and an `in_preapproved` flag per entry.
+- **`include_images` query parameter** on `GET /v1/locations/popular` (default `false`): image fields (`imageUrl`, `imageAlt`, `imageAttribution`) are omitted by default to reduce response size for app clients that don't display location images. Pass `include_images=true` to restore them. The cache always stores full data; stripping is applied at response time.
+
+---
+
+## [2026-05-18] - Location Selections & Dynamic Popular Locations (v1.2.13)
+
+### Added
+
+- **`POST /v1/locations/selections`**: New authenticated endpoint for clients to record a canonical location ID selected by a user. Requires Firebase auth (anonymous users accepted). Returns 204 on success; silently no-ops when the usage tracker is unavailable. Used to build usage-derived popularity signal over time.
+- **`LocationUsageTracker.record_selection(location_id, user_uid)`**: Records one selection per user per location per day into a daily Redis sorted set (`selections:YYYYMMDD`). Per-user deduplication prevents a single user inflating a location's count; dedup key has a 25-hour TTL to span day boundaries safely.
+- **`LocationUsageTracker.get_popular_from_selections(limit, days)`**: Aggregates daily sorted sets over a rolling window using `ZUNIONSTORE` and returns location IDs ranked by total selections.
+- **`LocationUsageTracker.get_total_selections(days)`**: Returns the sum of all selection scores in the rolling window; used to check against the minimum-signal threshold before switching away from the preapproved fallback.
+- **Dynamic popular locations**: `GET /v1/locations/popular` now returns usage-derived rankings once the rolling window accumulates at least `POPULARITY_MIN_SELECTIONS` total selections. Falls back to the preapproved list until sufficient signal exists.
+
+### Configuration
+
+Three new environment variables (all optional):
+
+| Variable | Default | Description |
+|---|---|---|
+| `POPULARITY_WINDOW_DAYS` | `30` | Rolling window (days) for selection aggregation |
+| `POPULARITY_MIN_SELECTIONS` | `100` | Minimum total selections before switching from preapproved fallback |
+| `POPULARITY_MAX_LOCATIONS` | `20` | Maximum locations returned by `/v1/locations/popular` when no `limit` is specified |
+
+---
+
 ## [2026-05-18] - Popular Locations Endpoint (v1.2.12)
 
 ### Added

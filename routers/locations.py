@@ -23,7 +23,8 @@ import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
 from pydantic import BaseModel, Field, field_validator
 
-from config import BASE_URL, MAPBOX_TOKEN
+from config import BASE_URL, MAPBOX_TOKEN, POPULARITY_WINDOW_DAYS, POPULARITY_MIN_SELECTIONS, POPULARITY_MAX_LOCATIONS
+from cache.accessors import get_usage_tracker
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -104,6 +105,10 @@ class PopularResponse(BaseModel):
     count: int = Field(..., description="Number of locations returned")
     generated_at: datetime = Field(..., description="Response generation timestamp")
     locations: List[LocationItem] = Field(..., description="List of location items")
+
+class SelectionRequest(BaseModel):
+    """Request body for recording a location selection."""
+    location_id: str = Field(..., min_length=1, max_length=100, description="Canonical location ID")
 
 # Global state
 locations_data: List[LocationItem] = []
@@ -206,7 +211,8 @@ def filter_locations(
     locations: List[LocationItem],
     country_code: Optional[Union[str, FrozenSet[str]]] = None,
     tier: Optional[str] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    preserve_order: bool = False,
 ) -> List[LocationItem]:
     """Filter locations based on criteria."""
     filtered = locations
@@ -216,17 +222,30 @@ def filter_locations(
             filtered = [loc for loc in filtered if loc.country_code in country_code]
         else:
             filtered = [loc for loc in filtered if loc.country_code == country_code]
-    
+
     if tier:
         filtered = [loc for loc in filtered if loc.tier == tier]
-    
-    # Sort by name for deterministic output
-    filtered.sort(key=lambda x: x.name)
-    
+
+    if not preserve_order:
+        # Sort by name for deterministic output (preapproved endpoint)
+        filtered = sorted(filtered, key=lambda x: x.name)
+
     if limit:
         filtered = filtered[:limit]
-    
+
     return filtered
+
+_IMAGE_FIELDS = frozenset({"imageUrl", "imageAlt", "imageAttribution"})
+
+
+def _loc_to_dict(loc: LocationItem, include_images: bool) -> dict:
+    """Serialise a LocationItem, optionally stripping image fields."""
+    d = loc.model_dump()
+    if not include_images:
+        for field in _IMAGE_FIELDS:
+            d.pop(field, None)
+    return d
+
 
 def convert_image_urls(image_urls: Dict[str, str]) -> Dict[str, str]:
     """Convert relative image URLs to full URLs."""
@@ -564,25 +583,75 @@ async def get_locations_status():
 
 
 # ---------------------------------------------------------------------------
+# Popular locations helpers
+# ---------------------------------------------------------------------------
+
+def _build_popular_locations(limit: int) -> List[LocationItem]:
+    """
+    Return ranked LocationItem objects for the popular endpoint.
+
+    Falls back to the preapproved list (alphabetical) when:
+    - the usage tracker is unavailable, or
+    - total selections in the rolling window are below POPULARITY_MIN_SELECTIONS.
+    """
+    tracker = get_usage_tracker()
+    if tracker is None:
+        return locations_data[:limit]
+
+    total = tracker.get_total_selections(days=POPULARITY_WINDOW_DAYS)
+    if total < POPULARITY_MIN_SELECTIONS:
+        return locations_data[:limit]
+
+    # Fetch extra to cover IDs that may not be in the preapproved list
+    ranked = tracker.get_popular_from_selections(limit=limit * 2, days=POPULARITY_WINDOW_DAYS)
+    loc_by_id = {loc.id: loc for loc in locations_data}
+
+    result: List[LocationItem] = []
+    for location_id, _score in ranked:
+        loc = loc_by_id.get(location_id)
+        if loc:
+            result.append(loc)
+        if len(result) >= limit:
+            break
+
+    # Pad with preapproved fallback if not enough signal-derived results
+    if len(result) < limit:
+        seen_ids = {loc.id for loc in result}
+        for loc in locations_data:
+            if loc.id not in seen_ids:
+                result.append(loc)
+            if len(result) >= limit:
+                break
+
+    return result[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Popular locations endpoint
 # ---------------------------------------------------------------------------
 
-@router.get("/v1/locations/popular", response_model=PopularResponse)
+@router.get("/v1/locations/popular")
 async def get_popular_locations(
     request: Request,
     response: Response,
     country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code"),
     tier: Optional[str] = Query(None, description="Filter by location tier"),
-    limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})")
+    limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})"),
+    include_images: bool = Query(False, description="Include imageUrl, imageAlt, imageAttribution fields (default false)"),
 ):
     """
     Get popular locations with optional filtering.
 
-    Returns the most popular locations for use with the weather API.
-    Currently falls back to the preapproved list; will reflect usage-based
-    ranking once popularity tracking is implemented.
+    Returns the most popular locations ranked by selection frequency, falling
+    back to the preapproved list until sufficient usage signal exists.
 
-    Supports the same filtering parameters as /v1/locations/preapproved.
+    Image fields (imageUrl, imageAlt, imageAttribution) are omitted by default;
+    pass include_images=true if you need them.
+
+    Response shape:
+      { version, count, generated_at, locations: [{id, slug, name, admin1,
+        country_name, country_code, latitude, longitude, timezone, tier,
+        [imageUrl, imageAlt, imageAttribution if include_images=true]}] }
     """
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
@@ -610,6 +679,7 @@ async def get_popular_locations(
     if if_modified_since and if_modified_since == locations_last_modified:
         return Response(status_code=304)
 
+    # Cache always stores full location data (with images); strip at response time.
     cache_key = get_popular_cache_key(cache_country_key, tier)
     cached_response = await get_cached_response(cache_key)
 
@@ -617,24 +687,34 @@ async def get_popular_locations(
         response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
         response.headers["ETag"] = locations_etag
         response.headers["Last-Modified"] = locations_last_modified
-        return PopularResponse(**cached_response)
+        if not include_images:
+            for loc in cached_response.get("locations", []):
+                for field in _IMAGE_FIELDS:
+                    loc.pop(field, None)
+        return cached_response
 
-    filtered_locations = filter_locations(locations_data, resolved_country, tier, limit)
+    # Build ranked list (popularity order preserved), then apply filters
+    popular = _build_popular_locations(limit or POPULARITY_MAX_LOCATIONS)
+    filtered_locations = filter_locations(popular, resolved_country, tier, limit, preserve_order=True)
 
-    response_data = {
+    # Cache full data (with images)
+    full_data = {
         "version": 1,
         "count": len(filtered_locations),
         "generated_at": datetime.now().isoformat(),
-        "locations": [loc.model_dump() for loc in filtered_locations]
+        "locations": [loc.model_dump() for loc in filtered_locations],
     }
-
-    await set_cached_response(cache_key, response_data)
+    await set_cached_response(cache_key, full_data)
 
     response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
     response.headers["ETag"] = locations_etag
     response.headers["Last-Modified"] = locations_last_modified
 
-    return PopularResponse(**response_data)
+    if include_images:
+        return full_data
+
+    slim_locs = [_loc_to_dict(loc, include_images=False) for loc in filtered_locations]
+    return {**full_data, "locations": slim_locs}
 
 
 @router.get("/v1/locations/popular/status")
@@ -652,6 +732,75 @@ async def get_popular_locations_status():
             "window_seconds": RATE_LIMIT_WINDOW
         }
     }
+
+
+@router.get("/v1/locations/popular/stats")
+async def get_popular_locations_stats():
+    """
+    Debug/ops endpoint: per-location selection counts from the rolling window.
+
+    Returns each location ID ranked by total selections, the window size,
+    the minimum-signal threshold, and whether live signal is currently being
+    served (vs. the preapproved fallback).
+
+    No authentication required. Rate-limit exempt.
+    """
+    tracker = get_usage_tracker()
+    if tracker is None:
+        return {
+            "status": "unavailable",
+            "window_days": POPULARITY_WINDOW_DAYS,
+            "total_selections": 0,
+            "min_selections_threshold": POPULARITY_MIN_SELECTIONS,
+            "using_signal": False,
+            "locations": [],
+        }
+
+    ranked = tracker.get_popular_from_selections(limit=500, days=POPULARITY_WINDOW_DAYS)
+    total = tracker.get_total_selections(days=POPULARITY_WINDOW_DAYS)
+    loc_by_id = {loc.id: loc for loc in locations_data}
+
+    return {
+        "status": "ok",
+        "window_days": POPULARITY_WINDOW_DAYS,
+        "total_selections": total,
+        "min_selections_threshold": POPULARITY_MIN_SELECTIONS,
+        "using_signal": total >= POPULARITY_MIN_SELECTIONS,
+        "locations": [
+            {
+                "location_id": loc_id,
+                "name": loc_by_id[loc_id].name if loc_id in loc_by_id else None,
+                "count": count,
+                "in_preapproved": loc_id in loc_by_id,
+            }
+            for loc_id, count in ranked
+        ],
+    }
+
+
+@router.post("/v1/locations/selections", status_code=204)
+async def record_location_selection(request: Request, body: SelectionRequest):
+    """
+    Record a canonical location ID selected by the authenticated user.
+
+    Used to build usage-derived popular locations over time.
+    Requires Firebase authentication (anonymous users are accepted).
+    Silently no-ops when the usage tracker is unavailable.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    client_ip = request.client.host
+    allowed, reason = await check_rate_limit(client_ip)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
+
+    uid = request.state.user.get("uid", "anonymous")
+    tracker = get_usage_tracker()
+    if tracker is not None:
+        tracker.record_selection(body.location_id, uid)
+
+    return Response(status_code=204)
 
 
 async def initialize_locations_data(redis: redis.Redis):
