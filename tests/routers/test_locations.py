@@ -35,6 +35,8 @@ from routers.locations import (
     filter_locations,
     convert_image_urls,
     _find_preapproved_id,
+    _resolve_canonical_id,
+    SelectionRequest,
     EU_MEMBER_CODES,
     COUNTRY_CODE_ALIASES,
 )
@@ -704,6 +706,25 @@ class TestSearchEndpoint:
             assert _find_preapproved_id("Paris", "FR") == "paris"
             assert _find_preapproved_id("New York", "US") == "new_york"
 
+    def test_resolve_canonical_id_uses_explicit_location_id(self, sample_locations):
+        with patch("routers.locations.locations_data", sample_locations):
+            req = SelectionRequest(location_id="my_custom_id")
+            assert _resolve_canonical_id(req) == "my_custom_id"
+
+    def test_resolve_canonical_id_matches_preapproved(self, sample_locations):
+        with patch("routers.locations.locations_data", sample_locations):
+            req = SelectionRequest(name="London", country_code="GB")
+            assert _resolve_canonical_id(req) == "london"
+
+    def test_resolve_canonical_id_generates_slug(self):
+        with patch("routers.locations.locations_data", []):
+            req = SelectionRequest(name="Stoke-on-Trent", country_code="GB")
+            assert _resolve_canonical_id(req) == "stoke_on_trent"
+
+    def test_resolve_canonical_id_slug_no_country(self):
+        req = SelectionRequest(name="Macclesfield")
+        assert _resolve_canonical_id(req) == "macclesfield"
+
     def test_find_preapproved_id_no_match(self, sample_locations):
         """Helper returns None when no preapproved location matches."""
         with patch("routers.locations.locations_data", sample_locations):
@@ -837,13 +858,54 @@ class TestSelectionEndpoint:
         assert response.status_code == 401
 
     def test_record_selection_empty_location_id(self, main_client):
-        """Empty location_id fails Pydantic min_length validation."""
+        """Empty location_id with no name fails Pydantic min_length validation."""
         response = main_client.post(
             "/v1/locations/selections",
             json={"location_id": ""},
             headers={"Authorization": "Bearer test-token"},
         )
         assert response.status_code == 422
+
+    def test_record_selection_no_fields(self, main_client):
+        """Neither location_id nor name → 422 from model_validator."""
+        response = main_client.post(
+            "/v1/locations/selections",
+            json={},
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 422
+
+    def test_record_selection_with_name_only(self, main_client, mock_tracker):
+        """Name-only submission generates a slug and records it."""
+        response = main_client.post(
+            "/v1/locations/selections",
+            json={"name": "Macclesfield"},
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 204
+        mock_tracker.record_selection.assert_called_once_with("macclesfield", "testuser")
+
+    def test_record_selection_name_matches_preapproved(self, main_client, mock_tracker):
+        """Name + country_code matching a preapproved location uses its canonical ID."""
+        with patch("routers.locations.locations_data", [LocationItem(**SAMPLE_LOCATIONS[0])]):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "London", "country_code": "GB"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.record_selection.assert_called_once_with("london", "testuser")
+
+    def test_record_selection_name_no_preapproved_match_uses_slug(self, main_client, mock_tracker):
+        """Name + country_code with no preapproved match falls back to slug."""
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Stoke-on-Trent", "country_code": "GB"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.record_selection.assert_called_once_with("stoke_on_trent", "testuser")
 
     def test_record_selection_tracker_unavailable(self, main_client):
         """204 returned silently when tracker is None."""

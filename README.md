@@ -1111,13 +1111,31 @@ Clients should notify the API whenever a user selects a location. This signal po
 
 **Request body:**
 
+Supply either `location_id` **or** `name` (at least one required):
+
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `location_id` | string | Yes | Canonical location ID (1–100 chars) — the `id` field from the preapproved list or weather API response |
+| `location_id` | string | one of these | Canonical ID from the API — the `id` field on location objects or from `/v1/locations/search` results |
+| `name` | string | one of these | City or place name |
+| `admin1` | string | No | First-level administrative division (state, county, region) |
+| `country_code` | string | No | ISO 3166-1 alpha-2 country code — improves preapproved list matching when `name` is used |
 
+The API resolves the submission to a canonical ID in this order:
+1. `location_id` if provided
+2. Match `name` + `country_code` against the preapproved list (so selections for known locations accumulate toward the popular ranking)
+3. Slug generated from `name` — for any other location
+
+**With `location_id` (search results and popular list):**
+```json
+{ "location_id": "london" }
+```
+
+**With name fields (GPS, recent locations, or any location without a known ID):**
 ```json
 {
-  "location_id": "london"
+  "name": "Macclesfield",
+  "admin1": "England",
+  "country_code": "GB"
 }
 ```
 
@@ -1127,24 +1145,19 @@ Clients should notify the API whenever a user selects a location. This signal po
 curl -X POST https://api.temphist.com/v1/locations/selections \
      -H "Authorization: Bearer <firebase-id-token>" \
      -H "Content-Type: application/json" \
-     -d '{"location_id": "london"}'
+     -d '{"name": "Macclesfield", "admin1": "England", "country_code": "GB"}'
 ```
-
-**Important — send the canonical ID, not raw user input:**
-
-The API merges nearby locations (within 25km) to a single canonical identifier. A selection must be sent using the **resolved canonical ID** — the `id` or `slug` returned in the weather API response or from the preapproved list — not the raw string the user typed.
-
-For example, if a user searches for "Lambeth" and the API resolves that to the "london" canonical location, the client should send `"location_id": "london"`. Sending "lambeth" would record a counter for an identifier with no metadata, which cannot appear in the popular list.
 
 **When to call this endpoint:**
 
 - After a user explicitly selects a location from search results or a suggestions list
-- After the weather data for that location has successfully loaded (so you have the canonical ID from the response)
+- After a user taps a popular or recent location
+- When the user's GPS location is loaded
 - Do **not** call it for background prefetches, cache warming, or automated requests
 
 **Response:** `204 No Content`
 
-**Rate limiting:** Subject to the same per-IP/per-user limits as other endpoints. Automated or repeated calls for the same location within a short window are collapsed server-side.
+**Rate limiting:** Subject to the same per-IP/per-user limits as other endpoints. Per-user deduplication prevents a single user inflating counts — the first selection per location per day is recorded; subsequent ones for the same user are silently ignored.
 
 ## 🛡️ Rate Limiting
 

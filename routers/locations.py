@@ -21,7 +21,7 @@ import aiohttp
 import pycountry
 import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from config import BASE_URL, MAPBOX_TOKEN, POPULARITY_WINDOW_DAYS, POPULARITY_MIN_SELECTIONS, POPULARITY_MAX_LOCATIONS
 from cache.accessors import get_usage_tracker
@@ -107,8 +107,34 @@ class PopularResponse(BaseModel):
     locations: List[LocationItem] = Field(..., description="List of location items")
 
 class SelectionRequest(BaseModel):
-    """Request body for recording a location selection."""
-    location_id: str = Field(..., min_length=1, max_length=100, description="Canonical location ID")
+    """Request body for recording a location selection.
+
+    Supply either ``location_id`` (canonical ID from the API) or the human
+    fields ``name`` + optionally ``admin1`` / ``country_code``.  At least one
+    of ``location_id`` or ``name`` is required.
+    """
+    location_id: Optional[str] = Field(
+        None, min_length=1, max_length=100,
+        description="Canonical location ID returned by the API (id field on location objects)",
+    )
+    name: Optional[str] = Field(
+        None, min_length=1, max_length=200,
+        description="City or place name",
+    )
+    admin1: Optional[str] = Field(
+        None, max_length=200,
+        description="First-level administrative division (state, county, region, etc.)",
+    )
+    country_code: Optional[str] = Field(
+        None, min_length=2, max_length=2,
+        description="ISO 3166-1 alpha-2 country code",
+    )
+
+    @model_validator(mode="after")
+    def require_location_or_name(self) -> "SelectionRequest":
+        if not self.location_id and not self.name:
+            raise ValueError("Provide either 'location_id' or 'name' (with optional admin1 / country_code)")
+        return self
 
 # Global state
 locations_data: List[LocationItem] = []
@@ -254,6 +280,30 @@ def _find_preapproved_id(name: str, country_code: str) -> Optional[str]:
         if (loc.name.lower(), loc.country_code) == target:
             return loc.id
     return None
+
+
+def _resolve_canonical_id(body: "SelectionRequest") -> str:
+    """Resolve a SelectionRequest to a canonical location ID.
+
+    Resolution order:
+    1. ``location_id`` if explicitly supplied.
+    2. Preapproved list match on name + country_code (so submissions without
+       a location_id still accumulate signal toward the popular ranking when
+       the location is in the preapproved list).
+    3. Slug generated from name — lowercase, non-alphanumeric runs replaced
+       by underscores.  Allows tracking any location even if not preapproved.
+    """
+    if body.location_id:
+        return body.location_id
+
+    name = body.name or ""
+
+    if body.country_code:
+        preapproved_id = _find_preapproved_id(name, body.country_code)
+        if preapproved_id:
+            return preapproved_id
+
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "unknown"
 
 
 def convert_image_urls(image_urls: Dict[str, str]) -> Dict[str, str]:
@@ -815,9 +865,17 @@ async def record_location_selection(request: Request, body: SelectionRequest):
         raise HTTPException(status_code=429, detail=reason)
 
     uid = request.state.user.get("uid", "anonymous")
+    canonical_id = _resolve_canonical_id(body)
+    logger.debug(
+        "selection resolving: input=%r → canonical_id=%s uid=%s",
+        body.location_id or body.name,
+        canonical_id,
+        uid,
+    )
+
     tracker = get_usage_tracker()
     if tracker is not None:
-        tracker.record_selection(body.location_id, uid)
+        tracker.record_selection(canonical_id, uid)
 
     return Response(status_code=204)
 
