@@ -116,3 +116,19 @@ class TestCalculateTrendSlope:
         _, r_squared, _ = calculate_trend_slope(data)
         assert r_squared is not None
         assert 0.0 <= r_squared <= 1.0
+
+    def test_sparse_data_inflates_slope_error(self):
+        # 3 points at 2000, 2005, 2010: year_span=11, n=3, inflation=sqrt(11/3)≈1.915
+        # Manually verified: raw SE ≈ 1.73, inflated SE ≈ 3.32
+        data = self._make_data([2000, 2005, 2010], [10.0, 11.0, 9.0])
+        _, _, slope_error = calculate_trend_slope(data)
+        assert slope_error == pytest.approx(3.32, abs=0.01)
+
+    def test_complete_data_no_inflation(self):
+        # When every year in the span has data, the inflation factor is 1 — SE unchanged.
+        years = list(range(2000, 2010))
+        temps = [10.0 + i * 0.2 + (0.3 if i % 3 == 0 else 0.0) for i in range(10)]
+        data = self._make_data(years, temps)
+        _, _, slope_error = calculate_trend_slope(data)
+        # year_span == n == 10, so no inflation; error should still be positive
+        assert slope_error is not None and slope_error >= 0

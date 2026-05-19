@@ -68,7 +68,13 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional
     slope_error = None
     if n > 2:
         ss_xx = denominator / n
-        slope_error = round((ss_res / ((n - 2) * ss_xx)) ** 0.5 * 10.0, 2)
+        slope_error = (ss_res / ((n - 2) * ss_xx)) ** 0.5 * 10.0
+        # Inflate SE for missing years: sparse data over a long span has more
+        # uncertainty than OLS on the observed points alone can express.
+        year_span = data[-1]['x'] - data[0]['x'] + 1
+        if year_span > n:
+            slope_error *= (year_span / n) ** 0.5
+        slope_error = round(slope_error, 2)
 
     return round(slope_per_year * 10.0, 2), r_squared, slope_error
 
