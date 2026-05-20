@@ -119,7 +119,7 @@ def _convert_c_to_unit(temp_c: float, unit_group: str) -> float:
     if group in ("celsius", "metric"):
         return temp_c
     if group in ("fahrenheit", "us"):
-        return round((temp_c * 9.0 / 5.0) + 32.0, 1)
+        return round((temp_c * 9.0 / 5.0) + 32.0, 2)
     return temp_c
 
 
@@ -441,7 +441,7 @@ async def _collect_rolling_window_values(
             TemperatureValue(
                 date=anchor.strftime("%Y-%m-%d"),
                 year=anchor.year,
-                temperature=round(avg_temp, 1),
+                temperature=round(avg_temp, 2),
             )
         )
 
@@ -561,7 +561,7 @@ async def get_temperature_data_v1(
         series_mean = sum(all_temps) / len(all_temps)
         series_std_dev = calculate_standard_deviation(all_temps)
         avg_data = AverageData(
-            mean=round(series_mean, 1),
+            mean=round(series_mean, 2),
             unit=unit_group,
             data_points=len(all_temps),
             standard_deviation=series_std_dev
@@ -747,12 +747,7 @@ def _rebuild_full_response_from_values(
 
     # Format average based on unit
     if all_temps:
-        if unit_group.lower() == "fahrenheit":
-            # Fahrenheit averages as whole numbers (0 decimal places)
-            avg_mean = round(sum(all_temps) / len(all_temps), 0)
-        else:
-            # Celsius with 1 decimal place
-            avg_mean = round(sum(all_temps) / len(all_temps), 1)
+        avg_mean = round(sum(all_temps) / len(all_temps), 2)
         
         avg_data = {
             "mean": avg_mean,

@@ -26,7 +26,7 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     if not historical_data:
         return 0.0
     avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
-    return round(avg_temp, 1)
+    return round(avg_temp, 2)
 
 
 def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional[float], Optional[float]]:
@@ -121,7 +121,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     if latest.get('y') is None:
         return "No valid temperature data for the latest year."
 
-    avg_temp = round(mean, 1) if mean is not None else calculate_historical_average(data)
+    avg_temp = round(mean, 2) if mean is not None else calculate_historical_average(data)
     diff = latest['y'] - avg_temp
     is_fahrenheit = unit_group.lower() == "fahrenheit"
     rounded_diff = int(round(diff, 0)) if is_fahrenheit else round(diff, 1)

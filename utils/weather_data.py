@@ -208,7 +208,7 @@ async def get_forecast_data(location: str, date, redis_client: redis.Redis = Non
             return {
                 "location": location,
                 "date": date,
-                "average_temperature": round(temp, 1),
+                "average_temperature": round(temp, 2),
                 "unit": "celsius"
             }
         else:

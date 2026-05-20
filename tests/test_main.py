@@ -61,7 +61,7 @@ def test_calculate_historical_average():
     avg = calculate_historical_average(SAMPLE_TEMPERATURE_DATA["data"])
     # Should only use data up to 1974 (excluding 2024)
     expected_avg = (15.0 + 15.5 + 16.0 + 15.8 + 16.2) / 5
-    assert round(avg, 1) == round(expected_avg, 1)
+    assert round(avg, 2) == round(expected_avg, 2)
 
 def test_calculate_historical_average_insufficient_data():
     """Test historical average with insufficient data"""
@@ -151,8 +151,8 @@ async def test_average_vs_current_temperature():
     # Test average calculation
     avg = calculate_historical_average(test_data)
     expected_avg = (15.0 + 15.5 + 16.0 + 15.8 + 16.2) / 5
-    assert round(avg, 1) == round(expected_avg, 1)
-    
+    assert round(avg, 2) == round(expected_avg, 2)
+
     # Test summary text generation
     from main import get_summary
     # Patch the last year to be current year
