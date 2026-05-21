@@ -176,7 +176,15 @@ def cache_get(
         vkey = _val_key(agg, canonical, end_iso)
 
         # Try exact match first
-        stored = r.get(vkey)
+        try:
+            stored = r.get(vkey)
+        except UnicodeDecodeError:
+            logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {vkey}")
+            try:
+                r.delete(vkey)
+            except Exception:
+                pass
+            stored = None
         if stored:
             # Handle both base64-encoded string (new) and raw bytes (legacy)
             raw_gz = base64.b64decode(stored) if isinstance(stored, str) else stored
@@ -210,7 +218,16 @@ def cache_get(
         if isinstance(nearest_iso, bytes):
             nearest_iso = nearest_iso.decode()
 
-        stored2 = r.get(_val_key(agg, canonical, nearest_iso))
+        _approx_key = _val_key(agg, canonical, nearest_iso)
+        try:
+            stored2 = r.get(_approx_key)
+        except UnicodeDecodeError:
+            logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {_approx_key}")
+            try:
+                r.delete(_approx_key)
+            except Exception:
+                pass
+            stored2 = None
 
         if not stored2:
             return None
