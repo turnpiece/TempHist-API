@@ -26,6 +26,7 @@ WORKER_HEARTBEAT_INTERVAL_CYCLES = 60  # Update heartbeat every 60 poll cycles (
 WORKER_DEEP_CLEANUP_INTERVAL_CYCLES = 300  # Deep queue cleanup every 300 cycles (~5 minutes)
 WORKER_DEEP_CLEANUP_BATCH_SIZE = 1000  # Max entries to scan during deep cleanup
 WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES = 300  # Log heartbeat every 300 cycles (5 minutes)
+MAX_PENDING_AGE_SECONDS = 300  # Jobs pending longer than 5 minutes are expired unprocessed
 
 class JobWorker:
     """Background worker for processing async jobs."""
@@ -218,7 +219,23 @@ class JobWorker:
                                 job["updated_at"] = datetime.now(timezone.utc).isoformat()
                                 self.redis.setex(f"job:{job_id}", CACHE_TTL_JOB, json.dumps(job))
                                 stale_ids.append(job_id)
-                    elif status not in (JobStatus.PENDING,):
+                    elif status == JobStatus.PENDING:
+                        created_at_str = job.get("created_at")
+                        if created_at_str:
+                            age_seconds = (
+                                datetime.now(timezone.utc)
+                                - datetime.fromisoformat(created_at_str)
+                            ).total_seconds()
+                            if age_seconds > MAX_PENDING_AGE_SECONDS:
+                                logger.warning(
+                                    f"⏰ Job {job_id} expired after {age_seconds:.0f}s in PENDING state"
+                                )
+                                job["status"] = JobStatus.ERROR
+                                job["error"] = "Job expired: too long waiting in queue"
+                                job["updated_at"] = datetime.now(timezone.utc).isoformat()
+                                self.redis.setex(f"job:{job_id}", CACHE_TTL_JOB, json.dumps(job))
+                                stale_ids.append(job_id)
+                    else:
                         stale_ids.append(job_id)
 
             for job_id in stale_ids:
