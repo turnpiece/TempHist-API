@@ -522,7 +522,7 @@ async def get_temperature_data_v1(
                     values.append(TemperatureValue(
                         date=f"{year}-{month:02d}-{day:02d}",
                         year=year,
-                        temperature=temp
+                        temperature=round(temp, 2)
                     ))
     
     elif period in ["weekly", "monthly", "yearly"]:
