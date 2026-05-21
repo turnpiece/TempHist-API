@@ -40,7 +40,8 @@ class JobWorker:
         """Start the job worker."""
         self.running = True
         logger.info("🚀 Job worker started")
-        
+        self._refresh_heartbeat()
+
         poll_count = 0
         try:
             while self.running:
@@ -235,9 +236,19 @@ class JobWorker:
         except Exception as e:
             logger.error(f"❌ Error during deep queue cleanup: {e}")
 
+    def _refresh_heartbeat(self) -> None:
+        """Write a fresh heartbeat to Redis. Called at startup and before each job."""
+        try:
+            self.redis.setex("worker:heartbeat", 180, datetime.now(timezone.utc).isoformat())
+        except Exception:
+            pass
+
     async def process_job(self, job_id: str, job_manager):
         """Process a single job."""
         start_time = datetime.now(timezone.utc)
+        # Keep heartbeat alive so the worker-status endpoint sees us as healthy
+        # even when a single long-running job would otherwise starve the poll loop.
+        self._refresh_heartbeat()
         try:
             # Update job status to processing
             job_manager.update_job_status(job_id, JobStatus.PROCESSING)

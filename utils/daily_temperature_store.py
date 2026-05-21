@@ -773,9 +773,10 @@ class DailyTemperatureStore:
                     )
             else:
                 logger.warning(
-                    "DailyTemperatureStore.upsert failed for %s due to %s. Skipping persistence.",
+                    "DailyTemperatureStore.upsert failed for %s due to %s (%s). Skipping persistence.",
                     location,
-                    exc,
+                    repr(exc),
+                    type(exc).__name__,
                 )
 
     @staticmethod
