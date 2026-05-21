@@ -245,7 +245,7 @@ def _enqueue_backfill_job(period: str, location: str, identifier: str, year: int
         slug = normalize_location_for_cache(location)
 
         # Skip years known to have no data (marked by the worker after a failed DB pre-check)
-        skip_key = f"backfill:skip:{period}:{slug}:{identifier}:{year}"
+        skip_key = f"backfill:skip:{period}:{slug}:{year}"
         if job_manager.redis.exists(skip_key):
             return
 

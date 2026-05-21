@@ -437,7 +437,7 @@ class JobWorker:
                         if not _year_cache:
                             logger.info(f"⏭️ No DB data for year {year} at {location}, skipping")
                             try:
-                                skip_key = f"backfill:skip:{scope}:{normalize_location_for_cache(location)}:{identifier}:{year}"
+                                skip_key = f"backfill:skip:{scope}:{normalize_location_for_cache(location)}:{year}"
                                 self.redis.setex(skip_key, 86400, "1")
                             except Exception:
                                 pass
