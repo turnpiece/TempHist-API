@@ -250,6 +250,10 @@ class CacheWarmer:
             return {"status": "skipped", "message": "Redis not available", "error": str(e)}
 
         self.warming_in_progress = True
+        try:
+            self.redis_client.setex("cache_warming:in_progress", 3600, "1")
+        except Exception:
+            pass
         start_time = time.time()
 
         try:
@@ -308,6 +312,13 @@ class CacheWarmer:
                 "last_warming_duration": duration,
             })
             self.last_warming_time = datetime.now()
+            try:
+                self.redis_client.set("cache_warming:stats", json.dumps({
+                    "last_warming_time": self.last_warming_time.isoformat(),
+                    **self.warming_stats,
+                }))
+            except Exception:
+                pass
 
             if DEBUG:
                 logger.info(
@@ -331,13 +342,36 @@ class CacheWarmer:
             return {"status": "error", "message": str(e), "duration_seconds": time.time() - start_time}
         finally:
             self.warming_in_progress = False
+            try:
+                self.redis_client.delete("cache_warming:in_progress")
+            except Exception:
+                pass
 
     def get_warming_stats(self) -> Dict:
+        stats = dict(self.warming_stats)
+        last_warming_time = self.last_warming_time.isoformat() if self.last_warming_time else None
+        in_progress = self.warming_in_progress
+
+        try:
+            raw = self.redis_client.get("cache_warming:stats")
+            if raw:
+                persisted = json.loads(raw)
+                last_warming_time = persisted.get("last_warming_time")
+                stats = {
+                    "total_warmed": persisted.get("total_warmed", 0),
+                    "successful_warmed": persisted.get("successful_warmed", 0),
+                    "failed_warmed": persisted.get("failed_warmed", 0),
+                    "last_warming_duration": persisted.get("last_warming_duration", 0),
+                }
+            in_progress = bool(self.redis_client.exists("cache_warming:in_progress"))
+        except Exception:
+            pass
+
         return {
             "enabled": CACHE_WARMING_ENABLED,
-            "in_progress": self.warming_in_progress,
-            "last_warming_time": self.last_warming_time.isoformat() if self.last_warming_time else None,
-            "stats": self.warming_stats,
+            "in_progress": in_progress,
+            "last_warming_time": last_warming_time,
+            "stats": stats,
             "configuration": {
                 "interval_hours": CACHE_WARMING_INTERVAL_HOURS,
                 "days_back": CACHE_WARMING_DAYS_BACK,
