@@ -389,7 +389,29 @@ class JobWorker:
                 return {"skipped": True, "reason": f"year {year} outside window {oldest_year}–{current_year}"}
 
             logger.info(f"📅 Fetching data for year {year} only")
-            
+
+            # Quick DB pre-check for historical years: if the DB has no records for this
+            # year's date window, skip now rather than running the full 51-year computation
+            # which also triggers inline VC API calls for every other missing year.
+            # Current year is exempt — it may have sparse data still being collected.
+            if year < current_year:
+                from routers.v1_records import parse_identifier as _parse_id, _resolve_anchor_date, WINDOW_DAYS
+                from utils.daily_temperature_store import get_daily_temperature_store
+                from datetime import timedelta as _td
+                try:
+                    _month, _day, _ = _parse_id(scope, identifier)
+                    _anchor = _resolve_anchor_date(year, _month, _day)
+                    if _anchor is not None:
+                        _window = 1 if scope == "daily" else WINDOW_DAYS.get(scope, 1)
+                        _year_dates = [_anchor - _td(days=_window - 1) + _td(days=i) for i in range(_window)]
+                        _store = await get_daily_temperature_store()
+                        _year_cache = await _store.fetch(location, _year_dates)
+                        if not _year_cache:
+                            logger.info(f"⏭️ No DB data for year {year} at {location}, skipping")
+                            return {"skipped": True, "reason": f"no data available for year {year}"}
+                except Exception as _pre_err:
+                    logger.debug(f"DB pre-check skipped for {location} year {year}: {_pre_err}")
+
             # Fetch full data (get_temperature_data_v1 fetches all years, but we'll extract just the one we need)
             try:
                 full_data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
