@@ -186,6 +186,7 @@ class TestBackfillCooldown:
 
         mock_jm = MagicMock()
         mock_get_jm.return_value = mock_jm
+        mock_jm.redis.exists.return_value = 0  # no skip marker
         # Redis SET NX returns True (key was newly created)
         mock_jm.redis.set.return_value = True
 
@@ -215,6 +216,7 @@ class TestBackfillCooldown:
 
         mock_jm = MagicMock()
         mock_get_jm.return_value = mock_jm
+        mock_jm.redis.exists.return_value = 0  # no skip marker
         mock_jm.redis.set.return_value = True
 
         _enqueue_backfill_job("yearly", "London, United Kingdom", "06-15", 1990)
@@ -228,6 +230,20 @@ class TestBackfillCooldown:
         # Should use nx=True and ex=60
         assert set_call[1]["nx"] is True
         assert set_call[1]["ex"] == 60
+
+    @patch("routers.v1_records.get_job_manager")
+    def test_skip_marker_prevents_enqueue(self, mock_get_jm):
+        """If a skip marker exists for this year, no job should be created."""
+        from routers.v1_records import _enqueue_backfill_job
+
+        mock_jm = MagicMock()
+        mock_get_jm.return_value = mock_jm
+        mock_jm.redis.exists.return_value = 1  # skip marker present
+
+        _enqueue_backfill_job("yearly", "Mogadishu, Banaadir, Somalia", "05-21", 1994)
+
+        mock_jm.redis.set.assert_not_called()
+        mock_jm.create_job.assert_not_called()
 
     @patch("routers.v1_records.get_job_manager")
     def test_no_job_manager_does_not_raise(self, mock_get_jm):
