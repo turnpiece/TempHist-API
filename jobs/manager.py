@@ -124,6 +124,8 @@ class JobManager:
             logger.info(f"Job {job_id} added to queue")
 
             return job_id
+        except JobQueueFullError:
+            raise  # already logged as WARNING above
         except Exception as e:
             logger.error(f"Error in create_job: {e}")
             logger.error(f"Error type: {type(e).__name__}")

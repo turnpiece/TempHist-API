@@ -242,9 +242,15 @@ def _enqueue_backfill_job(period: str, location: str, identifier: str, year: int
         if not job_manager:
             return
 
+        slug = normalize_location_for_cache(location)
+
+        # Skip years known to have no data (marked by the worker after a failed DB pre-check)
+        skip_key = f"backfill:skip:{period}:{slug}:{identifier}:{year}"
+        if job_manager.redis.exists(skip_key):
+            return
+
         # Router-level cooldown: skip enqueue if we already requested this
         # backfill recently.  60 s is enough for the worker to pick it up.
-        slug = normalize_location_for_cache(location)
         cooldown_key = f"backfill:cd:{period}:{slug}:{identifier}:{year}"
         if job_manager.redis.set(cooldown_key, 1, nx=True, ex=60):
             # Key was newly set — proceed with enqueue

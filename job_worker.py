@@ -419,6 +419,11 @@ class JobWorker:
                         _year_cache = await _store.fetch(location, _year_dates)
                         if not _year_cache:
                             logger.info(f"⏭️ No DB data for year {year} at {location}, skipping")
+                            try:
+                                skip_key = f"backfill:skip:{scope}:{normalize_location_for_cache(location)}:{identifier}:{year}"
+                                self.redis.setex(skip_key, 86400, "1")
+                            except Exception:
+                                pass
                             return {"skipped": True, "reason": f"no data available for year {year}"}
                 except Exception as _pre_err:
                     logger.debug(f"DB pre-check skipped for {location} year {year}: {_pre_err}")

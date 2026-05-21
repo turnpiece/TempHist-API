@@ -19,7 +19,7 @@ WORKER_HEARTBEAT_TIMEOUT_SECONDS = 60  # 1 minute - worker considered unhealthy 
 MAX_STUCK_JOBS_TO_DISPLAY = 10  # Limit number of stuck jobs shown in diagnostics
 
 
-def get_diagnostics_recommendations(worker_alive, heartbeat_age, jobs_by_status, stuck_count):
+def get_diagnostics_recommendations(worker_alive, heartbeat_age, jobs_by_status, stuck_count, long_pending_count=0):
     """Generate diagnostic recommendations based on worker and job status."""
     recommendations = []
     
@@ -58,11 +58,22 @@ def get_diagnostics_recommendations(worker_alive, heartbeat_age, jobs_by_status,
     if stuck_count > 0:
         recommendations.append({
             "severity": "warning",
-            "issue": f"{stuck_count} jobs stuck for >5 minutes",
+            "issue": f"{stuck_count} job(s) stuck in PROCESSING for >5 minutes",
             "actions": [
                 "Check server logs for processing errors",
                 "These jobs may need to be manually cleared",
                 "Use diagnose_jobs.py --clear-stuck to clear them"
+            ]
+        })
+
+    if long_pending_count > 0:
+        recommendations.append({
+            "severity": "info",
+            "issue": f"{long_pending_count} job(s) have been pending for >5 minutes",
+            "actions": [
+                "Jobs are queued but not yet processed — this is normal for a long queue",
+                "Worker is processing them serially; they will clear in time",
+                "If count is not decreasing, check worker logs for errors"
             ]
         })
     
@@ -204,6 +215,7 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
         }
         
         stuck_jobs = []
+        long_pending_jobs = []
         jobs_examined = []
         
         # Get all job IDs from the queue
@@ -230,22 +242,25 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
                     if status in jobs_by_status:
                         jobs_by_status[status] += 1
                     
-                    # Check for stuck jobs (older than 5 minutes in pending/processing)
+                    # Check for genuinely stuck jobs: PROCESSING jobs older than 5 minutes.
+                    # Pending jobs are just waiting their turn — long wait ≠ stuck.
                     created = job.get("created_at")
-                    if created and status in ["pending", "processing"]:
+                    if created:
                         try:
                             created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
                             age = (datetime.now(timezone.utc) - created_dt).total_seconds()
-                            if age > STUCK_JOB_THRESHOLD_SECONDS:
-                                stuck_jobs.append({
-                                    "job_id": job.get("id"),
-                                    "status": status,
-                                    "age_seconds": int(age),
-                                    "type": job.get("type"),
-                                    "params": job.get("params", {})
-                                })
+                            entry = {
+                                "job_id": job.get("id"),
+                                "status": status,
+                                "age_seconds": int(age),
+                                "type": job.get("type"),
+                                "params": job.get("params", {})
+                            }
+                            if status == "processing" and age > STUCK_JOB_THRESHOLD_SECONDS:
+                                stuck_jobs.append(entry)
+                            elif status == "pending" and age > STUCK_JOB_THRESHOLD_SECONDS:
+                                long_pending_jobs.append(entry)
                         except (ValueError, TypeError, KeyError):
-                            # Skip jobs with invalid timestamps or malformed data
                             pass
             except Exception as job_error:
                 logger.warning(f"Error examining job {job_id}: {job_error}")
@@ -276,13 +291,16 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
             "jobs": {
                 "by_status": jobs_by_status,
                 "stuck_count": len(stuck_jobs),
-                "stuck_jobs": stuck_jobs[:MAX_STUCK_JOBS_TO_DISPLAY]
+                "stuck_jobs": stuck_jobs[:MAX_STUCK_JOBS_TO_DISPLAY],
+                "long_pending_count": len(long_pending_jobs),
+                "long_pending_jobs": long_pending_jobs[:MAX_STUCK_JOBS_TO_DISPLAY],
             },
             "recommendations": get_diagnostics_recommendations(
-                worker_alive, 
-                heartbeat_age, 
+                worker_alive,
+                heartbeat_age,
                 jobs_by_status,
-                len(stuck_jobs)
+                len(stuck_jobs),
+                len(long_pending_jobs)
             ),
             "note": "Only examining jobs in the queue (Redis KEYS command not available)"
         }
