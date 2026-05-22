@@ -192,6 +192,13 @@ class DailyTemperatureStore:
             self._pool = pool
             return self._pool
 
+    async def _index_exists(self, conn: asyncpg.Connection, index_name: str) -> bool:
+        """Check whether a named index already exists in the database."""
+        return await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = $1)",
+            index_name,
+        )
+
     async def _initialize_schema(self, pool: asyncpg.Pool) -> None:
         """Initialize database schema tables (locations, aliases, temperatures).
 
@@ -231,21 +238,23 @@ class DailyTemperatureStore:
             )
             """
         )
-        await conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_normalized
-            ON locations (normalized_name)
-            """
-        )
-        # Index for coordinate-based nearby location searches
-        # Only index rows with coordinates to keep index small
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_locations_coordinates
-            ON locations (latitude, longitude)
-            WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-            """
-        )
+        if not await self._index_exists(conn, "idx_locations_normalized"):
+            await conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_normalized
+                ON locations (normalized_name)
+                """,
+                timeout=120.0,
+            )
+        if not await self._index_exists(conn, "idx_locations_coordinates"):
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_locations_coordinates
+                ON locations (latitude, longitude)
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                """,
+                timeout=120.0,
+            )
 
     async def _ensure_location_aliases_table(self, conn: asyncpg.Connection) -> None:
         """Ensure the location_aliases table exists.
@@ -261,13 +270,14 @@ class DailyTemperatureStore:
             )
             """
         )
-        # Index for fast lookups by location_id (for finding all aliases of a location)
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_location_aliases_location_id
-            ON location_aliases (location_id)
-            """
-        )
+        if not await self._index_exists(conn, "idx_location_aliases_location_id"):
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_location_aliases_location_id
+                ON location_aliases (location_id)
+                """,
+                timeout=120.0,
+            )
 
     async def _ensure_daily_temperatures_table(self, conn: asyncpg.Connection) -> None:
         """Create daily_temperatures table or migrate from legacy schema if needed.
@@ -290,31 +300,36 @@ class DailyTemperatureStore:
             """
         )
         if has_location_id:
-            await conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
-                ON daily_temperatures (location_id, day)
-                """
-            )
+            if not await self._index_exists(conn, "idx_daily_temperatures_location_day"):
+                await conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
+                    ON daily_temperatures (location_id, day)
+                    """,
+                    timeout=120.0,
+                )
 
             # Drop old indexes with non-immutable predicates (if they exist)
             await conn.execute("DROP INDEX IF EXISTS idx_daily_temperatures_current_year")
 
-            # Partial indexes for optimized recent data queries
-            await conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
-                ON daily_temperatures (location_id, day)
-                WHERE day >= '2020-01-01'::date
-                """
-            )
-            await conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
-                ON daily_temperatures (location_id, day DESC)
-                WHERE day >= '2020-01-01'::date
-                """
-            )
+            if not await self._index_exists(conn, "idx_daily_temperatures_recent"):
+                await conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
+                    ON daily_temperatures (location_id, day)
+                    WHERE day >= '2020-01-01'::date
+                    """,
+                    timeout=120.0,
+                )
+            if not await self._index_exists(conn, "idx_daily_temperatures_day_desc"):
+                await conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
+                    ON daily_temperatures (location_id, day DESC)
+                    WHERE day >= '2020-01-01'::date
+                    """,
+                    timeout=120.0,
+                )
             return
 
         logger.info("Migrating legacy daily_temperatures schema to use location_id.")
@@ -341,36 +356,37 @@ class DailyTemperatureStore:
             )
             """
         )
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
-            ON daily_temperatures (location_id, day)
-            """
-        )
+        if not await self._index_exists(conn, "idx_daily_temperatures_location_day"):
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
+                ON daily_temperatures (location_id, day)
+                """,
+                timeout=120.0,
+            )
 
         # Drop old indexes with non-immutable predicates (if they exist)
         await conn.execute("DROP INDEX IF EXISTS idx_daily_temperatures_current_year")
 
-        # Partial index for recent queries (2020 onwards)
-        # This smaller index improves performance for recent data lookups
-        # Using fixed year instead of CURRENT_DATE to satisfy IMMUTABLE requirement
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
-            ON daily_temperatures (location_id, day)
-            WHERE day >= '2020-01-01'::date
-            """
-        )
+        if not await self._index_exists(conn, "idx_daily_temperatures_recent"):
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
+                ON daily_temperatures (location_id, day)
+                WHERE day >= '2020-01-01'::date
+                """,
+                timeout=120.0,
+            )
 
-        # Index with descending order for recent data queries
-        # Optimizes queries that fetch latest data first
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
-            ON daily_temperatures (location_id, day DESC)
-            WHERE day >= '2020-01-01'::date
-            """
-        )
+        if not await self._index_exists(conn, "idx_daily_temperatures_day_desc"):
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
+                ON daily_temperatures (location_id, day DESC)
+                WHERE day >= '2020-01-01'::date
+                """,
+                timeout=120.0,
+            )
 
     async def _backfill_locations_metadata(self, conn: asyncpg.Connection) -> None:
         """Backfill missing metadata for existing locations using preapproved data.
