@@ -62,8 +62,25 @@ def _build_timeline_url(location: str, start: date, end: date) -> str:
     encoded_location = quote(validated_location, safe="")
     return (
         f"{VC_BASE_URL}/timeline/{encoded_location}/{start.isoformat()}/{end.isoformat()}"
-        f"?unitGroup=metric&include=days&elements=datetime,temp,tempmax,tempmin&contentType=json&key={API_KEY}"
+        f"?unitGroup=us&include=days&elements=datetime,temp,tempmax,tempmin&contentType=json&key={API_KEY}"
     )
+
+
+def _f_to_c(value) -> float | None:
+    if value is None:
+        return None
+    return round((float(value) - 32) * 5 / 9, 2)
+
+
+def _convert_days_to_celsius(days: list) -> list:
+    converted = []
+    for day in days:
+        d = dict(day)
+        for field in ("temp", "tempmin", "tempmax"):
+            if field in d:
+                d[field] = _f_to_c(d[field])
+        converted.append(d)
+    return converted
 
 
 async def fetch_timeline_days(location: str, start: date, end: date) -> Tuple[List[Dict], Dict[str, Any]]:
@@ -108,7 +125,7 @@ async def fetch_timeline_days(location: str, start: date, end: date) -> Tuple[Li
                         "latitude": payload.get("latitude"),
                         "longitude": payload.get("longitude"),
                     }
-                    return days, metadata
+                    return _convert_days_to_celsius(days), metadata
         except LocationNotFoundError:
             raise  # never retry — the location string itself is wrong
         except (asyncio.TimeoutError, aiohttp.ClientError, RuntimeError) as exc:
