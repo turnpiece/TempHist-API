@@ -190,8 +190,9 @@ class DailyTemperatureStore:
             try:
                 pool = await asyncpg.create_pool(
                     dsn=self._dsn,
-                    min_size=5,
+                    min_size=1,
                     max_size=20,
+                    timeout=15.0,
                     command_timeout=10.0,
                     max_inactive_connection_lifetime=300.0,
                 )
