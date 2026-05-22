@@ -162,35 +162,47 @@ class DailyTemperatureStore:
         self._pool_lock = asyncio.Lock()
         self._schema_lock = asyncio.Lock()
         self._schema_initialized = False
+        self._pool_retry_after: float = 0.0  # epoch seconds; 0 = retry immediately
+
+    _POOL_RETRY_COOLDOWN = 30.0  # seconds between connection attempts after failure
 
     async def _ensure_pool(self) -> Optional[asyncpg.Pool]:
         """Ensure the connection pool is initialized, creating it if necessary.
 
+        Retries after a cooldown on transient failures (e.g. Postgres restarting
+        at the same time as this service) rather than disabling permanently.
+
         Returns:
-            asyncpg.Pool instance or None if disabled/failed
+            asyncpg.Pool instance or None if disabled/not yet connectable
         """
+        import time
         if self._disabled:
             return None
         if self._pool:
             return self._pool
+        if time.monotonic() < self._pool_retry_after:
+            return None  # still in cooldown — skip silently
         async with self._pool_lock:
             if self._pool or self._disabled:
                 return self._pool
+            if time.monotonic() < self._pool_retry_after:
+                return None
             try:
                 pool = await asyncpg.create_pool(
                     dsn=self._dsn,
-                    min_size=5,  # Keep 5 connections ready to avoid connection overhead
-                    max_size=20,  # Support up to 20 concurrent requests
-                    command_timeout=10.0,  # Timeout queries after 10s
-                    max_inactive_connection_lifetime=300.0  # Recycle idle connections after 5min
+                    min_size=5,
+                    max_size=20,
+                    command_timeout=10.0,
+                    max_inactive_connection_lifetime=300.0,
                 )
             except Exception as exc:  # asyncpg raises multiple subclasses
+                self._pool_retry_after = time.monotonic() + self._POOL_RETRY_COOLDOWN
                 logger.error(
-                    "DailyTemperatureStore: unable to create Postgres pool (%s: %s). Disabling persistent cache.",
+                    "DailyTemperatureStore: unable to create Postgres pool (%s: %s). Will retry in %ds.",
                     type(exc).__name__,
                     exc,
+                    int(self._POOL_RETRY_COOLDOWN),
                 )
-                self._disabled = True
                 return None
             await self._initialize_schema(pool)
             self._pool = pool
