@@ -107,15 +107,29 @@ class AnalyticsStorage:
                 (summary_data["avg_session_duration"] * (total_sessions - 1) + analytics_record["session_duration"]) / total_sessions
             )
             
+            # Update avg_failure_rate running average
+            raw_rate = analytics_record.get("api_failure_rate", "0%")
+            if isinstance(raw_rate, str):
+                raw_rate = raw_rate.rstrip("%")
+            try:
+                failure_rate = float(raw_rate)
+            except (ValueError, TypeError):
+                failure_rate = 0.0
+            summary_data["avg_failure_rate"] = (
+                (summary_data["avg_failure_rate"] * (total_sessions - 1) + failure_rate) / total_sessions
+            )
+
             # Update platform stats
             platform = analytics_record.get("platform", "unknown")
             summary_data["platforms"][platform] = summary_data["platforms"].get(platform, 0) + 1
-            
+
             # Update error type stats
             for error in analytics_record["recent_errors"]:
                 error_type = error.get("error_type", "unknown")
                 summary_data["error_types"][error_type] = summary_data["error_types"].get(error_type, 0) + 1
-            
+
+            summary_data["last_updated"] = datetime.now().isoformat()
+
             # Store updated summary
             self.redis.setex(summary_key, self.retention_seconds, json.dumps(summary_data))
             
@@ -129,7 +143,10 @@ class AnalyticsStorage:
             summary = self.redis.get(summary_key)
             if summary:
                 return json.loads(summary)
-            else:
+
+            # No pre-aggregated summary — recompute from individual records if any exist
+            analytics_ids = self.redis.lrange("analytics_index", 0, -1)
+            if not analytics_ids:
                 return {
                     "total_sessions": 0,
                     "total_api_calls": 0,
@@ -140,6 +157,28 @@ class AnalyticsStorage:
                     "error_types": {},
                     "last_updated": datetime.now().isoformat()
                 }
+
+            summary_data = {
+                "total_sessions": 0,
+                "total_api_calls": 0,
+                "total_errors": 0,
+                "avg_session_duration": 0.0,
+                "avg_failure_rate": 0.0,
+                "platforms": {},
+                "error_types": {},
+                "last_updated": datetime.now().isoformat()
+            }
+            for analytics_id in analytics_ids:
+                analytics_id = analytics_id.decode("utf-8") if isinstance(analytics_id, bytes) else analytics_id
+                record_raw = self.redis.get(f"{self.analytics_prefix}{analytics_id}")
+                if not record_raw:
+                    continue
+                record = json.loads(record_raw.decode("utf-8") if isinstance(record_raw, bytes) else record_raw)
+                self._update_analytics_summary(record)
+
+            rebuilt = self.redis.get(summary_key)
+            return json.loads(rebuilt) if rebuilt else summary_data
+
         except Exception as e:
             logger.error(f"Failed to get analytics summary: {e}")
             return {"error": "Failed to retrieve analytics summary"}
