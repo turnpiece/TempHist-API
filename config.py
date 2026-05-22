@@ -71,7 +71,7 @@ MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection
 
 # Visual Crossing API configuration
 VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
-VISUAL_CROSSING_UNIT_GROUP = "metric"
+VISUAL_CROSSING_UNIT_GROUP = "us"
 VISUAL_CROSSING_INCLUDE_PARAMS = "days"
 VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
 

@@ -21,6 +21,24 @@ import redis
 
 logger = logging.getLogger(__name__)
 
+_TEMP_FIELDS = ("temp", "tempmin", "tempmax")
+
+
+def _f_to_c(value) -> float | None:
+    """Convert Fahrenheit to Celsius, rounded to 2dp."""
+    if value is None:
+        return None
+    return round((float(value) - 32) * 5 / 9, 2)
+
+
+def _convert_day_temps(day: dict) -> dict:
+    """Return a copy of *day* with temp fields converted from °F to °C."""
+    result = dict(day)
+    for field in _TEMP_FIELDS:
+        if field in result:
+            result[field] = _f_to_c(result[field])
+    return result
+
 
 async def get_weather_for_date(
     location: str,
@@ -88,20 +106,20 @@ async def get_weather_for_date(
                         if temp is not None:
                             # Success! Cache and return the data
                             if FILTER_WEATHER_DATA:
-                                # Filter to only essential temperature data
+                                # Filter to only essential temperature data, converting F→C
                                 filtered_days = []
                                 for day_data in days:
                                     filtered_day = {
                                         'datetime': day_data.get('datetime'),
-                                        'temp': day_data.get('temp'),
-                                        'tempmin': day_data.get('tempmin'),
-                                        'tempmax': day_data.get('tempmax')
+                                        'temp': _f_to_c(day_data.get('temp')),
+                                        'tempmin': _f_to_c(day_data.get('tempmin')),
+                                        'tempmax': _f_to_c(day_data.get('tempmax'))
                                     }
                                     filtered_days.append(filtered_day)
                                 to_cache = {"days": filtered_days}
                             else:
-                                # Return full data if filtering is disabled
-                                to_cache = {"days": days}
+                                # Convert temp fields F→C even in full-data mode
+                                to_cache = {"days": [_convert_day_temps(d) for d in days]}
 
                             if DEBUG:
                                 logger.debug(f"🌤️ FRESH API RESPONSE: {location} | {date_str}")
@@ -146,7 +164,7 @@ async def get_weather_for_date(
                                 if remote_temp is not None:
                                     # Success with remote data! Cache and return
                                     logger.debug(f"Remote data fallback successful for {date_str}")
-                                    to_cache = {"days": remote_days}
+                                    to_cache = {"days": [_convert_day_temps(d) for d in remote_days]}
                                     if DEBUG:
                                         logger.debug(f"🌤️ REMOTE FALLBACK RESPONSE: {location} | {date_str}")
                                     if CACHE_ENABLED:
@@ -208,7 +226,7 @@ async def get_forecast_data(location: str, date, redis_client: redis.Redis = Non
             return {
                 "location": location,
                 "date": date,
-                "average_temperature": round(temp, 2),
+                "average_temperature": _f_to_c(temp),
                 "unit": "celsius"
             }
         else:
