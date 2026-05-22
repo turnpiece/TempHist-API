@@ -149,6 +149,9 @@ class DailyTemperatureStore:
             dsn: PostgreSQL connection string. If None, uses TEMPHIST_PG_DSN or DATABASE_URL env vars.
         """
         self._dsn = dsn or os.getenv("TEMPHIST_PG_DSN") or os.getenv("DATABASE_URL")
+        # asyncpg requires postgresql:// scheme; Railway provides postgres://
+        if self._dsn and self._dsn.startswith("postgres://"):
+            self._dsn = "postgresql://" + self._dsn[len("postgres://"):]
         self._disabled = False
         if not self._dsn:
             logger.warning(
@@ -183,7 +186,8 @@ class DailyTemperatureStore:
                 )
             except Exception as exc:  # asyncpg raises multiple subclasses
                 logger.error(
-                    "DailyTemperatureStore: unable to create Postgres pool (%s). Disabling persistent cache.",
+                    "DailyTemperatureStore: unable to create Postgres pool (%s: %s). Disabling persistent cache.",
+                    type(exc).__name__,
                     exc,
                 )
                 self._disabled = True
