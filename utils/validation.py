@@ -152,17 +152,18 @@ def validate_date_format(date: str) -> str:
     return date
 
 
-def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> str:
+def build_visual_crossing_url(location: str, date: str, remote: bool = True, unit_group: str = None) -> str:
     """Build Visual Crossing API URL with consistent parameters and SSRF protection.
-    
+
     Args:
         location: The location to get weather data for (will be validated)
         date: The date in YYYY-MM-DD format (will be validated)
         remote: Whether to include remote data parameters (default: True)
-        
+        unit_group: Override the configured unit group (e.g. "metric" for fallback)
+
     Returns:
         URL string for Visual Crossing API
-        
+
     Raises:
         ValueError: If location or date validation fails
     """
@@ -190,7 +191,7 @@ def build_visual_crossing_url(location: str, date: str, remote: bool = True) -> 
             raise ValueError("Invalid location format")
     
     base_params = [
-        f"unitGroup={VISUAL_CROSSING_UNIT_GROUP}",
+        f"unitGroup={unit_group or VISUAL_CROSSING_UNIT_GROUP}",
         f"include={VISUAL_CROSSING_INCLUDE_PARAMS}",
         f"key={API_KEY}"
     ]

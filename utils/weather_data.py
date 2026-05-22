@@ -135,8 +135,38 @@ async def get_weather_for_date(
                 else:
                     logger.debug(f"First attempt failed with status {resp.status}")
                 
-                # If we reach here, the first attempt didn't provide valid temperature data
-                # Check if we should try with remote data parameters
+                # If we reach here, the first attempt (unitGroup=us) had no temp data.
+                # Retry with unitGroup=metric — VC may not yet have finalized Fahrenheit
+                # data for very recent dates, but metric data is usually available sooner.
+                # Metric values are 1dp Celsius; stored as-is without F→C conversion.
+                metric_url = build_visual_crossing_url(location, date_str, remote=False, unit_group="metric")
+                async with session.get(metric_url, headers={"Accept-Encoding": "gzip"}) as metric_resp:
+                    if metric_resp.status == 200 and 'application/json' in metric_resp.headers.get('Content-Type', ''):
+                        metric_data = await metric_resp.json()
+                        if CACHE_ENABLED and redis_client:
+                            tz_str = metric_data.get('timezone')
+                            if tz_str:
+                                store_location_timezone(location, tz_str, redis_client)
+                        metric_days = metric_data.get('days')
+                        if metric_days and len(metric_days) > 0:
+                            metric_temp = metric_days[0].get('temp')
+                            if metric_temp is not None:
+                                if FILTER_WEATHER_DATA:
+                                    to_cache = {"days": [{
+                                        'datetime': d.get('datetime'),
+                                        'temp': d.get('temp'),
+                                        'tempmin': d.get('tempmin'),
+                                        'tempmax': d.get('tempmax'),
+                                    } for d in metric_days]}
+                                else:
+                                    to_cache = {"days": metric_days}
+                                if CACHE_ENABLED:
+                                    cache_dur = timedelta(seconds=SHORT_CACHE_DURATION_SECONDS) if is_today_date else timedelta(seconds=LONG_CACHE_DURATION_SECONDS)
+                                    set_cache_value(cache_key, cache_dur, json.dumps(to_cache), redis_client)
+                                logger.debug(f"Metric fallback successful for {date_str}")
+                                return to_cache
+
+                # Check if we should try with remote/ERA5 data parameters
                 if not is_today_date and year >= 2005:
                     logger.info(f"[DEBUG] First attempt failed, trying remote fallback for {date_str} (year {year})")
                     url_with_remote = build_visual_crossing_url(location, date_str, remote=True)
