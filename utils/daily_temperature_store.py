@@ -209,6 +209,26 @@ class DailyTemperatureStore:
             self._pool = pool
             return self._pool
 
+    async def ping(self) -> dict:
+        """Check database connectivity. Returns a status dict suitable for health endpoints."""
+        import time
+        if self._disabled:
+            return {"status": "disabled", "message": "No DSN configured"}
+        pool = await self._ensure_pool()
+        if pool is None:
+            retry_in = max(0.0, self._pool_retry_after - time.monotonic())
+            return {
+                "status": "unhealthy",
+                "message": "Pool not available",
+                "retry_in_seconds": round(retry_in, 1),
+            }
+        try:
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1", timeout=5.0)
+            return {"status": "healthy"}
+        except Exception as exc:
+            return {"status": "unhealthy", "error": str(exc)}
+
     async def _index_exists(self, conn: asyncpg.Connection, index_name: str) -> bool:
         """Check whether a named index already exists in the database."""
         return await conn.fetchval(

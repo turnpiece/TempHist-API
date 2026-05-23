@@ -7,6 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Path, Query, Response, Depends, Request
 from fastapi.responses import JSONResponse
 from cache.accessors import get_job_manager
+from utils.daily_temperature_store import get_daily_temperature_store
 from jobs.manager import JobStatus, JobQueueFullError
 from routers.dependencies import get_redis_client
 
@@ -302,7 +303,8 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
                 len(stuck_jobs),
                 len(long_pending_jobs)
             ),
-            "note": "Only examining jobs in the queue (Redis KEYS command not available)"
+            "note": "Only examining jobs in the queue (Redis KEYS command not available)",
+            "database": await (await get_daily_temperature_store()).ping(),
         }
     except Exception as e:
         logger.error(f"Error getting worker diagnostics: {e}")
