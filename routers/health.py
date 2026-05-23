@@ -8,6 +8,7 @@ import redis
 from config import API_KEY
 from cache.accessors import get_cache_stats
 from routers.dependencies import get_redis_client
+from utils.daily_temperature_store import get_daily_temperature_store
 
 router = APIRouter()
 
@@ -167,6 +168,21 @@ async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_cl
             "message": f"Cache stats unavailable: {str(e)}"
         }
     
+    # Check Postgres connectivity
+    try:
+        store = await get_daily_temperature_store()
+        pg_result = await store.ping()
+        health_status["checks"]["postgres"] = pg_result
+        if pg_result["status"] == "unhealthy":
+            overall_healthy = False
+            health_status["status"] = "unhealthy"
+        elif pg_result["status"] == "disabled" and overall_healthy:
+            health_status["status"] = "degraded"
+    except Exception as e:
+        health_status["checks"]["postgres"] = {"status": "unhealthy", "error": str(e)}
+        overall_healthy = False
+        health_status["status"] = "unhealthy"
+
     # Return appropriate HTTP status code
     status_code = 200 if health_status["status"] == "healthy" else 503
     

@@ -31,6 +31,13 @@ def _f_to_c(value) -> float | None:
     return round((float(value) - 32) * 5 / 9, 2)
 
 
+def _c_to_f(value) -> float | None:
+    """Convert Celsius to Fahrenheit, rounded to 2dp."""
+    if value is None:
+        return None
+    return round(float(value) * 9 / 5 + 32, 2)
+
+
 def _convert_day_temps(day: dict) -> dict:
     """Return a copy of *day* with temp fields converted from °F to °C."""
     result = dict(day)
@@ -219,7 +226,7 @@ async def get_weather_for_date(
         return {"error": str(e)}
 
 
-async def get_forecast_data(location: str, date, redis_client: redis.Redis = None) -> Dict:
+async def get_forecast_data(location: str, date, redis_client: redis.Redis = None, unit_group: str = "celsius") -> Dict:
     """Get forecast data for a location and date using httpx."""
     # Convert date to string format if it's a date object
     if hasattr(date, 'strftime'):
@@ -253,11 +260,13 @@ async def get_forecast_data(location: str, date, redis_client: redis.Redis = Non
             temp = day_data.get('temp')
             if temp is None:
                 return {"error": "No temperature data in forecast response"}
+            temp_c = _f_to_c(temp)
+            use_fahrenheit = unit_group.lower() in ("fahrenheit", "us")
             return {
                 "location": location,
                 "date": date,
-                "average_temperature": _f_to_c(temp),
-                "unit": "celsius"
+                "average_temperature": _c_to_f(temp_c) if use_fahrenheit else temp_c,
+                "unit": "fahrenheit" if use_fahrenheit else "celsius",
             }
         else:
             return {"error": "No days data in forecast response"}
