@@ -256,21 +256,23 @@ class DailyTemperatureStore:
             """
         )
         if not await self._index_exists(conn, "idx_locations_normalized"):
+            await conn.execute("COMMIT")
             await conn.execute(
                 """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_normalized
+                CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_locations_normalized
                 ON locations (normalized_name)
                 """,
-                timeout=120.0,
+                timeout=300.0,
             )
         if not await self._index_exists(conn, "idx_locations_coordinates"):
+            await conn.execute("COMMIT")
             await conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_locations_coordinates
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_locations_coordinates
                 ON locations (latitude, longitude)
                 WHERE latitude IS NOT NULL AND longitude IS NOT NULL
                 """,
-                timeout=120.0,
+                timeout=300.0,
             )
 
     async def _ensure_location_aliases_table(self, conn: asyncpg.Connection) -> None:
@@ -288,12 +290,13 @@ class DailyTemperatureStore:
             """
         )
         if not await self._index_exists(conn, "idx_location_aliases_location_id"):
+            await conn.execute("COMMIT")
             await conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_location_aliases_location_id
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_location_aliases_location_id
                 ON location_aliases (location_id)
                 """,
-                timeout=120.0,
+                timeout=300.0,
             )
 
     async def _ensure_daily_temperatures_table(self, conn: asyncpg.Connection) -> None:
@@ -318,34 +321,37 @@ class DailyTemperatureStore:
         )
         if has_location_id:
             if not await self._index_exists(conn, "idx_daily_temperatures_location_day"):
+                await conn.execute("COMMIT")
                 await conn.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_daily_temperatures_location_day
                     ON daily_temperatures (location_id, day)
                     """,
-                    timeout=120.0,
+                    timeout=300.0,
                 )
 
             # Drop old indexes with non-immutable predicates (if they exist)
             await conn.execute("DROP INDEX IF EXISTS idx_daily_temperatures_current_year")
 
             if not await self._index_exists(conn, "idx_daily_temperatures_recent"):
+                await conn.execute("COMMIT")
                 await conn.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_daily_temperatures_recent
                     ON daily_temperatures (location_id, day)
                     WHERE day >= '2020-01-01'::date
                     """,
-                    timeout=120.0,
+                    timeout=300.0,
                 )
             if not await self._index_exists(conn, "idx_daily_temperatures_day_desc"):
+                await conn.execute("COMMIT")
                 await conn.execute(
                     """
-                    CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_daily_temperatures_day_desc
                     ON daily_temperatures (location_id, day DESC)
                     WHERE day >= '2020-01-01'::date
                     """,
-                    timeout=120.0,
+                    timeout=300.0,
                 )
             return
 
@@ -374,35 +380,38 @@ class DailyTemperatureStore:
             """
         )
         if not await self._index_exists(conn, "idx_daily_temperatures_location_day"):
+            await conn.execute("COMMIT")
             await conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_location_day
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_daily_temperatures_location_day
                 ON daily_temperatures (location_id, day)
                 """,
-                timeout=120.0,
+                timeout=300.0,
             )
 
         # Drop old indexes with non-immutable predicates (if they exist)
         await conn.execute("DROP INDEX IF EXISTS idx_daily_temperatures_current_year")
 
         if not await self._index_exists(conn, "idx_daily_temperatures_recent"):
+            await conn.execute("COMMIT")
             await conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_recent
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_daily_temperatures_recent
                 ON daily_temperatures (location_id, day)
                 WHERE day >= '2020-01-01'::date
                 """,
-                timeout=120.0,
+                timeout=300.0,
             )
 
         if not await self._index_exists(conn, "idx_daily_temperatures_day_desc"):
+            await conn.execute("COMMIT")
             await conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_daily_temperatures_day_desc
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_daily_temperatures_day_desc
                 ON daily_temperatures (location_id, day DESC)
                 WHERE day >= '2020-01-01'::date
                 """,
-                timeout=120.0,
+                timeout=300.0,
             )
 
     async def _backfill_locations_metadata(self, conn: asyncpg.Connection) -> None:
