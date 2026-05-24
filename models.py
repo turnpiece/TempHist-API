@@ -34,6 +34,7 @@ class TrendData(BaseModel):
     data_points: int = Field(..., description="Number of data points used")
     r_squared: Optional[float] = Field(None, description="R-squared value for trend fit")
     slope_error: Optional[float] = Field(None, description="Standard error of the slope (one SE); 95% CI is approximately slope ± 2 × slope_error")
+    gradient_factor: Optional[float] = Field(None, description="Normalised trend intensity [-1.0 cooling … 1.0 warming] adjusted for slope uncertainty; intended for frontend colour gradients.")
 
 
 class UpdatedResponse(BaseModel):

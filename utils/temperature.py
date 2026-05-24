@@ -1,4 +1,5 @@
 """Temperature calculation and summary generation utilities."""
+import math
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
@@ -77,6 +78,24 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional
         slope_error = round(slope_error, 2)
 
     return round(slope_per_year * 10.0, 2), r_squared, slope_error
+
+
+def calculate_gradient_factor(
+    slope: float,
+    slope_error: float,
+    unit_group: str = "celsius",
+) -> float:
+    """Return a [-1, 1] UI intensity factor for the colour gradient engine.
+
+    Penalises the slope by its standard error, then compresses via tanh so
+    even extreme slopes are bounded. scale_factor is unit-aware: 0.5 for
+    °C/decade, 0.9 for °F/decade (≈ 0.5 × 1.8).
+    """
+    Z = 0.52
+    scale_factor = 0.9 if unit_group.lower() in ("fahrenheit", "us") else 0.5
+    adjusted_abs = max(0.0, abs(slope) - Z * slope_error)
+    intensity = math.tanh(adjusted_abs / scale_factor)
+    return round(math.copysign(intensity, slope), 4)
 
 
 def get_friendly_date(date: datetime) -> str:

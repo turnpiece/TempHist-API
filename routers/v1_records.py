@@ -34,7 +34,7 @@ from utils.location_validation import (
     is_location_likely_invalid, validate_location_response, InvalidLocationCache
 )
 from routers.dependencies import get_redis_client, get_invalid_location_cache
-from utils.temperature import calculate_trend_slope, calculate_standard_deviation, get_friendly_date, generate_summary
+from utils.temperature import calculate_trend_slope, calculate_standard_deviation, calculate_gradient_factor, get_friendly_date, generate_summary
 from utils.weather import get_year_range, track_missing_year, create_metadata
 from utils.weather_data import get_temperature_series
 from utils.cache_headers import set_weather_cache_headers
@@ -583,12 +583,14 @@ async def get_temperature_data_v1(
     if len(values) >= 2:
         trend_input = [{"x": v.year, "y": v.temperature} for v in values]
         slope, r_squared, slope_error = calculate_trend_slope(trend_input)
+        gf = calculate_gradient_factor(slope, slope_error, unit_group) if slope_error is not None else None
         trend_data = TrendData(
             slope=slope,
             unit="°C/decade" if unit_group == "celsius" else "°F/decade",
             data_points=len(values),
             r_squared=r_squared,
             slope_error=slope_error,
+            gradient_factor=gf,
         )
     else:
         trend_data = TrendData(slope=0.0, unit="°C/decade" if unit_group == "celsius" else "°F/decade", data_points=len(values))
@@ -732,7 +734,7 @@ def _rebuild_full_response_from_values(
     Returns:
         Full response dict with all fields, with temperatures converted to unit_group
     """
-    from utils.temperature import calculate_trend_slope, calculate_standard_deviation, generate_summary
+    from utils.temperature import calculate_trend_slope, calculate_standard_deviation, calculate_gradient_factor, generate_summary
     from utils.weather import create_metadata
     
     # Convert temperatures from Celsius to requested unit
@@ -768,12 +770,14 @@ def _rebuild_full_response_from_values(
         trend_input = [{"x": v.get('year'), "y": v.get('temperature')} for v in converted_values]
         slope, r_squared, slope_error = calculate_trend_slope(trend_input)
         trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
+        gf = calculate_gradient_factor(slope, slope_error, unit_group) if slope_error is not None else None
         trend_data = {
             "slope": slope,
             "unit": trend_unit,
             "data_points": len(converted_values),
             "r_squared": r_squared,
             "slope_error": slope_error,
+            "gradient_factor": gf,
         }
     else:
         trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
@@ -1065,8 +1069,9 @@ async def get_record(
                 data = temporal_hit["data"]
                 meta = temporal_hit["meta"]
 
-                # Apply unit conversion if needed (temporal cache stores celsius)
-                if unit_group == "fahrenheit" and "records" in data:
+                # Always rebuild from raw records so computed fields (gradient_factor, etc.)
+                # reflect the current code, not whatever was serialised at cache-write time.
+                if "records" in data:
                     values = data["records"]
                     data = _rebuild_full_response_from_values(
                         values, period, location, identifier, month, day, current_year, years, redis_client, unit_group

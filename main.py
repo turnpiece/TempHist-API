@@ -59,6 +59,10 @@ from config import (
 from rate_limiting import ServiceTokenRateLimiter, LocationDiversityMonitor, RequestRateMonitor
 from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
 from utils.temperature import generate_summary
+from models import (
+    TemperatureValue, DateRange, AverageData, TrendData,
+    RecordResponse, SubResourceResponse,
+)
 
 if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
     logging.getLogger(__name__).warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
@@ -159,62 +163,6 @@ if ENVIRONMENT == "production" and DEBUG:
 # RATE_LIMIT_ENABLED, MAX_LOCATIONS_PER_HOUR, MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS,
 # IP_WHITELIST, IP_BLACKLIST
 
-# Pydantic Models for v1 API
-class TemperatureValue(BaseModel):
-    """Individual temperature data point."""
-    date: str = Field(..., description="Date in YYYY-MM-DD format")
-    year: int = Field(..., description="Year")
-    temperature: float = Field(..., description="Temperature value")
-
-class DateRange(BaseModel):
-    """Date range for the data."""
-    start: str = Field(..., description="Start date in YYYY-MM-DD format")
-    end: str = Field(..., description="End date in YYYY-MM-DD format")
-    years: int = Field(..., description="Number of years in range")
-
-class AverageData(BaseModel):
-    """Average temperature statistics."""
-    mean: float = Field(..., description="Mean temperature")
-    unit: str = Field("celsius", description="Temperature unit (celsius or fahrenheit)")
-    data_points: int = Field(..., description="Number of data points used")
-
-class TrendData(BaseModel):
-    """Temperature trend analysis."""
-    slope: float = Field(..., description="Temperature change per decade")
-    unit: str = Field("°C/decade", description="Trend unit (changes based on temperature unit)")
-    data_points: int = Field(..., description="Number of data points used")
-    r_squared: Optional[float] = Field(None, description="R-squared value for trend fit")
-
-class UpdatedResponse(BaseModel):
-    """Response model for updated timestamp endpoint."""
-    period: str = Field(..., description="Data period")
-    location: str = Field(..., description="Location name")
-    identifier: str = Field(..., description="Date identifier")
-    updated: Optional[str] = Field(None, description="ISO timestamp when data was last updated, null if not cached")
-    cached: bool = Field(..., description="Whether the data is currently cached")
-    cache_key: str = Field(..., description="Cache key used for this endpoint")
-
-class RecordResponse(BaseModel):
-    """Main record response for v1 API."""
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
-    location: str = Field(..., description="Location name")
-    identifier: str = Field(..., description="Date identifier (MM-DD for daily, YYYY-MM for monthly, etc.)")
-    range: DateRange = Field(..., description="Date range covered")
-    unit_group: str = Field("celsius", description="Temperature unit used")
-    values: List[TemperatureValue] = Field(..., description="Temperature data points")
-    average: AverageData = Field(..., description="Average temperature statistics")
-    trend: TrendData = Field(..., description="Temperature trend analysis")
-    summary: str = Field(..., description="Human-readable summary")
-    metadata: Dict = Field(default_factory=dict, description="Additional metadata")
-    updated: Optional[str] = Field(None, description="ISO timestamp when data was last updated (if cached)")
-
-class SubResourceResponse(BaseModel):
-    """Response for subresource endpoints."""
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
-    location: str = Field(..., description="Location name")
-    identifier: str = Field(..., description="Date identifier")
-    data: Union[AverageData, TrendData, str] = Field(..., description="Subresource data")
-    metadata: Dict = Field(default_factory=dict, description="Additional metadata")
 
 # Analytics Models
 class ErrorDetail(BaseModel):
