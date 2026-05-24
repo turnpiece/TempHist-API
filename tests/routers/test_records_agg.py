@@ -70,20 +70,24 @@ class TestV1RecordsEndpoints:
                     "period": period,
                     "location": location,
                     "identifier": identifier,
-                    "range": {"start": "1974-01-15", "end": "2024-01-15"},
+                    "range": {"start": "2022-01-15", "end": "2024-01-15"},
                     "unit_group": "celsius",
-                    "values": [{"date": "2024-01-15", "temperature": 15.0}],
-                    "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1, "unit": "celsius"},
-                    "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
+                    "values": [
+                        {"date": "2022-01-15", "year": 2022, "temperature": 14.5, "anomaly": -0.5},
+                        {"date": "2023-01-15", "year": 2023, "temperature": 15.0, "anomaly": 0.0},
+                        {"date": "2024-01-15", "year": 2024, "temperature": 15.5, "anomaly": 0.5},
+                    ],
+                    "average": {"mean": 15.0, "data_points": 3, "unit": "celsius", "standard_deviation": 0.41},
+                    "trend": {"slope": 0.5, "data_points": 3, "unit": "°C/decade", "r_squared": 1.0, "slope_error": 0.0, "gradient_factor": 0.76},
                     "summary": "Test summary"
                 }
-    
+
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}",
                 headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
             )
             assert response.status_code == expected_status
-            
+
             if expected_status == 200:
                 data = response.json()
                 assert data["period"] == period
@@ -92,6 +96,11 @@ class TestV1RecordsEndpoints:
                 assert "values" in data
                 assert "average" in data
                 assert "trend" in data
+                assert "r_squared" in data["trend"]
+                assert "slope_error" in data["trend"]
+                assert "gradient_factor" in data["trend"]
+                assert "standard_deviation" in data["average"]
+                assert "anomaly" in data["values"][0]
                 assert "summary" in data
     
     @pytest.mark.parametrize("period,location,identifier,subresource", [
@@ -113,13 +122,17 @@ class TestV1RecordsEndpoints:
                 "period": period,
                 "location": location,
                 "identifier": identifier,
-                "range": {"start": "1974-01-15", "end": "2024-01-15"},
+                "range": {"start": "2022-01-15", "end": "2024-01-15"},
                 "unit_group": "celsius",
-                "values": [{"date": "2024-01-15", "year": 2024, "temperature": 15.0}],
-                "average": {"mean": 15.0, "tempmax": 16.0, "tempmin": 14.0, "data_points": 1, "unit": "celsius"},
-                "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
+                "values": [
+                    {"date": "2022-01-15", "year": 2022, "temperature": 14.5, "anomaly": -0.5},
+                    {"date": "2023-01-15", "year": 2023, "temperature": 15.0, "anomaly": 0.0},
+                    {"date": "2024-01-15", "year": 2024, "temperature": 15.5, "anomaly": 0.5},
+                ],
+                "average": {"mean": 15.0, "data_points": 3, "unit": "celsius", "standard_deviation": 0.41},
+                "trend": {"slope": 0.5, "data_points": 3, "unit": "°C/decade", "r_squared": 1.0, "slope_error": 0.0, "gradient_factor": 0.76},
                 "summary": "Test summary",
-                "metadata": {"total_years": 1, "available_years": 1, "missing_years": [], "completeness": 100.0}
+                "metadata": {"total_years": 3, "available_years": 3, "missing_years": [], "completeness": 100.0}
             }
             mock_get_data.return_value = mock_data
     
