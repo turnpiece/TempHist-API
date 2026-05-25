@@ -209,20 +209,15 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             tense_context = "has been"
             tense_context_alt = "has been"
             tense_warm_cold = "has been"
-        elif period_ended_recently:
-            # Period ended recently - use past perfect for consistency
-            tense_context = "had been"
-            tense_context_alt = "had been"
-            tense_warm_cold = "had been"
         else:
-            # Period is in the past - use past tense
+            # Period ended recently or is in the past - use simple past tense
             tense_context = "was"
             tense_context_alt = "was"
             tense_warm_cold = "was"
 
     previous = [p for p in data[:-1] if p.get('y') is not None]
-    is_warmest = all(latest['y'] >= p['y'] for p in previous)
-    is_coldest = all(latest['y'] <= p['y'] for p in previous)
+    is_warmest = bool(previous) and all(latest['y'] > p['y'] for p in previous)
+    is_coldest = bool(previous) and all(latest['y'] < p['y'] for p in previous)
 
     # Check against last year first for consistency
     last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
@@ -271,16 +266,12 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context_alt = "the time of year"
         else:
             period_context = "that day"
-            period_context_alt = "that date"
+            period_context_alt = "the time of year"
     elif period == "weekly":
         if tense_context == "has been":
             period_context = "this week"
             period_context_alt = "this week"
-        elif tense_context == "had been":
-            period_context = "the past week"
-            period_context_alt = "the past week"
         else:
-            # For distant past weeks, use more specific language
             day = target_date.day
             suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
             period_context = f"the week ending {day}{suffix} {target_date.strftime('%B')}"
@@ -289,11 +280,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         if tense_context == "has been":
             period_context = "this month"
             period_context_alt = "this month"
-        elif tense_context == "had been":
-            period_context = "the past month"
-            period_context_alt = "the past month"
         else:
-            # For distant past months, use more specific language
             day = target_date.day
             suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
             period_context = f"the month ending {day}{suffix} {target_date.strftime('%B')}"
@@ -302,11 +289,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         if tense_context == "has been":
             period_context = "this year"
             period_context_alt = "this year"
-        elif tense_context == "had been":
-            period_context = "the past year"
-            period_context_alt = "the past year"
         else:
-            # For distant past years, use more specific language
             day = target_date.day
             suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
             period_context = f"the year ending {day}{suffix} {target_date.strftime('%B %Y')}"
@@ -315,9 +298,6 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         if tense_context == "has been":
             period_context = "this period"
             period_context_alt = "this period"
-        elif tense_context == "had been":
-            period_context = "the past period"
-            period_context_alt = "the past period"
         else:
             period_context = "that period"
             period_context_alt = "that period"
