@@ -93,7 +93,7 @@ def calculate_gradient_factor(
 
     A higher value for Z will increase suppression of trends with high error margins.
     """
-    Z = 0.70
+    Z = 0.95
     scale_factor = 0.9 if unit_group.lower() in ("fahrenheit", "us") else 0.5
     adjusted_abs = max(0.0, abs(slope) - Z * slope_error)
     intensity = math.tanh(adjusted_abs / scale_factor)
