@@ -1,7 +1,7 @@
 """Temperature calculation and summary generation utilities."""
 import math
 from typing import List, Dict, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as dt_date
 
 
 def calculate_standard_deviation(values: List[float]) -> Optional[float]:
@@ -105,7 +105,7 @@ def get_friendly_date(date: datetime) -> str:
     return f"{day}{suffix} {date.strftime('%B')}"
 
 
-def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily", unit_group: str = "celsius", mean: Optional[float] = None) -> str:
+def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily", unit_group: str = "celsius", mean: Optional[float] = None, local_today: Optional[dt_date] = None) -> str:
     """Generate a summary text for temperature data in the requested unit.
 
     Args:
@@ -116,6 +116,10 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         mean: Pre-calculated mean temperature. When provided, used directly so the
               summary is consistent with the `anomaly` and `average.mean` fields in
               the API response. If omitted, falls back to calculate_historical_average.
+        local_today: The current date in the user's/location's local timezone. When
+              provided, "today"/"yesterday" comparisons use this instead of the
+              server's local date. Callers should compute this from the requested
+              location's timezone so summaries are correct across timezones.
 
     Note: Time-sensitive summaries (e.g., "the past week/month/year") should have
     very short cache durations (minutes) as they become invalid quickly.
@@ -151,8 +155,10 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     cold_summary = ''
     temperature = f"{latest_temp}{unit_symbol}."
 
-    # Determine tense based on date and period
-    today = datetime.now().date()
+    # Determine tense based on date and period.
+    # Use the caller-supplied local_today (location's timezone) when available so
+    # "today"/"yesterday" reflect the user's local date, not the server's.
+    today = local_today if local_today is not None else datetime.now().date()
     yesterday = today - timedelta(days=1)
     target_date = date.date()
     

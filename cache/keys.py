@@ -234,6 +234,22 @@ def _is_today_in_location_timezone(
     return date == datetime.now(timezone.utc).date()
 
 
+def get_local_today(
+    location: Optional[str] = None,
+    redis_client: Optional[redis.Redis] = None,
+) -> dt_date:
+    """Return the current date in the location's local timezone, falling back to UTC."""
+    if location and ZoneInfo:
+        timezone_str = _get_location_timezone(location, redis_client)
+        if timezone_str:
+            try:
+                return datetime.now(ZoneInfo(timezone_str)).date()
+            except Exception as e:
+                if DEBUG:
+                    logger.debug(f"Error using timezone {timezone_str} for '{location}': {e}")
+    return datetime.now(timezone.utc).date()
+
+
 # ---------------------------------------------------------------------------
 # Batch record helpers (MGET-based)
 # ---------------------------------------------------------------------------

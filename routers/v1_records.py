@@ -15,7 +15,7 @@ from config import (
     CACHE_ENABLED, DEBUG, API_KEY,
 )
 from cache.keys import (
-    normalize_location_for_cache, _get_location_timezone,
+    normalize_location_for_cache, _get_location_timezone, get_local_today,
     rec_key, bundle_key, rec_etag_key, get_records, assemble_and_cache,
     compute_bundle_etag, get_year_etags,
 )
@@ -618,8 +618,10 @@ async def get_temperature_data_v1(
             'y': value.temperature
         })
     
-    # Generate summary text with correct unit conversion
-    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group, mean=series_mean)
+    # Generate summary text with correct unit conversion.
+    # Use the location's local "today" so tense/context is correct across timezones.
+    local_today = get_local_today(location, redis_client)
+    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group, mean=series_mean, local_today=local_today)
 
     # Ensure metadata reflects missing current year when data is unavailable
     available_years = {v.year for v in values}
@@ -785,7 +787,8 @@ def _rebuild_full_response_from_values(
     
     end_date_obj = datetime(current_year, month, day)
     summary_data = [{"x": v.get('year'), "y": v.get('temperature')} for v in converted_values]
-    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group, mean=series_mean)
+    local_today = get_local_today(location, redis_client)
+    summary_text = generate_summary(summary_data, end_date_obj, period, unit_group, mean=series_mean, local_today=local_today)
 
     # Replace bare date with period-prefixed version for non-daily periods
     if period == "weekly":

@@ -1480,13 +1480,15 @@ async def get_summary(location: str, month_day: str, weather_data: Optional[List
             return "No weather data available."
 
         # Use the year from the latest data point or fallback to current year
+        from cache.keys import get_local_today
+        local_today = get_local_today(location)
         latest_year = max(d.get("x") for d in weather_data if d.get("x"))
-        current_year = datetime.now().year
+        current_year = local_today.year
         if latest_year != current_year:
             return "Failed to get today's temperature data."
 
         date = datetime.strptime(f"{latest_year}-{month_day}", "%Y-%m-%d")
-        return generate_summary(weather_data, date, "daily", "celsius")
+        return generate_summary(weather_data, date, "daily", "celsius", local_today=local_today)
 
     except Exception as e:
         logger.error(f"Error in get_summary: {e}")
