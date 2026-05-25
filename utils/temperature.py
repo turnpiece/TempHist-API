@@ -90,8 +90,10 @@ def calculate_gradient_factor(
     Penalises the slope by its standard error, then compresses via tanh so
     even extreme slopes are bounded. scale_factor is unit-aware: 0.5 for
     °C/decade, 0.9 for °F/decade (≈ 0.5 × 1.8).
+
+    A higher value for Z will increase suppression of trends with high error margins.
     """
-    Z = 0.52
+    Z = 0.70
     scale_factor = 0.9 if unit_group.lower() in ("fahrenheit", "us") else 0.5
     adjusted_abs = max(0.0, abs(slope) - Z * slope_error)
     intensity = math.tanh(adjusted_abs / scale_factor)
