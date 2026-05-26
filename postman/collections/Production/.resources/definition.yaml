@@ -14,7 +14,7 @@ variables:
     value: ""
     secret: false
 auth:
-  - id: 0094d4b3-05ff-43b5-bfc9-32beaaacbfe9
+  - id: 7e2697f2-9d10-4fb5-92e7-15dd3d74586d
     type: bearer
     name: bearer auth
     credentials:

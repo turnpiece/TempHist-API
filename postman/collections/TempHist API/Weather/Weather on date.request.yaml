@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/weather/London, UK/2025-05-26"
+method: GET
+order: 1000

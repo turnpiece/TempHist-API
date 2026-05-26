@@ -1,0 +1,14 @@
+$kind: http-request
+url: "{{baseURL}}/v1/locations/preapproved"
+method: GET
+queryParams:
+  - key: country_code
+    value: GB
+    disabled: true
+  - key: tier
+    value: global
+    disabled: true
+  - key: limit
+    value: "50"
+    disabled: true
+order: 1000

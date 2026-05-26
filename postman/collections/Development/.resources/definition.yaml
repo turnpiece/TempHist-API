@@ -4,7 +4,7 @@ variables:
   API_ACCESS_TOKEN: ""
   ADMIN_API_KEY: ""
 auth:
-  - id: 3cce0d8b-b9b7-4241-b924-42d54b77c977
+  - id: 0ba66bbc-a278-45c3-a771-5103ca2e2d4a
     type: bearer
     name: bearer auth
     credentials:

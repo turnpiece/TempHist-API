@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/v1/records/monthly/London, England, United Kingdom/05-26/summary"
+method: GET
+order: 8000

@@ -1,0 +1,6 @@
+$kind: http-request
+url: "{{baseURL}}/v1/records/daily/London, England, United Kingdom/05-26"
+method: GET
+queryParams:
+  unit_group: fahrenheit
+order: 5000

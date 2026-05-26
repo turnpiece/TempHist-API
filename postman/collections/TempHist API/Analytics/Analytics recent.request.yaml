@@ -1,0 +1,6 @@
+$kind: http-request
+url: "{{baseURL}}/analytics/recent"
+method: GET
+queryParams:
+  limit: "50"
+order: 3000

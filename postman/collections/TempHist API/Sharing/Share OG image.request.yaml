@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/v1/og/IMAGE_ID.png"
+method: GET
+order: 3000

@@ -1,0 +1,8 @@
+$kind: collection
+description: All TempHist API endpoints. Switch environments (Local / Development / Staging / Production) to point requests at different servers. Collection-level bearer auth uses {{API_ACCESS_TOKEN}} — set this in the active environment. Admin endpoints also require {{ADMIN_API_KEY}}.
+auth:
+  - id: 93b9ec01-5030-4980-8fbc-b97ee9a438f3
+    type: bearer
+    name: bearer auth
+    credentials:
+      token: "{{API_ACCESS_TOKEN}}"
