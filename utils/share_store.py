@@ -4,7 +4,7 @@ import logging
 import os
 import secrets
 import string
-from typing import Optional
+from typing import Optional, List
 
 import asyncpg
 
@@ -102,6 +102,47 @@ class ShareStore:
 
         logger.error("Failed to generate a unique share ID after 5 attempts")
         return None
+
+    async def list_shares(
+        self,
+        period: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Optional[List[dict]]:
+        pool = await self._ensure_pool()
+        if not pool:
+            return None
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, location, period, identifier, ref_year, unit, created_at
+                FROM (
+                    SELECT DISTINCT ON (location, period, identifier)
+                        id, location, period, identifier, ref_year, unit, created_at
+                    FROM shares
+                    WHERE ($1::text IS NULL OR period = $1)
+                    ORDER BY location, period, identifier, created_at DESC
+                ) deduped
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                period, limit, offset,
+            )
+        return [
+            {
+                "id": row["id"],
+                "location": row["location"],
+                "period": row["period"],
+                "identifier": row["identifier"],
+                "ref_year": row["ref_year"],
+                "unit": row["unit"],
+                "created_at": row["created_at"].isoformat(),
+                "og_image_url": f"/v1/og/{row['id']}.png",
+                "share_url": f"{_SHARE_BASE_URL}/s/{row['id']}",
+            }
+            for row in rows
+        ]
 
     async def get_share(self, share_id: str) -> Optional[dict]:
         pool = await self._ensure_pool()

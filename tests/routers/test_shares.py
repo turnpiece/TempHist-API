@@ -2,6 +2,7 @@
 
 Covers:
 - POST /v1/shares  — create share (requires Firebase auth)
+- GET /v1/shares  — list recent shares (public, deduplicated)
 - GET /v1/shares/{share_id}  — retrieve share metadata (public)
 - GET /v1/og/{share_id}.png  — OG preview image (public)
 """
@@ -178,6 +179,112 @@ class TestCreateShare:
             headers={"Authorization": "Bearer firebase-token"},
         )
         assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/shares  (public feed)
+# ---------------------------------------------------------------------------
+
+SHARE_LIST = [
+    {
+        "id": "aB3xY7qZ",
+        "location": "London, England, United Kingdom",
+        "period": "yearly",
+        "identifier": "04-11",
+        "ref_year": 2024,
+        "unit": "celsius",
+        "created_at": "2024-04-11T10:00:00+00:00",
+        "og_image_url": "/v1/og/aB3xY7qZ.png",
+        "share_url": "https://temphist.com/s/aB3xY7qZ",
+    },
+    {
+        "id": "cD4eF8gH",
+        "location": "Paris, Île-de-France, France",
+        "period": "monthly",
+        "identifier": "04-11",
+        "ref_year": 2024,
+        "unit": "celsius",
+        "created_at": "2024-04-10T08:00:00+00:00",
+        "og_image_url": "/v1/og/cD4eF8gH.png",
+        "share_url": "https://temphist.com/s/cD4eF8gH",
+    },
+]
+
+
+class TestListShares:
+    def test_list_shares_success(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = SHARE_LIST
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            response = client.get("/v1/shares")
+        assert response.status_code == 200
+        data = response.json()
+        assert "shares" in data
+        assert len(data["shares"]) == 2
+        assert data["limit"] == 20
+        assert data["offset"] == 0
+
+    def test_list_shares_period_filter(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = [SHARE_LIST[0]]
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            response = client.get("/v1/shares?period=yearly")
+        assert response.status_code == 200
+        store_mock.list_shares.assert_called_once_with(period="yearly", limit=20, offset=0)
+
+    def test_list_shares_pagination(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = []
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            response = client.get("/v1/shares?limit=5&offset=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["limit"] == 5
+        assert data["offset"] == 10
+        store_mock.list_shares.assert_called_once_with(period=None, limit=5, offset=10)
+
+    def test_list_shares_limit_max(self, client, mock_redis):
+        response = client.get("/v1/shares?limit=999")
+        assert response.status_code == 422
+
+    def test_list_shares_limit_min(self, client, mock_redis):
+        response = client.get("/v1/shares?limit=0")
+        assert response.status_code == 422
+
+    def test_list_shares_invalid_period(self, client, mock_redis):
+        response = client.get("/v1/shares?period=hourly")
+        assert response.status_code == 422
+
+    def test_list_shares_store_unavailable(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = None
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            response = client.get("/v1/shares")
+        assert response.status_code == 503
+
+    def test_list_shares_no_auth_required(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = SHARE_LIST
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            response = client.get("/v1/shares")
+        assert response.status_code == 200
+
+    def test_list_shares_empty_result(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = []
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            response = client.get("/v1/shares")
+        assert response.status_code == 200
+        assert response.json()["shares"] == []
+
+    def test_list_shares_response_includes_og_url(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = SHARE_LIST
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            response = client.get("/v1/shares")
+        first = response.json()["shares"][0]
+        assert "og_image_url" in first
+        assert "share_url" in first
 
 
 # ---------------------------------------------------------------------------

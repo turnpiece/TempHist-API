@@ -1,4 +1,5 @@
 $kind: http-request
-url: "{{baseURL}}/v1/records/daily/London, England, United Kingdom/05-26"
+name: Daily
+url: "{{baseURL}}/v1/records/daily/Chicago, Illinois, United States/05-12"
 method: GET
 order: 1000

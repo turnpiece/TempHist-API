@@ -1,4 +1,5 @@
 $kind: http-request
-url: "{{baseURL}}/v1/shares/SHARE_ID"
+name: Get share
+url: "{{baseURL}}/v1/shares/ZP9SH9X3"
 method: GET
 order: 2000

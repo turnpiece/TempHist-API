@@ -1,0 +1,18 @@
+$kind: http-request
+description: Public feed of recent share records, deduplicated by location + period + identifier. No auth required.
+url: "{{baseURL}}/v1/shares"
+method: GET
+queryParams:
+  - key: period
+    value: yearly
+    disabled: true
+    description: "Filter by period: daily, weekly, monthly, or yearly"
+  - key: limit
+    value: "20"
+    description: Number of results to return (1–100)
+  - key: offset
+    value: "0"
+    description: Pagination offset
+auth:
+  type: noauth
+order: 4000
