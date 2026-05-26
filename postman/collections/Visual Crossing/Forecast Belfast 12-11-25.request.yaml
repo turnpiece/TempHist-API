@@ -1,0 +1,9 @@
+$kind: http-request
+name: Forecast Belfast 12/11/25
+url: https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/London/2025-06-23?unitGroup=metric&include=days&key=CBTC39YET7BLAA94AUTZHYSFH
+method: GET
+queryParams:
+  unitGroup: metric
+  include: days
+  key: CBTC39YET7BLAA94AUTZHYSFH
+order: 1000

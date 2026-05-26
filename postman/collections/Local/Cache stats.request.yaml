@@ -1,0 +1,6 @@
+$kind: http-request
+url: "{{baseURL}}/cache-stats"
+method: GET
+headers:
+  X-API-TOKEN: testing
+order: 4000

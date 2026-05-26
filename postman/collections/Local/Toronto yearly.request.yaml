@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/v1/records/yearly/Toronto, Canada/05-25"
+method: GET
+order: 13000

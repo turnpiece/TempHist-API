@@ -1,0 +1,12 @@
+$kind: http-request
+name: London /forecast endpoint
+description: Get all data for London on 20th June
+url: "{{baseURL}}/forecast/london, uk?unit_group=fahrenheit"
+method: GET
+headers:
+  - key: X-API-Token
+    value: testing
+    disabled: true
+queryParams:
+  unit_group: fahrenheit
+order: 2000

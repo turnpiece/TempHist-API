@@ -1,0 +1,6 @@
+$kind: http-request
+url: "{{baseURL}}/v1/records/weekly/Paris, France/03-20?unit_group=fahrenheit"
+method: GET
+queryParams:
+  unit_group: fahrenheit
+order: 8000

@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/data/locations/processed/manchester.webp"
+method: GET
+order: 21000

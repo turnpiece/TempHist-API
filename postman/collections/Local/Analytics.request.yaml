@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/analytics/summary"
+method: GET
+order: 25000

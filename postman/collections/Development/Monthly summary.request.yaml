@@ -1,0 +1,4 @@
+$kind: http-request
+url: http://localhost:8000/v1/records/monthly/london/12-31/summary
+method: GET
+order: 13000

@@ -1,0 +1,15 @@
+owner: "6526960"
+team: null
+lastUpdatedBy: "6526960"
+lastRevision: 1779645571000
+name: Production
+color: null
+values:
+  - key: X-API-Token
+    value: testing
+    enabled: true
+  - key: API_ACCESS_TOKEN
+    value: ""
+    enabled: true
+createdAt: 2025-10-24T09:51:34.000Z
+updatedAt: 2026-05-24T17:59:31.000Z

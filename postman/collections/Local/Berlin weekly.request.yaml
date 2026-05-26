@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/v1/records/weekly/Berlin%2C%20Berlin%2C%20Germany/10-25"
+method: GET
+order: 19000

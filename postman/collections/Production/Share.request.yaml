@@ -1,0 +1,6 @@
+$kind: http-request
+url: https://api.temphist.com/v1/shares/WJjjn8Ti
+method: GET
+auth:
+  type: noauth
+order: 11000

@@ -1,7 +1,5 @@
-# Use this workspace to collaborate
 workspace:
   id: e3833236-6098-4f21-b5c9-b265303c7412
-
 localResources:
   docs:
     - ../graphify-out/GRAPH_REPORT.md
@@ -12,3 +10,26 @@ localResources:
     - ../README.md
     - ../CHANGELOG.md
     - ../AGENTS.md
+  collections:
+    - ../postman/collections/Production
+    - ../postman/collections/Visual Crossing
+    - ../postman/collections/Staging
+    - ../postman/collections/Monitors
+    - ../postman/collections/Local
+    - ../postman/collections/Development
+  environments:
+    - ../postman/environments/Development.environment.yaml
+    - ../postman/environments/Staging.environment.yaml
+    - ../postman/environments/Production.environment.yaml
+cloudResources:
+  collections:
+    ../postman/collections/Production: 6526960-1c631e58-8b6d-4384-88cc-72c288f35991
+    ../postman/collections/Visual Crossing: 6526960-1c83a814-741f-4e32-ab92-1b4b2fc37f46
+    ../postman/collections/Staging: 6526960-2af7958a-c26d-4bed-954b-a33a31181192
+    ../postman/collections/Monitors: 6526960-2d3ed417-bdaf-4a27-83d9-d3de0170010b
+    ../postman/collections/Local: 6526960-8a3548f0-d0ff-4ff0-bb0f-d2939a55bf07
+    ../postman/collections/Development: 6526960-923fe400-f7f0-449a-aa9e-64ad239061a4
+  environments:
+    ../postman/environments/Development.environment.yaml: 6526960-11f97ca9-edcc-4ee1-8962-75ce07b8deb6
+    ../postman/environments/Staging.environment.yaml: 6526960-8bf389ac-7e9f-4ebe-b487-f38ae89ba1d5
+    ../postman/environments/Production.environment.yaml: 6526960-981cfe13-ae6f-49c2-9106-1e3f50b57612

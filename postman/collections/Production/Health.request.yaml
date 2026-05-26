@@ -1,0 +1,8 @@
+$kind: http-request
+url: "{{baseURL}}/health"
+method: GET
+auth:
+  type: bearer
+  credentials:
+    token: "{{token}}"
+order: 4000

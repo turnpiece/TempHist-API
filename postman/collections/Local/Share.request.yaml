@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/v1/shares/wHynE5RF"
+method: GET
+order: 26000

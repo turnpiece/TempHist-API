@@ -1,0 +1,11 @@
+$kind: collection
+variables:
+  baseURL: ""
+  API_ACCESS_TOKEN: ""
+  ADMIN_API_KEY: ""
+auth:
+  - id: bc213667-a834-4596-8620-718d128f8bca
+    type: bearer
+    name: bearer auth
+    credentials:
+      token: "{{API_ACCESS_TOKEN}}"

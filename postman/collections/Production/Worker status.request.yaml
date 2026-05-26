@@ -1,0 +1,20 @@
+$kind: http-request
+url: "{{baseURL}}/v1/jobs/diagnostics/worker-status"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Response is valid JSON with worker.status and worker is not unhealthy', function () {
+          let data;
+          pm.expect(function () {
+              data = pm.response.json();
+          }).to.not.throw();
+
+          pm.expect(data, 'Response body should be a JSON object').to.be.an('object');
+          pm.expect(data, 'Response JSON should include a worker object').to.have.property('worker');
+          pm.expect(data.worker, 'Response JSON worker should be an object').to.be.an('object');
+          pm.expect(data.worker, 'Response JSON worker should include status').to.have.property('status');
+          pm.expect(data.worker.status, 'Monitor failure: worker.status must not be unhealthy').to.not.eql('unhealthy');
+      });
+    language: text/javascript
+order: 16000

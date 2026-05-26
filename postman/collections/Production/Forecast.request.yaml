@@ -1,0 +1,6 @@
+$kind: http-request
+url: "{{baseURL}}/weather/London, UK/2025-09-17"
+method: GET
+headers:
+  X-API-Token: testing
+order: 2000

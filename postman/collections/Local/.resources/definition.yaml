@@ -1,0 +1,21 @@
+$kind: collection
+variables:
+  - key: baseURL
+    value: ""
+    secret: false
+  - key: test_token
+    value: ""
+    disabled: true
+    secret: false
+  - key: api_token
+    value: ""
+    secret: false
+  - key: ADMIN_API_KEY
+    value: ""
+    secret: false
+auth:
+  - id: f0ac47e6-59a6-47c7-9bc2-d70b52fbe9bc
+    type: bearer
+    name: bearer auth
+    credentials:
+      token: "{{api_token}}"

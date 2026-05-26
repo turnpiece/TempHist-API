@@ -1,0 +1,4 @@
+$kind: collection
+description: Minimum viable collection for the existing monitor to run only the Worker status request.
+variables:
+  baseURL: https://api.temphist.com

@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/cache-warm/status"
+method: GET
+order: 6000

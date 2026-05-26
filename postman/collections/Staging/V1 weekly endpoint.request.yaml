@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/v1/records/weekly/Paris/09-17"
+method: GET
+order: 9000

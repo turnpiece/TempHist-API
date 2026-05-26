@@ -1,0 +1,9 @@
+$kind: http-request
+description: Get recent client-submitted analytics records. Results are only populated when clients have called POST /analytics. The limit parameter controls how many records to return (1–1000, default 100).
+url: "{{baseURL}}/analytics/recent"
+method: GET
+queryParams:
+  - key: limit
+    value: "50"
+    description: Number of records to return (1–1000, default 100)
+order: 30000

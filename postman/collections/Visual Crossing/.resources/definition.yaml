@@ -1,0 +1,4 @@
+$kind: collection
+variables:
+  api_key: ""
+  base_url: ""
