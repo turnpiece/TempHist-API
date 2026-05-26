@@ -206,17 +206,14 @@ def _compute_bar_colors(years: list, temps: list, ref_year) -> list:
     """Return one matplotlib color per bar using the climate-stripes Z-score scheme."""
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
     if not hist_temps:
-        return [_REF_YEAR if y == ref_year else tuple(c / 255 for c in _NEUTRAL_RGB)
-                for y in years]
+        return [tuple(c / 255 for c in _NEUTRAL_RGB) for _ in years]
     mean = sum(hist_temps) / len(hist_temps)
     # Population std dev — matches calculate_standard_deviation() in utils/temperature.py
     variance = sum((t - mean) ** 2 for t in hist_temps) / len(hist_temps)
     std_dev = variance ** 0.5
     colors = []
-    for y, t in zip(years, temps):
-        if y == ref_year:
-            colors.append(_REF_YEAR)
-        elif std_dev > 0:
+    for t in temps:
+        if std_dev > 0:
             colors.append(_bar_color_for_z_score((t - mean) / std_dev))
         else:
             colors.append(tuple(c / 255 for c in _NEUTRAL_RGB))
@@ -338,7 +335,7 @@ def _render_chart(share: dict, records: list) -> bytes:
             xytext=(8, 0),
             textcoords="offset points",
             va="center",
-            color=_REF_YEAR,
+            color=_AVG_LINE,
             fontsize=13,
             fontweight="bold",
         )
@@ -349,12 +346,15 @@ def _render_chart(share: dict, records: list) -> bytes:
     city = location.split(",")[0].strip() if location else ""
     heading = _format_period_heading(period, identifier)
     title = f"{city} · {heading}" if city and heading else (city or heading)
-    ax.set_title(
+    # Align title with the left edge of the y-axis tick labels (years)
+    ax.text(
+        -0.05, 1.03,
         title,
-        loc="left",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
         color=_TITLE_COLOR,
         fontsize=18,
-        pad=12,
         fontweight="normal",
         fontfamily=_FONT_FAMILY,
     )
