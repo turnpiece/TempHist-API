@@ -901,6 +901,37 @@ SHARE_BASE_URL=https://temphist.com  # Base URL prepended to share URLs (default
 
 The share store requires a PostgreSQL connection (`TEMPHIST_PG_DSN` / `DATABASE_URL`). The `shares` table is created automatically on first use.
 
+### Analytics Endpoints
+
+The analytics system collects **client-reported** session data submitted by the app. All values in the summary (including `total_api_calls`) reflect what clients have submitted via `POST /analytics` — they are not derived from server-side request logs.
+
+> **Limitation:** If no client has called `POST /analytics` recently, all summary values will be zero. The aggregated summary is stored in Redis with a 7-day TTL; if that key expires and the underlying index has also expired, counters reset to zero silently.
+
+| Endpoint | Description | Auth |
+| -------- | ----------- | ---- |
+| `POST /analytics` | Submit a client session analytics record | Public (rate-limited: 100/hour per IP) |
+| `GET /analytics/summary` | Aggregated totals across all submitted sessions | Public |
+| `GET /analytics/recent` | Most recent submitted records (query param: `limit`, 1–1000, default 100) | Public |
+| `GET /analytics/session/{session_id}` | All records for a specific session ID | Public |
+
+#### `POST /analytics` request body
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `session_duration` | integer ≥ 0 | No | Session length in seconds |
+| `api_calls` | integer ≥ 0 | No | Number of API calls made this session |
+| `api_failure_rate` | string or number | No | Failure rate as a percentage, e.g. `"2.5%"` or `2.5` |
+| `retry_attempts` | integer ≥ 0 | No | Number of retries attempted |
+| `location_failures` | integer ≥ 0 | No | Number of location lookup failures |
+| `error_count` | integer ≥ 0 | No | Total errors encountered |
+| `recent_errors` | array | No | Up to 50 error objects; each must have `timestamp`, `error_type`, `message` |
+| `app_version` | string | No | App version string |
+| `platform` | string | No | Platform identifier, e.g. `"iOS"`, `"web"` |
+| `user_agent` | string | No | Client user-agent |
+| `session_id` | string | No | Unique session identifier; used for `GET /analytics/session/{id}` lookup |
+
+> **Note on `GET /analytics/session/{session_id}`:** This performs a linear scan of the most recent 1000 records. There is no dedicated session index, so lookups across large datasets may miss older records.
+
 ### Monitoring Endpoints
 
 | Endpoint                 | Description                      | Access |

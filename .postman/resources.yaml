@@ -1,0 +1,14 @@
+# Use this workspace to collaborate
+workspace:
+  id: e3833236-6098-4f21-b5c9-b265303c7412
+
+localResources:
+  docs:
+    - ../graphify-out/GRAPH_REPORT.md
+    - ../DEPLOYMENT.md
+    - ../TROUBLESHOOTING.md
+    - ../MIGRATION_GUIDE.md
+    - ../CLOUDFLARE_OPTIMIZATION.md
+    - ../README.md
+    - ../CHANGELOG.md
+    - ../AGENTS.md
