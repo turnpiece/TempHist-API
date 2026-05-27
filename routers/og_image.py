@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from cache.keys import bundle_key, normalize_location_for_cache, rec_key
@@ -220,7 +220,7 @@ def _compute_bar_colors(years: list, temps: list, ref_year) -> list:
     return colors
 
 
-def _render_chart(share: dict, records: list) -> bytes:
+def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:
     """Render a horizontal bar chart of per-year temperatures as PNG bytes."""
     import matplotlib
     matplotlib.use("Agg")
@@ -342,22 +342,25 @@ def _render_chart(share: dict, records: list) -> bytes:
 
     ax.set_xlim(x_min, x_max)
 
-    # Title — city name + period heading
-    city = location.split(",")[0].strip() if location else ""
-    heading = _format_period_heading(period, identifier)
-    title = f"{city} · {heading}" if city and heading else (city or heading)
-    # Align title with the left edge of the y-axis tick labels (years)
-    ax.text(
-        -0.05, 1.03,
-        title,
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        color=_TITLE_COLOR,
-        fontsize=18,
-        fontweight="normal",
-        fontfamily=_FONT_FAMILY,
-    )
+    if show_title:
+        # Title — city name + period heading.
+        # y=1.09 in axes coords places it above the temperature tick labels
+        # (which sit at the top of the chart due to xaxis.tick_top() and
+        # extend to roughly y=1.04), giving a clear gap between them.
+        city = location.split(",")[0].strip() if location else ""
+        heading = _format_period_heading(period, identifier)
+        title = f"{city} · {heading}" if city and heading else (city or heading)
+        ax.text(
+            -0.05, 1.09,
+            title,
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            color=_TITLE_COLOR,
+            fontsize=18,
+            fontweight="normal",
+            fontfamily=_FONT_FAMILY,
+        )
 
     ax.xaxis.tick_top()
     ax.set_xlabel("")
@@ -451,6 +454,7 @@ async def _fetch_records_live(share: dict, redis_client) -> Optional[list]:
 @router.get("/v1/og/{share_id}.png", include_in_schema=True)
 async def og_image(
     share_id: str,
+    show_title: bool = Query(default=False, description="Whether to render the city/period title on the image"),
     redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """Return a 1200×630 OG preview image for the given share ID. No auth required."""
@@ -468,7 +472,7 @@ async def og_image(
         records = await _fetch_records_live(share, redis_client)
 
     try:
-        png = _render_chart(share, records) if records else _render_placeholder(share)
+        png = _render_chart(share, records, show_title=show_title) if records else _render_placeholder(share)
     except Exception as exc:
         logger.error("OG image render failed for share %s: %s", share_id, exc, exc_info=True)
         try:
