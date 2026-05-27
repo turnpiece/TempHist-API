@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/locations/popular"
-method: GET
-order: 8000

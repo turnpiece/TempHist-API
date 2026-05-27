@@ -1,6 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/locations/search?q=birmingham"
-method: GET
-queryParams:
-  q: birmingham
-order: 26000

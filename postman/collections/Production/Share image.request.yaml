@@ -1,6 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/og/thSJvhO2.png"
-method: GET
-auth:
-  type: noauth
-order: 12000

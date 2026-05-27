@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/cache/clear"
-method: DELETE
-order: 9000

@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/locations/preapproved"
-method: GET
-order: 17000

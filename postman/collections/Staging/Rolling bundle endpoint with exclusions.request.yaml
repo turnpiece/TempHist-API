@@ -1,6 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/records/rolling-bundle/London/2025-01-15?exclude=day,day_minus_1,day_minus_2,day_minus_3"
-method: GET
-queryParams:
-  exclude: day,day_minus_1,day_minus_2,day_minus_3
-order: 17000

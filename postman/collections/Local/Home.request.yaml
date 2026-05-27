@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}"
-method: GET
-order: 5000

@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{base_url}}/cache-warm/locations"
-method: GET
-order: 19000

@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/records/daily/New%20York%2C%20New%20York%2C%20United%20States/10-04/async"
-method: POST
-order: 10000

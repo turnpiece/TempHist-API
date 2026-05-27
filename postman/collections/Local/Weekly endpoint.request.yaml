@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/records/weekly/Kolkata,%20West%20Bengal,%20India/05-18"
-method: GET
-order: 11000
