@@ -26,6 +26,8 @@ class ShareCreate(BaseModel):
     identifier: str = Field(..., pattern=r"^\d{2}-\d{2}$")  # MM-dd
     ref_year: int = Field(..., ge=1970, le=2100)
     unit: Literal["celsius", "fahrenheit"] = "celsius"
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
 
 
 @router.get("/v1/shares")
@@ -61,6 +63,8 @@ async def create_share(
         identifier=body.identifier,
         ref_year=body.ref_year,
         unit=body.unit,
+        latitude=body.latitude,
+        longitude=body.longitude,
     )
     if result is None:
         raise HTTPException(status_code=503, detail="Share service unavailable.")

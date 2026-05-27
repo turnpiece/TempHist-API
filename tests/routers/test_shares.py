@@ -68,6 +68,8 @@ VALID_CREATE_BODY = {
     "identifier": "04-11",
     "ref_year": 2024,
     "unit": "celsius",
+    "latitude": 51.5074,
+    "longitude": -0.1278,
 }
 
 
@@ -196,6 +198,8 @@ SHARE_LIST = [
         "created_at": "2024-04-11T10:00:00+00:00",
         "og_image_url": "/v1/og/aB3xY7qZ.png",
         "share_url": "https://temphist.com/s/aB3xY7qZ",
+        "latitude": 51.5074,
+        "longitude": -0.1278,
     },
     {
         "id": "cD4eF8gH",
@@ -207,6 +211,8 @@ SHARE_LIST = [
         "created_at": "2024-04-10T08:00:00+00:00",
         "og_image_url": "/v1/og/cD4eF8gH.png",
         "share_url": "https://temphist.com/s/cD4eF8gH",
+        "latitude": 48.8566,
+        "longitude": 2.3522,
     },
 ]
 
@@ -418,3 +424,148 @@ class TestOgImage:
              patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": 10.0}]):
             response = client.get("/v1/og/aB3xY7qZ.png")
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Proximity deduplication — unit tests against ShareStore._haversine_km
+# and list_shares dedup logic
+# ---------------------------------------------------------------------------
+
+from utils.share_store import _haversine_km, ShareStore
+from datetime import datetime, timezone
+import asyncio
+
+
+class TestHaversine:
+    def test_same_point_is_zero(self):
+        assert _haversine_km(51.5, -0.1, 51.5, -0.1) == 0.0
+
+    def test_london_to_paris_approx(self):
+        # London (51.51, -0.13) to Paris (48.86, 2.35) ≈ 340 km
+        km = _haversine_km(51.51, -0.13, 48.86, 2.35)
+        assert 330 < km < 360
+
+    def test_london_to_greater_london_within_50km(self):
+        # City of London vs Greater London centroid — a few km apart
+        km = _haversine_km(51.5074, -0.1278, 51.5085, -0.0956)
+        assert km < 50
+
+    def test_london_to_brighton_outside_50km(self):
+        # Brighton is ~77 km south of London
+        km = _haversine_km(51.5074, -0.1278, 50.8225, -0.1372)
+        assert km > 50
+
+
+class TestListSharesProximityDedup:
+    """Tests for the Python-side proximity deduplication in ShareStore.list_shares."""
+
+    def _make_row(self, share_id, location, period, identifier, lat, lon,
+                  created_at=None):
+        """Build a fake asyncpg-like Record dict."""
+        return {
+            "id": share_id,
+            "location": location,
+            "period": period,
+            "identifier": identifier,
+            "ref_year": 2024,
+            "unit": "celsius",
+            "created_at": created_at or datetime(2024, 4, 11, 10, 0, 0, tzinfo=timezone.utc),
+            "latitude": lat,
+            "longitude": lon,
+        }
+
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def _mock_store_with_rows(self, rows):
+        """Return a ShareStore whose DB fetch returns the given rows."""
+        store = ShareStore.__new__(ShareStore)
+        store._disabled = False
+        store._pool = MagicMock()
+
+        class FakeConn:
+            async def fetch(self, *args, **kwargs):
+                return rows
+
+        class FakePool:
+            def acquire(self):
+                return self
+
+            async def __aenter__(self):
+                return FakeConn()
+
+            async def __aexit__(self, *args):
+                pass
+
+        store._pool = FakePool()
+        return store
+
+    def test_nearby_shares_deduplicated(self):
+        """Two shares within 50 km with same period+identifier → one result."""
+        rows = [
+            self._make_row("id000001", "London, England, United Kingdom",
+                           "yearly", "04-11", 51.5074, -0.1278,
+                           datetime(2024, 4, 11, tzinfo=timezone.utc)),
+            self._make_row("id000002", "Greater London, England, United Kingdom",
+                           "yearly", "04-11", 51.5085, -0.0956,
+                           datetime(2024, 4, 10, tzinfo=timezone.utc)),
+        ]
+        store = self._mock_store_with_rows(rows)
+        result = self._run(store.list_shares())
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["id"] == "id000001"  # most-recent kept
+
+    def test_distant_shares_both_returned(self):
+        """Two shares >50 km apart with same period+identifier → both returned."""
+        rows = [
+            self._make_row("id000001", "London, England, United Kingdom",
+                           "yearly", "04-11", 51.5074, -0.1278),
+            self._make_row("id000002", "Brighton, England, United Kingdom",
+                           "yearly", "04-11", 50.8225, -0.1372),
+        ]
+        store = self._mock_store_with_rows(rows)
+        result = self._run(store.list_shares())
+        assert result is not None
+        assert len(result) == 2
+
+    def test_null_coordinates_exact_string_fallback(self):
+        """Shares with NULL coords fall back to exact string deduplication."""
+        rows = [
+            self._make_row("id000001", "London, England, United Kingdom",
+                           "yearly", "04-11", None, None,
+                           datetime(2024, 4, 11, tzinfo=timezone.utc)),
+            self._make_row("id000002", "London, England, United Kingdom",
+                           "yearly", "04-11", None, None,
+                           datetime(2024, 4, 10, tzinfo=timezone.utc)),
+        ]
+        store = self._mock_store_with_rows(rows)
+        result = self._run(store.list_shares())
+        assert result is not None
+        assert len(result) == 1
+
+    def test_null_coords_different_strings_not_deduped(self):
+        """NULL-coord shares with different strings are not merged."""
+        rows = [
+            self._make_row("id000001", "London, England, United Kingdom",
+                           "yearly", "04-11", None, None),
+            self._make_row("id000002", "Greater London, England, United Kingdom",
+                           "yearly", "04-11", None, None),
+        ]
+        store = self._mock_store_with_rows(rows)
+        result = self._run(store.list_shares())
+        assert result is not None
+        assert len(result) == 2
+
+    def test_private_lat_lon_fields_stripped_from_output(self):
+        """The _lat/_lon fields used during dedup must not appear in the response."""
+        rows = [
+            self._make_row("id000001", "London, England, United Kingdom",
+                           "yearly", "04-11", 51.5074, -0.1278),
+        ]
+        store = self._mock_store_with_rows(rows)
+        result = self._run(store.list_shares())
+        assert result is not None
+        assert len(result) == 1
+        assert "_lat" not in result[0]
+        assert "_lon" not in result[0]
