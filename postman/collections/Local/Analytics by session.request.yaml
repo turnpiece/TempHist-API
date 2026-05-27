@@ -1,5 +1,0 @@
-$kind: http-request
-description: "Get all analytics records for a specific session ID. Note: this performs a linear scan of the most recent 1000 records — there is no dedicated session index. Replace the session ID in the path with the value submitted via POST /analytics."
-url: "{{baseURL}}/analytics/session/test-session-001"
-method: GET
-order: 31000

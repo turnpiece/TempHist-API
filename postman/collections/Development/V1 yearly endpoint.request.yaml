@@ -1,4 +1,0 @@
-$kind: http-request
-url: http://localhost:8000/v1/records/yearly/Paris/09-19
-method: GET
-order: 10000

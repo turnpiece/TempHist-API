@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/records/yearly/Glasgow, Scotland,%20United%20Kingdom/05-24"
-method: GET
-order: 12000

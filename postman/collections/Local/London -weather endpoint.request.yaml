@@ -1,8 +1,0 @@
-$kind: http-request
-name: London /weather endpoint
-description: Get all data for London on 20th June
-url: "{{baseURL}}/weather/london/2024-09-17"
-method: GET
-headers:
-  X-API-Token: testing
-order: 2000

@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/health/detailed"
-method: GET
-order: 5000

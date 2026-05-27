@@ -1,6 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/admin/clear-job-queue"
-method: POST
-headers:
-  X-Admin-Key: "{{ADMIN_API_KEY}}"
-order: 23000

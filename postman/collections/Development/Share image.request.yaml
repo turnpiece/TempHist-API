@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/og/WX1gphMb.png"
-method: GET
-order: 25000

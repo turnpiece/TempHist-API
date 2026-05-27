@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/jobs/record_computation_1779645446344_9f7b7db9"
-method: GET
-order: 27000

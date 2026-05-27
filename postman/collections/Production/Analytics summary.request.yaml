@@ -1,8 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/analytics/summary"
-method: GET
-auth:
-  type: bearer
-  credentials:
-    token: test_token
-order: 5000

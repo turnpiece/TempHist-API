@@ -1,9 +1,0 @@
-$kind: http-request
-name: Berlin 29/10/2012
-url: https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/Berlin%2C%20Berlin%2C%20Germany/2012-10-29?unitGroup=metric&include=days&key=CBTC39YET7BLAA94AUTZHYSFH
-method: GET
-queryParams:
-  unitGroup: metric
-  include: days
-  key: CBTC39YET7BLAA94AUTZHYSFH
-order: 12000
