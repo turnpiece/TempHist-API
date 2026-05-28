@@ -12,7 +12,6 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 _ALPHABET = string.ascii_letters + string.digits  # 62 chars, ~218 trillion combinations at 8 chars
-_SHARE_BASE_URL = os.getenv("SHARE_BASE_URL", "https://temphist.com")
 
 # Proximity threshold for location deduplication in list_shares.
 # Two shares with the same (period, identifier) are considered duplicates when
@@ -118,7 +117,7 @@ class ShareStore:
                     )
                     return {
                         "id": row["id"],
-                        "url": f"{_SHARE_BASE_URL}/s/{row['id']}",
+                        "url": f"/s/{row['id']}",
                     }
                 except asyncpg.UniqueViolationError:
                     logger.warning("Share ID collision on %s, retrying", share_id)
@@ -193,7 +192,7 @@ class ShareStore:
                     "unit": row["unit"],
                     "created_at": row["created_at"].isoformat(),
                     "og_image_url": f"/v1/og/{row['id']}.png",
-                    "share_url": f"{_SHARE_BASE_URL}/s/{row['id']}",
+                    "share_url": f"/s/{row['id']}",
                     # Private fields used only during dedup — stripped before return
                     "_lat": r_lat,
                     "_lon": r_lon,
