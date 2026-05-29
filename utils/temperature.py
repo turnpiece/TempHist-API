@@ -267,7 +267,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             period_context = "yesterday"
             period_context_alt = "the time of year"
         else:
-            period_context = "that day"
+            period_context = "it"
             period_context_alt = "the time of year"
     elif period == "weekly":
         if tense_context == "has been":
