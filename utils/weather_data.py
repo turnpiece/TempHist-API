@@ -109,7 +109,17 @@ async def get_weather_for_date(
                         # Check if we got valid temperature data
                         day_data = days[0]
                         temp = day_data.get('temp')
-                        
+
+                        # For today/future, VC may not yet have a finalised hourly-average temp.
+                        # Fall back to (tempmax + tempmin) / 2 as the standard daily mean estimate.
+                        if temp is None and is_today_date:
+                            tmax = day_data.get('tempmax')
+                            tmin = day_data.get('tempmin')
+                            if tmax is not None and tmin is not None:
+                                temp = round((tmax + tmin) / 2, 2)
+                                days = [dict(day_data, temp=temp)] + days[1:]
+                                logger.debug(f"Today's temp null — estimated from max/min: {temp}°F")
+
                         if temp is not None:
                             # Success! Cache and return the data
                             if FILTER_WEATHER_DATA:
@@ -156,7 +166,18 @@ async def get_weather_for_date(
                                 store_location_timezone(location, tz_str, redis_client)
                         metric_days = metric_data.get('days')
                         if metric_days and len(metric_days) > 0:
-                            metric_temp = metric_days[0].get('temp')
+                            metric_day_data = metric_days[0]
+                            metric_temp = metric_day_data.get('temp')
+
+                            # Same fallback: estimate from max/min for today if temp is null.
+                            if metric_temp is None and is_today_date:
+                                m_tmax = metric_day_data.get('tempmax')
+                                m_tmin = metric_day_data.get('tempmin')
+                                if m_tmax is not None and m_tmin is not None:
+                                    metric_temp = round((m_tmax + m_tmin) / 2, 2)
+                                    metric_days = [dict(metric_day_data, temp=metric_temp)] + metric_days[1:]
+                                    logger.debug(f"Today's metric temp null — estimated from max/min: {metric_temp}°C")
+
                             if metric_temp is not None:
                                 if FILTER_WEATHER_DATA:
                                     to_cache = {"days": [{

@@ -1,0 +1,5 @@
+$kind: http-request
+name: Share OG image
+url: "{{baseURL}}/v1/og/ZP9SH9X3.png"
+method: GET
+order: 3000

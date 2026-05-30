@@ -6,6 +6,7 @@ import time
 import httpx
 import redis
 from config import API_KEY
+from version import __version__
 from cache.accessors import get_cache_stats
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import get_daily_temperature_store
@@ -25,7 +26,7 @@ async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_cl
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0",
+        "version": __version__,
         "checks": {}
     }
     

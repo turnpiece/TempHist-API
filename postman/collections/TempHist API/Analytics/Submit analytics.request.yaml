@@ -1,0 +1,21 @@
+$kind: http-request
+url: "{{baseURL}}/analytics"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "session_duration": 120,
+      "api_calls": 5,
+      "api_failure_rate": "0%",
+      "retry_attempts": 0,
+      "location_failures": 0,
+      "error_count": 0,
+      "recent_errors": [],
+      "app_version": "1.2.30",
+      "platform": "iOS",
+      "session_id": "test-session-001"
+    }
+order: 1000

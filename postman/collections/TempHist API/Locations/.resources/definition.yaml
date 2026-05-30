@@ -1,0 +1,3 @@
+$kind: collection
+description: Location discovery, popularity ranking, and selection tracking.
+order: 2000

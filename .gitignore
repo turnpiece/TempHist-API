@@ -34,3 +34,14 @@ graphify-out/.chunk_files_*.txt
 graphify-out/obsidian/
 graphify-out/converted/
 graphify-out/cache/
+
+# Postman — only track the TempHist API collection; everything else is
+# ephemeral scratch work or contains secrets (e.g. Visual Crossing API keys)
+postman/environments/
+postman/globals/
+postman/collections/Visual Crossing/
+postman/collections/Development/
+postman/collections/Local/
+postman/collections/Staging/
+postman/collections/Production/
+postman/collections/Monitors/

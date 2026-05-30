@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/v1/records/daily/Sydney, New South Wales, Australia/05-26/async"
+method: POST
+order: 6000

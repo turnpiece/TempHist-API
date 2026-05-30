@@ -1,0 +1,39 @@
+workspace:
+  id: e3833236-6098-4f21-b5c9-b265303c7412
+localResources:
+  docs:
+    - ../graphify-out/GRAPH_REPORT.md
+    - ../DEPLOYMENT.md
+    - ../TROUBLESHOOTING.md
+    - ../MIGRATION_GUIDE.md
+    - ../CLOUDFLARE_OPTIMIZATION.md
+    - ../README.md
+    - ../CHANGELOG.md
+    - ../AGENTS.md
+  collections:
+    - ../postman/collections/Production
+    - ../postman/collections/Visual Crossing
+    - ../postman/collections/Staging
+    - ../postman/collections/Monitors
+    - ../postman/collections/Local
+    - ../postman/collections/Development
+    - ../postman/collections/TempHist API
+  environments:
+    - ../postman/environments/Production.environment.yaml
+    - ../postman/environments/Staging.environment.yaml
+    - ../postman/environments/Development.environment.yaml
+    - ../postman/environments/Local.environment.yaml
+cloudResources:
+  collections:
+    ../postman/collections/Production: 6526960-1c631e58-8b6d-4384-88cc-72c288f35991
+    ../postman/collections/Visual Crossing: 6526960-1c83a814-741f-4e32-ab92-1b4b2fc37f46
+    ../postman/collections/Staging: 6526960-2af7958a-c26d-4bed-954b-a33a31181192
+    ../postman/collections/Monitors: 6526960-2d3ed417-bdaf-4a27-83d9-d3de0170010b
+    ../postman/collections/Local: 6526960-8a3548f0-d0ff-4ff0-bb0f-d2939a55bf07
+    ../postman/collections/Development: 6526960-923fe400-f7f0-449a-aa9e-64ad239061a4
+    ../postman/collections/TempHist API: 6526960-7f0d82fa-406e-46be-b202-d21005be5852
+  environments:
+    ../postman/environments/Production.environment.yaml: 6526960-0dc1f04e-a21c-44ca-afd3-1785ee64c3ec
+    ../postman/environments/Staging.environment.yaml: 6526960-45723c17-cea4-42cf-b5f2-4f841e71cca7
+    ../postman/environments/Development.environment.yaml: 6526960-56fcb4f1-0e55-4b9e-be7c-f8dd1028d1ad
+    ../postman/environments/Local.environment.yaml: 6526960-647cff5e-2ad1-4758-9460-0a69b70877d9

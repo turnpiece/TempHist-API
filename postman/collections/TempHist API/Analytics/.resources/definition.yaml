@@ -1,0 +1,3 @@
+$kind: collection
+description: Client-reported session analytics. Values will be zero if no client has submitted data recently.
+order: 3000

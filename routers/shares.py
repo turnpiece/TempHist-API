@@ -1,10 +1,10 @@
-"""Social share endpoints — POST /v1/shares and GET /v1/shares/{id}."""
+"""Social share endpoints — POST /v1/shares, GET /v1/shares, GET /v1/shares/{id}."""
 import json
 import logging
-from typing import Literal
+from typing import Literal, Optional
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from routers.dependencies import get_redis_client
@@ -26,6 +26,22 @@ class ShareCreate(BaseModel):
     identifier: str = Field(..., pattern=r"^\d{2}-\d{2}$")  # MM-dd
     ref_year: int = Field(..., ge=1970, le=2100)
     unit: Literal["celsius", "fahrenheit"] = "celsius"
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+
+
+@router.get("/v1/shares")
+async def list_shares(
+    period: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """List recent share records, deduplicated by location+period+identifier. Public — no auth required."""
+    store = get_share_store()
+    shares = await store.list_shares(period=period, limit=limit, offset=offset)
+    if shares is None:
+        raise HTTPException(status_code=503, detail="Share service unavailable.")
+    return {"shares": shares, "limit": limit, "offset": offset}
 
 
 @router.post("/v1/shares", status_code=201)
@@ -47,6 +63,8 @@ async def create_share(
         identifier=body.identifier,
         ref_year=body.ref_year,
         unit=body.unit,
+        latitude=body.latitude,
+        longitude=body.longitude,
     )
     if result is None:
         raise HTTPException(status_code=503, detail="Share service unavailable.")

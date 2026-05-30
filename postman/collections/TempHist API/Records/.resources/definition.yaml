@@ -1,0 +1,3 @@
+$kind: collection
+description: Temperature history endpoints — daily, weekly, monthly, yearly periods. Identifier format is MM-DD for daily/weekly/yearly and MM for monthly.
+order: 1000

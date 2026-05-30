@@ -1,17 +1,34 @@
 """Persistent store for social share records, backed by Postgres."""
 import json
 import logging
+import math
 import os
 import secrets
 import string
-from typing import Optional
+from typing import Optional, List
 
 import asyncpg
 
 logger = logging.getLogger(__name__)
 
 _ALPHABET = string.ascii_letters + string.digits  # 62 chars, ~218 trillion combinations at 8 chars
-_SHARE_BASE_URL = os.getenv("SHARE_BASE_URL", "https://temphist.com")
+
+# Proximity threshold for location deduplication in list_shares.
+# Two shares with the same (period, identifier) are considered duplicates when
+# their coordinates are within this distance.  50 km keeps e.g. "London" and
+# "Greater London" as one entry while still distinguishing separate cities.
+_DEDUP_PROXIMITY_KM = 50.0
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return the great-circle distance in km between two (lat, lon) points."""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
 
 _share_store_instance: Optional["ShareStore"] = None
 
@@ -65,6 +82,8 @@ class ShareStore:
                     created_at  TIMESTAMPTZ DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS shares_created_at_idx ON shares (created_at);
+                ALTER TABLE shares ADD COLUMN IF NOT EXISTS latitude  DOUBLE PRECISION;
+                ALTER TABLE shares ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
             """)
 
     async def create_share(
@@ -74,6 +93,8 @@ class ShareStore:
         identifier: str,
         ref_year: int,
         unit: str,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
     ) -> Optional[dict]:
         pool = await self._ensure_pool()
         if not pool:
@@ -86,15 +107,17 @@ class ShareStore:
                 try:
                     row = await conn.fetchrow(
                         """
-                        INSERT INTO shares (id, location, period, identifier, ref_year, unit)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        INSERT INTO shares
+                            (id, location, period, identifier, ref_year, unit, latitude, longitude)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                         RETURNING id, location, period, identifier, ref_year, unit, created_at
                         """,
                         share_id, location, period, identifier, ref_year, unit,
+                        latitude, longitude,
                     )
                     return {
                         "id": row["id"],
-                        "url": f"{_SHARE_BASE_URL}/s/{row['id']}",
+                        "url": f"/s/{row['id']}",
                     }
                 except asyncpg.UniqueViolationError:
                     logger.warning("Share ID collision on %s, retrying", share_id)
@@ -102,6 +125,85 @@ class ShareStore:
 
         logger.error("Failed to generate a unique share ID after 5 attempts")
         return None
+
+    async def list_shares(
+        self,
+        period: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Optional[List[dict]]:
+        pool = await self._ensure_pool()
+        if not pool:
+            return None
+
+        # Fetch a generous candidate set so Python-side proximity deduplication
+        # still has enough rows to fill (offset + limit) after removing duplicates.
+        fetch_limit = (offset + limit) * 10
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, location, period, identifier, ref_year, unit,
+                       created_at, latitude, longitude
+                FROM shares
+                WHERE ($1::text IS NULL OR period = $1)
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                period, fetch_limit,
+            )
+
+        # Proximity deduplication: for each candidate (most-recent first), keep it
+        # only if no already-accepted row has the same (period, identifier) AND a
+        # location within _DEDUP_PROXIMITY_KM km.  When either row lacks coordinates,
+        # fall back to exact location string comparison.
+        accepted: List[dict] = []
+        for row in rows:
+            r_lat = row["latitude"]
+            r_lon = row["longitude"]
+            r_period = row["period"]
+            r_identifier = row["identifier"]
+            r_location = row["location"]
+
+            duplicate = False
+            for acc in accepted:
+                if acc["period"] != r_period or acc["identifier"] != r_identifier:
+                    continue
+                # Same period + identifier — check location proximity
+                a_lat = acc["_lat"]
+                a_lon = acc["_lon"]
+                if r_lat is not None and r_lon is not None and a_lat is not None and a_lon is not None:
+                    if _haversine_km(r_lat, r_lon, a_lat, a_lon) <= _DEDUP_PROXIMITY_KM:
+                        duplicate = True
+                        break
+                else:
+                    # No coordinates on one or both rows — exact string fallback
+                    if acc["location"] == r_location:
+                        duplicate = True
+                        break
+
+            if not duplicate:
+                accepted.append({
+                    "id": row["id"],
+                    "location": r_location,
+                    "period": r_period,
+                    "identifier": r_identifier,
+                    "ref_year": row["ref_year"],
+                    "unit": row["unit"],
+                    "created_at": row["created_at"].isoformat(),
+                    "og_image_url": f"/v1/og/{row['id']}.png",
+                    "share_url": f"/s/{row['id']}",
+                    # Private fields used only during dedup — stripped before return
+                    "_lat": r_lat,
+                    "_lon": r_lon,
+                })
+
+        # Apply pagination, then strip the private coordinate fields
+        page = accepted[offset: offset + limit]
+        for entry in page:
+            entry.pop("_lat", None)
+            entry.pop("_lon", None)
+        return page
 
     async def get_share(self, share_id: str) -> Optional[dict]:
         pool = await self._ensure_pool()

@@ -1,0 +1,14 @@
+$kind: http-request
+url: "{{baseURL}}/v1/shares"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "location": "London, England, United Kingdom",
+      "period": "daily",
+      "identifier": "05-26"
+    }
+order: 1000

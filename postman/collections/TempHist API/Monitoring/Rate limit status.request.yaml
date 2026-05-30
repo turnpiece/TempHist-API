@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/rate-limit-status"
+method: GET
+order: 6000

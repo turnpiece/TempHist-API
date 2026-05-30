@@ -1,0 +1,12 @@
+$kind: http-request
+url: "{{baseURL}}/v1/locations/selections"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "location_id": "london"
+    }
+order: 4000

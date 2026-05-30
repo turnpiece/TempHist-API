@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from cache.keys import bundle_key, normalize_location_for_cache, rec_key
@@ -27,8 +27,9 @@ _IMG_W, _IMG_H = 1200, 630
 _BG = "#242456"
 _REF_YEAR = "#51cf66"
 _AVG_LINE = "#ffffff"
+_TREND_LINE = "#C8C400"
 _TICK_COLOR = "#cccccc"
-_TITLE_COLOR = (1.0, 1.0, 1.0, 0x8C / 0xFF)  # white at ~55% opacity
+_TITLE_COLOR = (1.0, 1.0, 1.0, 0x66 / 0xFF)  # white at ~40% opacity
 _FONT_FAMILY = ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"]
 
 # Climate-stripes palette — matches web/src/constants/index.ts
@@ -37,6 +38,29 @@ _WARM_RGB    = (0xFF, 0x3B, 0x30)
 _COOL_RGB    = (0x3B, 0x82, 0xF6)
 _BAR_NEUTRAL_Z    = 0.25
 _BAR_SATURATION_Z = 2.0
+
+# Background gradient — dark base tinted toward warm/cool based on trend direction
+_BG_RGB = (36 / 255, 36 / 255, 86 / 255)   # matches _BG "#242456"
+_WARM_TINT = (1.0, 0.231, 0.188)            # #FF3B30
+_COOL_TINT = (0.231, 0.510, 0.965)          # #3B82F6
+_GRADIENT_MAX_INTENSITY = 0.6               # caps saturation so chart remains readable
+
+
+def _make_gradient_array(n_rows: int, warm_on_top: bool, intensity: float):
+    """Return an (n_rows, 1, 3) float32 array for use as an imshow background."""
+    import numpy as np
+    tint = _WARM_TINT if warm_on_top else _COOL_TINT
+    rows = []
+    for i in range(n_rows):
+        frac = i / max(n_rows - 1, 1)           # 0.0 = first row (top), 1.0 = last row (bottom)
+        edge_frac = frac if warm_on_top else (1.0 - frac)
+        blend = edge_frac * intensity
+        rows.append([
+            _BG_RGB[0] * (1 - blend) + tint[0] * blend,
+            _BG_RGB[1] * (1 - blend) + tint[1] * blend,
+            _BG_RGB[2] * (1 - blend) + tint[2] * blend,
+        ])
+    return np.array(rows, dtype="float32").reshape(n_rows, 1, 3)
 
 
 def _share_cache_key(share_id: str) -> str:
@@ -182,29 +206,27 @@ def _compute_bar_colors(years: list, temps: list, ref_year) -> list:
     """Return one matplotlib color per bar using the climate-stripes Z-score scheme."""
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
     if not hist_temps:
-        return [_REF_YEAR if y == ref_year else tuple(c / 255 for c in _NEUTRAL_RGB)
-                for y in years]
+        return [tuple(c / 255 for c in _NEUTRAL_RGB) for _ in years]
     mean = sum(hist_temps) / len(hist_temps)
     # Population std dev — matches calculate_standard_deviation() in utils/temperature.py
     variance = sum((t - mean) ** 2 for t in hist_temps) / len(hist_temps)
     std_dev = variance ** 0.5
     colors = []
-    for y, t in zip(years, temps):
-        if y == ref_year:
-            colors.append(_REF_YEAR)
-        elif std_dev > 0:
+    for t in temps:
+        if std_dev > 0:
             colors.append(_bar_color_for_z_score((t - mean) / std_dev))
         else:
             colors.append(tuple(c / 255 for c in _NEUTRAL_RGB))
     return colors
 
 
-def _render_chart(share: dict, records: list) -> bytes:
+def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:
     """Render a horizontal bar chart of per-year temperatures as PNG bytes."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MultipleLocator, FuncFormatter
+    from utils.temperature import calculate_trend_slope, calculate_gradient_factor
 
     matplotlib.rcParams["font.family"] = "sans-serif"
     matplotlib.rcParams["font.sans-serif"] = _FONT_FAMILY
@@ -234,10 +256,52 @@ def _render_chart(share: dict, records: list) -> bytes:
     if unit == "fahrenheit":
         temps = [_celsius_to_fahrenheit(t) for t in temps]
 
+    # Compute trend using the same utilities as the records endpoint
+    trend_input = [{"x": y, "y": t} for y, t in zip(years, temps)]
+    slope, _r2, slope_error = calculate_trend_slope(trend_input)
+    gf = calculate_gradient_factor(slope, slope_error, unit) if slope_error is not None else 0.0
+
+    # Derive trend line absolute temperatures from slope + intercept
+    n = len(years)
+    mean_y = sum(years) / n
+    mean_t = sum(temps) / n
+    slope_per_year = slope / 10.0
+    intercept = mean_t - slope_per_year * mean_y
+    trend_temps = [slope_per_year * y + intercept for y in years]
+
+    # Axis limits
+    t_min = min(temps)
+    t_max = max(temps)
+    span = t_max - t_min
+    pad_low = max(span * 0.15, 2.0)
+    pad_high = max(span * 0.12, 1.5)
+    x_min = t_min - pad_low
+    x_max = t_max + pad_high
+    y_min_axis = min(years) - 0.5
+    y_max_axis = max(years) + 0.5
+
     fig = plt.figure(figsize=(_IMG_W / 100, _IMG_H / 100), dpi=100)
     fig.patch.set_facecolor(_BG)
+
+    # Full-figure gradient background — covers title area and chart
+    intensity = min(_GRADIENT_MAX_INTENSITY, abs(gf) * _GRADIENT_MAX_INTENSITY)
+    if intensity > 0.01 and n > 1:
+        try:
+            grad = _make_gradient_array(256, warm_on_top=slope > 0, intensity=intensity)
+            ax_bg = fig.add_axes([0, 0, 1, 1])
+            ax_bg.imshow(
+                grad,
+                aspect="auto",
+                extent=[0, 1, 0, 1],
+                origin="lower",
+                interpolation="bilinear",
+            )
+            ax_bg.axis("off")
+        except Exception as exc:
+            logger.warning("OG gradient render failed: %s", exc)
+
     ax = fig.add_axes([0.24, 0.06, 0.52, 0.80])
-    ax.set_facecolor(_BG)
+    ax.set_facecolor("none")  # transparent so figure-level gradient shows through
 
     # Historical average (excludes ref_year) — white dotted vertical line
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
@@ -256,6 +320,11 @@ def _render_chart(share: dict, records: list) -> bytes:
     bar_colors = _compute_bar_colors(years, temps, ref_year)
     ax.barh(years, temps, color=bar_colors, height=0.75, zorder=2, alpha=0.9)
 
+    # Trend line — opacity maps to statistical significance via |gradient_factor|
+    trend_alpha = min(1.0, max(0.05, abs(gf)))
+    ax.plot(trend_temps, years, color=_TREND_LINE, linewidth=2, alpha=trend_alpha, zorder=3, linestyle="-")
+    ax.set_ylim(y_min_axis, y_max_axis)
+
     # Annotate ref_year bar with its value
     if ref_year in years:
         idx = years.index(ref_year)
@@ -266,33 +335,32 @@ def _render_chart(share: dict, records: list) -> bytes:
             xytext=(8, 0),
             textcoords="offset points",
             va="center",
-            color=_REF_YEAR,
+            color=_AVG_LINE,
             fontsize=13,
             fontweight="bold",
         )
 
-    # X-axis limits: start a few degrees below the lowest temperature
-    # (not at 0 — temperatures may be negative)
-    t_min = min(temps)
-    t_max = max(temps)
-    span = t_max - t_min
-    pad_low = max(span * 0.15, 2.0)
-    pad_high = max(span * 0.12, 1.5)
-    ax.set_xlim(t_min - pad_low, t_max + pad_high)
+    ax.set_xlim(x_min, x_max)
 
-    # Title — city name + period heading
-    city = location.split(",")[0].strip() if location else ""
-    heading = _format_period_heading(period, identifier)
-    title = f"{city} · {heading}" if city and heading else (city or heading)
-    ax.set_title(
-        title,
-        loc="left",
-        color=_TITLE_COLOR,
-        fontsize=22,
-        pad=12,
-        fontweight="normal",
-        fontfamily=_FONT_FAMILY,
-    )
+    if show_title:
+        # Title — city name + period heading.
+        # y=1.09 in axes coords places it above the temperature tick labels
+        # (which sit at the top of the chart due to xaxis.tick_top() and
+        # extend to roughly y=1.04), giving a clear gap between them.
+        city = location.split(",")[0].strip() if location else ""
+        heading = _format_period_heading(period, identifier)
+        title = f"{city} · {heading}" if city and heading else (city or heading)
+        ax.text(
+            -0.05, 1.09,
+            title,
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            color=_TITLE_COLOR,
+            fontsize=18,
+            fontweight="normal",
+            fontfamily=_FONT_FAMILY,
+        )
 
     ax.xaxis.tick_top()
     ax.set_xlabel("")
@@ -301,7 +369,7 @@ def _render_chart(share: dict, records: list) -> bytes:
     ax.tick_params(colors=_TICK_COLOR, which="both", labelsize=11)
     ax.yaxis.set_major_locator(MultipleLocator(5))
     for spine in ax.spines.values():
-        spine.set_edgecolor(_BG)
+        spine.set_visible(False)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor())
@@ -357,9 +425,36 @@ def _render_placeholder(share: dict) -> bytes:
     return buf.read()
 
 
+async def _fetch_records_live(share: dict, redis_client) -> Optional[list]:
+    """Fetch temperature records directly from the data pipeline when Redis cache is cold."""
+    try:
+        from routers.v1_records import get_temperature_data_v1
+        data = await get_temperature_data_v1(
+            location=share["location"],
+            period=share["period"],
+            identifier=share["identifier"],
+            unit_group="celsius",
+            redis_client=redis_client,
+        )
+        records = [
+            v for v in data.get("values", [])
+            if v.get("year") is not None and v.get("temperature") is not None
+        ]
+        if records:
+            logger.info(
+                "OG live-fetch fallback: share=%s fetched %d records",
+                share.get("id"), len(records),
+            )
+            return records
+    except Exception as exc:
+        logger.warning("OG live-fetch failed for share %s: %s", share.get("id"), exc)
+    return None
+
+
 @router.get("/v1/og/{share_id}.png", include_in_schema=True)
 async def og_image(
     share_id: str,
+    show_title: bool = Query(default=False, description="Whether to render the city/period title on the image"),
     redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """Return a 1200×630 OG preview image for the given share ID. No auth required."""
@@ -372,8 +467,12 @@ async def og_image(
 
     records = _get_bundle_records(share, redis_client)
 
+    # Redis cold (or CACHE_ENABLED=false) — fetch live as a fallback
+    if not records:
+        records = await _fetch_records_live(share, redis_client)
+
     try:
-        png = _render_chart(share, records) if records else _render_placeholder(share)
+        png = _render_chart(share, records, show_title=show_title) if records else _render_placeholder(share)
     except Exception as exc:
         logger.error("OG image render failed for share %s: %s", share_id, exc, exc_info=True)
         try:

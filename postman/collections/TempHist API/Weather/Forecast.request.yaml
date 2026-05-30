@@ -1,0 +1,4 @@
+$kind: http-request
+url: "{{baseURL}}/forecast/London, UK"
+method: GET
+order: 2000
