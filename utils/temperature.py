@@ -148,6 +148,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
 
     avg_temp = round(mean, 2) if mean is not None else calculate_historical_average(data)
     diff = latest['y'] - avg_temp
+    is_above_average = latest['y'] > avg_temp
     is_fahrenheit = unit_group.lower() == "fahrenheit"
     rounded_diff = int(round(diff, 0)) if is_fahrenheit else round(diff, 1)
     latest_temp = int(round(latest['y'], 0)) if is_fahrenheit else round(latest['y'], 1)
@@ -237,26 +238,38 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             if last_warmer:
                 years_since = int(latest['x'] - last_warmer)
                 if years_since == 2:
-                    warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
+                    if is_above_average:
+                        warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
+                    else:
+                        cold_summary = f"It's not as cold as last year but cooler than {last_warmer}."
                 elif years_since <= 10:
                     warm_summary = f"This {tense_warm_cold} the warmest {friendly_date} since {last_warmer}."
                 else:
                     warm_summary = f"This {tense_warm_cold} the warmest {friendly_date} in {years_since} years."
             else:
-                warm_summary = f"It's warmer than last year."
+                if is_above_average:
+                    warm_summary = f"It's warmer than last year."
+                else:
+                    cold_summary = f"It's not as cold as last year."
         elif latest['y'] < last_year_temp:
             # Colder than last year - find last colder year
             last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
             if last_colder:
                 years_since = int(latest['x'] - last_colder)
                 if years_since == 2:
-                    cold_summary = f"It's colder than last year but not as cold as {last_colder}."
+                    if is_above_average:
+                        warm_summary = f"It's not as warm as last year but warmer than {last_colder}."
+                    else:
+                        cold_summary = f"It's colder than last year but not as cold as {last_colder}."
                 elif years_since <= 10:
                     cold_summary = f"This {tense_warm_cold} the coldest {friendly_date} since {last_colder}."
                 else:
                     cold_summary = f"This {tense_warm_cold} the coldest {friendly_date} in {years_since} years."
             else:
-                cold_summary = f"It's colder than last year."
+                if is_above_average:
+                    warm_summary = f"It's not as warm as last year."
+                else:
+                    cold_summary = f"It's colder than last year."
 
     # Generate period-appropriate language with correct tense and context
     if period == "daily":

@@ -8,7 +8,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 import pytest
-from utils.temperature import calculate_standard_deviation, calculate_trend_slope
+from datetime import datetime
+from utils.temperature import calculate_standard_deviation, calculate_trend_slope, generate_summary
 
 
 class TestCalculateStandardDeviation:
@@ -132,3 +133,60 @@ class TestCalculateTrendSlope:
         _, _, slope_error = calculate_trend_slope(data)
         # year_span == n == 10, so no inflation; error should still be positive
         assert slope_error is not None and slope_error >= 0
+
+
+class TestGenerateSummaryAverageAwareWording:
+    """generate_summary uses warm framing when above average, cold when below."""
+
+    def _data(self, historical_temps, current_temp, current_year=2026):
+        """Build a data list with historical years + current year."""
+        start_year = current_year - len(historical_temps)
+        return [{"x": start_year + i, "y": t} for i, t in enumerate(historical_temps)] + \
+               [{"x": current_year, "y": current_temp}]
+
+    def _date(self, year=2026):
+        return datetime(year, 5, 15)
+
+    def test_above_average_cooler_than_last_year_years_since_2(self):
+        # avg ≈ 15, current=20 (above avg), last_year=22 (warmer), two years ago=18 (colder)
+        data = self._data([14, 15, 16, 18, 22], 20)
+        summary = generate_summary(data, self._date(), mean=15.0)
+        assert "not as warm as last year but warmer than" in summary
+        assert "colder than last year" not in summary
+
+    def test_above_average_cooler_than_last_year_no_colder_year(self):
+        # avg ≈ 15, current=20 (above avg), last_year=25 (warmer).
+        # One historical year ties current (20) so is_coldest is False, but
+        # no historical year is strictly colder, so last_colder is None.
+        data = self._data([20, 22, 23, 24, 25], 20)
+        summary = generate_summary(data, self._date(), mean=15.0)
+        assert "not as warm as last year" in summary
+        assert "colder than last year" not in summary
+
+    def test_below_average_warmer_than_last_year_years_since_2(self):
+        # avg ≈ 20, current=10 (below avg), last_year=8 (colder), two years ago=12 (warmer)
+        data = self._data([21, 20, 19, 12, 8], 10)
+        summary = generate_summary(data, self._date(), mean=20.0)
+        assert "not as cold as last year but cooler than" in summary
+        assert "warmer than last year" not in summary
+
+    def test_below_average_warmer_than_last_year_no_warmer_year(self):
+        # avg ≈ 20, current=10 (below avg), last_year=5 (colder).
+        # One historical year ties current (10) so is_warmest is False, but
+        # no historical year is strictly warmer, so last_warmer is None.
+        data = self._data([10, 8, 7, 6, 5], 10)
+        summary = generate_summary(data, self._date(), mean=20.0)
+        assert "not as cold as last year" in summary
+        assert "warmer than last year" not in summary
+
+    def test_below_average_cooler_than_last_year_keeps_cold_framing(self):
+        # avg ≈ 20, current=10 (below avg), last_year=12 (warmer), two years ago=8 (colder)
+        data = self._data([21, 20, 19, 8, 12], 10)
+        summary = generate_summary(data, self._date(), mean=20.0)
+        assert "colder than last year but not as cold as" in summary
+
+    def test_above_average_warmer_than_last_year_keeps_warm_framing(self):
+        # avg ≈ 15, current=22 (above avg), last_year=20 (cooler), two years ago=24 (warmer)
+        data = self._data([14, 15, 16, 24, 20], 22)
+        summary = generate_summary(data, self._date(), mean=15.0)
+        assert "warmer than last year but not as warm as" in summary
