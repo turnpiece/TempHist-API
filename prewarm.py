@@ -93,8 +93,58 @@ def load_preapproved_locations(locations_file: str = None) -> List[str]:
         return []
 
 
-# Default locations - will be loaded from preapproved_locations.json
-DEFAULT_LOCATIONS = load_preapproved_locations()
+def load_locations_to_prewarm(
+    base_url: str,
+    api_token: Optional[str],
+    limit: int,
+    locations_file: str = None,
+) -> List[str]:
+    """Return location display strings to prewarm, ranked by popularity.
+
+    Queries GET /v1/locations/popular?limit=N first so prewarming is driven
+    by actual user selections. Falls back to the preapproved list when the
+    API is unreachable or returns fewer than 2 locations (e.g. during local
+    dev before any selection signal has accumulated).
+    """
+    import urllib.request as _urllib_request
+
+    if api_token:
+        try:
+            url = f"{base_url.rstrip('/')}/v1/locations/popular?limit={limit}"
+            req = _urllib_request.Request(
+                url,
+                headers={"Authorization": f"Bearer {api_token}", "Accept": "application/json"},
+            )
+            with _urllib_request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            api_locations = data.get("locations", [])
+            if len(api_locations) >= 2:
+                result = []
+                for loc in api_locations:
+                    parts = [loc["name"]]
+                    if loc.get("admin1"):
+                        parts.append(loc["admin1"])
+                    parts.append(loc["country_name"])
+                    result.append(", ".join(parts))
+                logger.info(f"Loaded {len(result)} locations from /v1/locations/popular")
+                return result
+            logger.warning(
+                f"Popular locations API returned only {len(api_locations)} locations "
+                f"(need ≥ 2) — falling back to preapproved list"
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Could not load popular locations from API ({exc}) "
+                f"— falling back to preapproved list"
+            )
+    else:
+        logger.info("No API token available — loading locations from preapproved list")
+
+    return load_preapproved_locations(locations_file)
+
+
+# Populated lazily in main() via load_locations_to_prewarm()
+DEFAULT_LOCATIONS: List[str] = []
 
 DEFAULT_ENDPOINTS = [
     "v1/records/daily",
@@ -323,30 +373,30 @@ async def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Load locations
-    if args.locations_file:
-        # If locations_file is provided, try to load slugs from it
-        if args.locations_file.endswith('.json'):
-            locs = load_preapproved_locations(args.locations_file)
-            locations = locs[:args.locations] if locs else []
-        else:
-            # Assume it's a simple text file with one location per line
-            with open(args.locations_file, 'r') as f:
-                locations = [line.strip() for line in f if line.strip()][:args.locations]
-    else:
-        # Use default locations (loaded from preapproved_locations.json)
-        locations = DEFAULT_LOCATIONS[:args.locations] if DEFAULT_LOCATIONS else []
-    
-    if not locations:
-        logger.warning("No locations to prewarm. Check that preapproved_locations.json exists and contains valid entries.")
-        sys.exit(1)
-    
-    # Create prewarmer
+    # Resolve API token first — needed for both location loading and prewarming requests
     api_token = args.api_token or DEFAULT_API_TOKEN
     if api_token:
         logger.info("Using bearer token authentication for prewarming requests.")
     else:
         logger.warning("No API token provided. Secured endpoints may respond with 401 Unauthorized.")
+
+    # Load locations
+    if args.locations_file:
+        # Explicit file overrides the popular-API lookup
+        if args.locations_file.endswith('.json'):
+            locs = load_preapproved_locations(args.locations_file)
+            locations = locs[:args.locations] if locs else []
+        else:
+            # Simple text file with one location per line
+            with open(args.locations_file, 'r') as f:
+                locations = [line.strip() for line in f if line.strip()][:args.locations]
+    else:
+        # Query /v1/locations/popular first; fall back to preapproved list
+        locations = load_locations_to_prewarm(args.base_url, api_token, args.locations)
+
+    if not locations:
+        logger.warning("No locations to prewarm. Check that preapproved_locations.json exists and contains valid entries.")
+        sys.exit(1)
 
     prewarmer = CachePrewarmer(args.base_url, args.redis_url, api_token=api_token)
     
