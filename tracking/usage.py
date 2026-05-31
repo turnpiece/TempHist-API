@@ -155,6 +155,48 @@ class LocationUsageTracker:
             for item, score in raw
         ]
 
+    def store_location_display(self, location_id: str, display_string: str) -> None:
+        """Persist a human-readable display string for a location ID.
+
+        Stored so that non-preapproved locations (which have no entry in the
+        preapproved JSON) can still be returned by get_popular_display_strings
+        and therefore prewarmed.  TTL is 95 days — well beyond the longest
+        popularity window (POPULARITY_WINDOW_DAYS default 30) so a location
+        never disappears from the display map while it is still rankable.
+        """
+        if not USAGE_TRACKING_ENABLED or not display_string:
+            return
+        try:
+            self.redis_client.set(
+                f"loc_display:{location_id}",
+                display_string,
+                ex=95 * 86400,
+            )
+        except Exception:
+            pass  # best-effort
+
+    def get_popular_display_strings(self, limit: int = 20, days: int = 30) -> List[str]:
+        """Return display strings for the top-ranked locations.
+
+        Unlike get_popular_from_selections (which returns raw IDs), this
+        resolves each ID to its stored display string so the result can be
+        used directly for prewarming or returned to callers who only need the
+        human-readable location name.
+
+        Locations whose display string has expired or was never stored are
+        silently skipped.
+        """
+        ranked = self.get_popular_from_selections(limit=limit * 2, days=days)
+        results: List[str] = []
+        for location_id, _score in ranked:
+            raw = self.redis_client.get(f"loc_display:{location_id}")
+            if raw:
+                display = raw.decode() if isinstance(raw, bytes) else raw
+                results.append(display)
+            if len(results) >= limit:
+                break
+        return results
+
     def get_total_selections(self, days: int = 30) -> int:
         """Return total number of selections recorded in the rolling window."""
         daily_keys = []

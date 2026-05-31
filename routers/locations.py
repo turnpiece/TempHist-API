@@ -847,6 +847,38 @@ async def get_popular_locations_stats():
     }
 
 
+def _build_display_string(body: "SelectionRequest") -> Optional[str]:
+    """Derive a human-readable display string from a SelectionRequest.
+
+    Tries the preapproved list first (for canonical IDs), then falls back to
+    constructing a string from raw name/admin1/country_code fields.
+    Returns None when there is not enough information.
+    """
+    # Preapproved lookup by ID
+    if body.location_id:
+        loc_by_id = {loc.id: loc for loc in locations_data}
+        loc = loc_by_id.get(body.location_id)
+        if loc:
+            parts = [loc.name]
+            if loc.admin1:
+                parts.append(loc.admin1)
+            parts.append(loc.country_name)
+            return ", ".join(parts)
+
+    # Build from raw fields (non-preapproved or fallback)
+    if body.name:
+        parts = [body.name]
+        if body.admin1:
+            parts.append(body.admin1)
+        if body.country_code:
+            country = pycountry.countries.get(alpha_2=body.country_code.upper())
+            if country:
+                parts.append(country.name)
+        return ", ".join(parts)
+
+    return None
+
+
 @router.post("/v1/locations/selections", status_code=204)
 async def record_location_selection(request: Request, body: SelectionRequest):
     """
@@ -876,8 +908,59 @@ async def record_location_selection(request: Request, body: SelectionRequest):
     tracker = get_usage_tracker()
     if tracker is not None:
         tracker.record_selection(canonical_id, uid)
+        display = _build_display_string(body)
+        if display:
+            tracker.store_location_display(canonical_id, display)
 
     return Response(status_code=204)
+
+
+@router.get("/v1/locations/popular/display-strings")
+async def get_popular_display_strings(
+    request: Request,
+    limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Max locations to return (default: {POPULARITY_MAX_LOCATIONS})"),
+):
+    """
+    Return display strings for the most-selected locations, including
+    non-preapproved ones.  Intended for use by the cache prewarmer.
+
+    Unlike /v1/locations/popular (which returns full LocationItem objects for
+    preapproved locations only), this endpoint resolves every ranked location
+    ID to its stored display string, so locations like 'Budapest, Budapest,
+    Hungary' appear here as soon as they accumulate selection signal.
+
+    Falls back to the preapproved list (alphabetical) when there is
+    insufficient selection signal (< POPULARITY_MIN_SELECTIONS).
+
+    Response: { "count": N, "locations": ["City, Region, Country", ...] }
+    """
+    client_ip = request.client.host
+    allowed, reason = await check_rate_limit(client_ip)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
+
+    effective_limit = limit or POPULARITY_MAX_LOCATIONS
+    tracker = get_usage_tracker()
+
+    if tracker is not None:
+        total = tracker.get_total_selections(days=POPULARITY_WINDOW_DAYS)
+        if total >= POPULARITY_MIN_SELECTIONS:
+            strings = tracker.get_popular_display_strings(
+                limit=effective_limit, days=POPULARITY_WINDOW_DAYS
+            )
+            if len(strings) >= 2:
+                return {"count": len(strings), "locations": strings}
+
+    # Fallback: build display strings from preapproved list
+    fallback = []
+    for loc in locations_data[:effective_limit]:
+        parts = [loc.name]
+        if loc.admin1:
+            parts.append(loc.admin1)
+        parts.append(loc.country_name)
+        fallback.append(", ".join(parts))
+
+    return {"count": len(fallback), "locations": fallback}
 
 
 async def initialize_locations_data(redis: redis.Redis):

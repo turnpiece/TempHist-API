@@ -110,26 +110,19 @@ def load_locations_to_prewarm(
 
     if api_token:
         try:
-            url = f"{base_url.rstrip('/')}/v1/locations/popular?limit={limit}"
+            url = f"{base_url.rstrip('/')}/v1/locations/popular/display-strings?limit={limit}"
             req = _urllib_request.Request(
                 url,
                 headers={"Authorization": f"Bearer {api_token}", "Accept": "application/json"},
             )
             with _urllib_request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
-            api_locations = data.get("locations", [])
-            if len(api_locations) >= 2:
-                result = []
-                for loc in api_locations:
-                    parts = [loc["name"]]
-                    if loc.get("admin1"):
-                        parts.append(loc["admin1"])
-                    parts.append(loc["country_name"])
-                    result.append(", ".join(parts))
-                logger.info(f"Loaded {len(result)} locations from /v1/locations/popular")
-                return result
+            strings = data.get("locations", [])
+            if len(strings) >= 2:
+                logger.info(f"Loaded {len(strings)} locations from /v1/locations/popular/display-strings")
+                return strings
             logger.warning(
-                f"Popular locations API returned only {len(api_locations)} locations "
+                f"Popular display-strings API returned only {len(strings)} locations "
                 f"(need ≥ 2) — falling back to preapproved list"
             )
         except Exception as exc:
