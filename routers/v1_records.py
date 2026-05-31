@@ -1160,24 +1160,28 @@ async def get_record(
                     except Exception as e:
                         logger.warning(f"Failed to enqueue refresh job: {e}")
 
-                # Fetch missing past years inline (sync fallback path)
+                # Fetch missing past years inline (sync fallback path).
+                # We already have full_data (all years) so also handle
+                # missing_current here rather than leaving 2026 out of the response.
                 if missing_past:
                     full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
                     per_year_records = _extract_per_year_records(full_data)
-                    for year in missing_past:
-                        if year in per_year_records:
-                            year_key = rec_key(period, slug, identifier, year)
-                            etag_key = rec_etag_key(period, slug, identifier, year)
-                            ttl = TTL_STABLE
-                            from cache.core import ETagGenerator
-                            etag = ETagGenerator.generate_etag(per_year_records[year])
-                            try:
-                                json_data = json.dumps(per_year_records[year], sort_keys=True, separators=(',', ':'))
-                                redis_client.setex(year_key, ttl, json_data)
-                                redis_client.setex(etag_key, ttl, etag)
-                                year_data[year] = per_year_records[year]
-                            except Exception as e:
-                                logger.warning(f"Error caching year {year}: {e}")
+                    from cache.core import ETagGenerator
+                    years_to_cache = list(missing_past) + ([current_year] if missing_current else [])
+                    for year in years_to_cache:
+                        if year not in per_year_records:
+                            continue
+                        year_key = rec_key(period, slug, identifier, year)
+                        etag_key = rec_etag_key(period, slug, identifier, year)
+                        ttl = _get_ttl_for_current_year(period) if year == current_year else TTL_STABLE
+                        etag = ETagGenerator.generate_etag(per_year_records[year])
+                        try:
+                            json_data = json.dumps(per_year_records[year], sort_keys=True, separators=(',', ':'))
+                            redis_client.setex(year_key, ttl, json_data)
+                            redis_client.setex(etag_key, ttl, etag)
+                            year_data[year] = per_year_records[year]
+                        except Exception as e:
+                            logger.warning(f"Error caching year {year}: {e}")
             
             # Step 4: Assemble response from per-year records
             if year_data:
