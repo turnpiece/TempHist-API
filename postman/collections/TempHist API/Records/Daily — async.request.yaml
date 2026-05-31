@@ -1,4 +1,5 @@
 $kind: http-request
-url: "{{baseURL}}/v1/records/daily/Sydney, New South Wales, Australia/05-26/async"
+name: Daily — async
+url: "{{baseURL}}/v1/records/daily/Oxford, England, United Kingdom/05-30/async"
 method: POST
 order: 6000

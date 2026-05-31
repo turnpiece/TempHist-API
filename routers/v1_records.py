@@ -1160,21 +1160,24 @@ async def get_record(
                     except Exception as e:
                         logger.warning(f"Failed to enqueue refresh job: {e}")
 
-                # Enqueue a background job for missing past years instead of blocking
-                # the request thread with a potentially large inline VC fetch.
+                # Fetch missing past years inline (sync fallback path)
                 if missing_past:
-                    try:
-                        _jm = get_job_manager()
-                        if _jm:
-                            _backfill_job_id = _jm.create_job("record_computation", {
-                                "scope": period,
-                                "location": location,
-                                "identifier": identifier,
-                                # no "year" key → worker fetches the full historical range
-                            })
-                            logger.info(f"Enqueued backfill job {_backfill_job_id} for {location} ({len(missing_past)} missing past years)")
-                    except Exception as _e:
-                        logger.warning(f"Failed to enqueue backfill job for {location}: {_e}")
+                    full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+                    per_year_records = _extract_per_year_records(full_data)
+                    for year in missing_past:
+                        if year in per_year_records:
+                            year_key = rec_key(period, slug, identifier, year)
+                            etag_key = rec_etag_key(period, slug, identifier, year)
+                            ttl = TTL_STABLE
+                            from cache.core import ETagGenerator
+                            etag = ETagGenerator.generate_etag(per_year_records[year])
+                            try:
+                                json_data = json.dumps(per_year_records[year], sort_keys=True, separators=(',', ':'))
+                                redis_client.setex(year_key, ttl, json_data)
+                                redis_client.setex(etag_key, ttl, etag)
+                                year_data[year] = per_year_records[year]
+                            except Exception as e:
+                                logger.warning(f"Error caching year {year}: {e}")
             
             # Step 4: Assemble response from per-year records
             if year_data:
@@ -1204,20 +1207,42 @@ async def get_record(
                 # Set cache status
                 cache_status = "HIT" if not missing_past and not missing_current else "PARTIAL"
             else:
-                # No cached data yet — a background job was enqueued above.
-                # Return 202 so the client retries once the job completes.
-                return JSONResponse(
-                    status_code=202,
-                    content={
-                        "status": "pending",
-                        "message": "Data is being computed. Please retry in a few seconds.",
-                        "retry_after": 5,
-                    },
-                    headers={
-                        "Retry-After": "5",
-                        "X-Cache-Status": "MISS",
-                    }
-                )
+                # No cached data — fetch fresh synchronously (sync fallback path;
+                # normal clients use the /async endpoint and only land here if
+                # the async flow is unavailable).
+                data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+
+                # Extract and store per-year records (celsius)
+                per_year_records = _extract_per_year_records(data)
+                await _store_per_year_records(redis_client, period, slug, identifier, per_year_records, current_year)
+
+                # Don't cache the bundle if current year is missing (incomplete data)
+                current_year_missing = False
+                if "metadata" in data and "missing_years" in data["metadata"]:
+                    current_year_missing = any(
+                        entry.get("year") == current_year
+                        for entry in data["metadata"]["missing_years"]
+                    )
+
+                if current_year_missing:
+                    if DEBUG:
+                        logger.debug(
+                            f"Not caching: Current year {current_year} is missing from {location} {period}/{identifier}"
+                        )
+                    bundle_etag_computed = None
+                else:
+                    year_etags = await get_year_etags(redis_client, period, slug, identifier, list(per_year_records.keys()))
+                    bundle_payload, bundle_etag_computed = await assemble_and_cache(
+                        redis_client, period, slug, identifier, per_year_records, year_etags
+                    )
+
+                values_list = [per_year_records[y] for y in sorted(per_year_records.keys())]
+                if values_list:
+                    data = _rebuild_full_response_from_values(
+                        values_list, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+                    )
+
+                cache_status = "MISS"
         else:
             # Cache disabled, fetch fresh in celsius then convert for response
             celsius_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
