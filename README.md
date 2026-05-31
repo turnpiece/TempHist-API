@@ -402,8 +402,13 @@ GET /cache-stats/health
 ### Cache Prewarming
 
 ```bash
-# Prewarm popular locations for various endpoints
-python prewarm.py --locations 20 --days 7
+# Prewarm popular locations (queries /v1/locations/popular/display-strings,
+# falls back to preapproved list; default 10 locations, 7 days back)
+python prewarm.py --base-url https://api.temphist.com --api-token $API_ACCESS_TOKEN
+
+# Prewarm more locations
+python prewarm.py --base-url https://api.temphist.com --api-token $API_ACCESS_TOKEN \
+    --locations 100 --days 7
 
 # Run comprehensive load tests
 python load_test_script.py --requests 1000 --concurrent 10
@@ -411,6 +416,8 @@ python load_test_script.py --requests 1000 --concurrent 10
 # Test cache performance specifically
 python load_test_script.py --endpoint cache --requests 500
 ```
+
+The background warmer (running inside the API process every `CACHE_WARMING_INTERVAL_HOURS`) does the same automatically: it queries the selection-ranked popular list first, then pads with the preapproved list up to `CACHE_WARMING_MAX_LOCATIONS` (default 200).
 
 ### Cache Headers and ETag Support
 
@@ -820,7 +827,9 @@ GET /v1/records/daily/london/01-15/trend
 | -------- | ----------- | ---- |
 | `GET /v1/locations/preapproved` | Curated list of locations guaranteed to work with the weather endpoints | Public |
 | `GET /v1/locations/preapproved/status` | Service health for the preapproved list | Public |
-| `GET /v1/locations/popular` | Popular locations, ranked by usage (falls back to preapproved until enough signal exists) | Public |
+| `GET /v1/locations/popular` | Locations ranked by selection frequency; preapproved list fills any gap so there are always results | Public |
+| `GET /v1/locations/popular/display-strings` | Same ranking as `/popular` but returns plain display strings (used by the cache prewarmer) | Public |
+| `GET /v1/locations/popular/stats` | Selection counts and signal status for ops/debugging | Public |
 | `GET /v1/locations/popular/status` | Service health for the popular locations service | Public |
 | `GET /v1/locations/search` | Search for locations by city name | Public |
 | `POST /v1/locations/selections` | Record that a user selected a location — powers the popular ranking | Firebase |
@@ -1098,7 +1107,7 @@ Returns service health and configuration information.
 
 #### Popular Locations Endpoint
 
-The popular locations endpoint surfaces the locations most relevant to users. It is distinct from the preapproved endpoint: preapproved is a curated editorial list, while popular will reflect actual usage once popularity tracking is implemented. Until then, it falls back to the preapproved list.
+The popular locations endpoint surfaces locations ranked by how often users select them. It is distinct from the preapproved endpoint: preapproved is a curated editorial list with full metadata (images, tier, coordinates), while popular is driven by actual selection signal and can include any location — preapproved or not.
 
 **Endpoint:** `GET /v1/locations/popular`
 
@@ -1106,12 +1115,20 @@ The popular locations endpoint surfaces the locations most relevant to users. It
 
 - `country_code` (optional): Filter by ISO 3166-1 alpha-2 country code (e.g., "US", "GB")
 - `tier` (optional): Filter by location tier (e.g., "global")
-- `limit` (optional): Limit results (1-500, default: no limit)
+- `limit` (optional): Limit results (1–500). Omit to receive all ranked locations.
+
+**Ranking logic:**
+
+1. Locations are ranked by total `POST /v1/locations/selections` calls within the rolling `POPULARITY_WINDOW_DAYS` window (default 30 days), most-selected first.
+2. Preapproved locations always pad the result so there are at minimum as many entries as the preapproved list contains.
+3. When no selection signal exists at all (fresh deployment), the result is the preapproved list in alphabetical order.
+
+Note: because `LocationItem` objects require full metadata (coordinates, images, etc.), only locations that exist in the preapproved list can appear in this endpoint's response. Non-preapproved popular locations are returned by `/v1/locations/popular/display-strings` and used directly by the cache prewarmer.
 
 **Example Requests:**
 
 ```bash
-# Get all popular locations
+# Get all popular locations (ranked by selection frequency)
 GET /v1/locations/popular
 
 # Get popular locations in the United States
@@ -1126,11 +1143,17 @@ GET /v1/locations/popular?country_code=GB&tier=global&limit=5
 
 **Response Format:** Same as `/v1/locations/preapproved`.
 
-**Fallback behaviour:** Until usage-based popularity tracking is implemented, this endpoint returns the preapproved list. The response shape is identical so clients can switch without code changes.
-
 **Status Endpoint:** `GET /v1/locations/popular/status`
 
-Returns service health, including a `fallback` field indicating the current data source.
+Returns service health.
+
+**Stats Endpoint:** `GET /v1/locations/popular/stats`
+
+Returns per-location selection counts, total selections in the window, and whether live signal is active (`using_signal: true` when any selections have been recorded).
+
+**Display-strings Endpoint:** `GET /v1/locations/popular/display-strings`
+
+Returns a flat list of location display strings (e.g. `"Budapest, Budapest, Hungary"`) ranked by selection frequency, including non-preapproved locations. Used by the cache prewarmer (`prewarm.py`) so that frequently-requested locations outside the preapproved list also get their caches warmed. Supports the same `?limit=` parameter.
 
 #### Recording Location Selections
 
@@ -1427,11 +1450,12 @@ curl -H "Authorization: Bearer $API_ACCESS_TOKEN" \
 ### Cache Prewarming
 
 ```bash
-# Prewarm popular locations
-python prewarm.py --locations 20 --days 7
+# Prewarm popular locations (fetches ranked list from the API)
+python prewarm.py --base-url https://api.temphist.com --api-token $API_ACCESS_TOKEN
 
 # Prewarm with verbose output
-python prewarm.py --locations 10 --days 3 --verbose
+python prewarm.py --base-url https://api.temphist.com --api-token $API_ACCESS_TOKEN \
+    --locations 50 --days 7 --verbose
 ```
 
 ## 📝 Logging
@@ -1606,10 +1630,10 @@ CACHE_WARMING_ENABLED=true                         # Enable automatic cache warm
 CACHE_WARMING_INTERVAL_HOURS=4                     # Hours between warming cycles (default: 4)
 CACHE_WARMING_DAYS_BACK=7                          # Days of data to warm (default: 7)
 CACHE_WARMING_CONCURRENT_REQUESTS=3                # Concurrent warming requests (default: 3)
-CACHE_WARMING_MAX_LOCATIONS=15                     # Max locations to warm (default: 15)
+CACHE_WARMING_MAX_LOCATIONS=200                    # Max locations to warm per cycle (default: 200)
 ```
 
-The warmer now sources its base location list from `data/preapproved_locations.json`, so no additional environment variable is required.
+The warmer sources its location list from the selection-ranked popular list (via `LocationUsageTracker.get_popular_display_strings`), which includes any location that has received selection signal — not just preapproved ones. The preapproved list pads the result when signal is absent or insufficient.
 
 **Cache Statistics:**
 
@@ -1638,8 +1662,8 @@ USAGE_RETENTION_DAYS=7                             # Days to retain usage data (
 
 ```bash
 POPULARITY_WINDOW_DAYS=30                          # Rolling window for selection aggregation (default: 30)
-POPULARITY_MIN_SELECTIONS=100                      # Min selections before switching from preapproved fallback (default: 100)
-POPULARITY_MAX_LOCATIONS=20                        # Max locations returned by /v1/locations/popular (default: 20)
+POPULARITY_MAX_LOCATIONS=500                       # Default limit for /v1/locations/popular when ?limit= is omitted (default: 500)
+                                                   # Use ?limit=N in requests to get fewer results
 ```
 
 ### Platform-Specific Examples

@@ -777,20 +777,19 @@ class TestPopularStatsEndpoint:
         assert data["locations"][1]["location_id"] == "paris"
         assert data["locations"][1]["count"] == 30
 
-    def test_using_signal_false_below_threshold(self, client, mock_locations_data):
+    def test_using_signal_false_with_no_selections(self, client, mock_locations_data):
         tracker = MagicMock()
         tracker.get_popular_from_selections.return_value = []
-        tracker.get_total_selections.return_value = 5
+        tracker.get_total_selections.return_value = 0
         with patch("routers.locations.get_usage_tracker", return_value=tracker):
             response = client.get("/v1/locations/popular/stats")
         data = response.json()
         assert data["using_signal"] is False
 
-    def test_using_signal_true_above_threshold(self, client, mock_locations_data):
-        from config import POPULARITY_MIN_SELECTIONS
+    def test_using_signal_true_with_any_selections(self, client, mock_locations_data):
         tracker = MagicMock()
         tracker.get_popular_from_selections.return_value = []
-        tracker.get_total_selections.return_value = POPULARITY_MIN_SELECTIONS
+        tracker.get_total_selections.return_value = 1
         with patch("routers.locations.get_usage_tracker", return_value=tracker):
             response = client.get("/v1/locations/popular/stats")
         data = response.json()

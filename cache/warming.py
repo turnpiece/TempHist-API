@@ -17,7 +17,10 @@ from typing import Dict, List, Optional
 import aiohttp
 import redis
 
-from config import DEBUG, BASE_URL, API_ACCESS_TOKEN, USAGE_TRACKING_ENABLED
+from config import (
+    DEBUG, BASE_URL, API_ACCESS_TOKEN, USAGE_TRACKING_ENABLED,
+    POPULARITY_WINDOW_DAYS,
+)
 from cache.keys import normalize_location_for_cache
 
 logger = logging.getLogger(__name__)
@@ -30,7 +33,7 @@ CACHE_WARMING_ENABLED              = os.getenv("CACHE_WARMING_ENABLED", "true").
 CACHE_WARMING_INTERVAL_HOURS       = int(os.getenv("CACHE_WARMING_INTERVAL_HOURS", "4"))
 CACHE_WARMING_DAYS_BACK            = int(os.getenv("CACHE_WARMING_DAYS_BACK", "7"))
 CACHE_WARMING_CONCURRENT_REQUESTS  = int(os.getenv("CACHE_WARMING_CONCURRENT_REQUESTS", "3"))
-CACHE_WARMING_MAX_LOCATIONS        = int(os.getenv("CACHE_WARMING_MAX_LOCATIONS", "15"))
+CACHE_WARMING_MAX_LOCATIONS        = int(os.getenv("CACHE_WARMING_MAX_LOCATIONS", "200"))
 
 # ---------------------------------------------------------------------------
 # Cache statistics configuration
@@ -73,23 +76,34 @@ class CacheWarmer:
             seen_normalized.add(normalized)
             locations.append(candidate)
 
-        preapproved = self.get_preapproved_locations()
-        for loc in preapproved:
-            add_location(loc)
-        if DEBUG:
-            logger.info(f"🔥 CACHE WARMING: Added {len(preapproved)} preapproved locations")
-
+        # Primary source: selections-based popular list (includes non-preapproved
+        # locations; ranked most-selected first).  Only used when there is enough
+        # signal to trust the ranking.
         if self.usage_tracker and USAGE_TRACKING_ENABLED:
-            recent_popular = self.usage_tracker.get_popular_locations(limit=10, hours=24)
-            for location, _count in recent_popular:
-                add_location(location)
-            if DEBUG and recent_popular:
-                logger.info(f"🔥 CACHE WARMING: Added {len(recent_popular)} usage-based locations")
+            strings = self.usage_tracker.get_popular_display_strings(
+                limit=CACHE_WARMING_MAX_LOCATIONS * 2,
+                days=POPULARITY_WINDOW_DAYS,
+            )
+            for loc in strings:
+                add_location(loc)
+            if DEBUG and strings:
+                logger.info(
+                    f"🔥 CACHE WARMING: {len(locations)} locations from selections signal"
+                )
+
+        # Pad with preapproved list when signal is absent or insufficient.
+        if len(locations) < CACHE_WARMING_MAX_LOCATIONS:
+            preapproved = self.get_preapproved_locations()
+            for loc in preapproved:
+                add_location(loc)
+            if DEBUG:
+                logger.info(
+                    f"🔥 CACHE WARMING: padded to {len(locations)} with preapproved list"
+                )
 
         final_locations = locations[:CACHE_WARMING_MAX_LOCATIONS]
         if DEBUG:
-            logger.info(f"🔥 CACHE WARMING: Total locations to warm: {len(final_locations)}")
-            logger.info(f"🔥 SAMPLE LOCATIONS: {final_locations[:5]}...")
+            logger.info(f"🔥 CACHE WARMING: warming {len(final_locations)} locations total")
         return final_locations
 
     def get_preapproved_locations(self) -> List[str]:

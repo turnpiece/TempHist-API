@@ -23,7 +23,7 @@ import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from config import BASE_URL, MAPBOX_TOKEN, POPULARITY_WINDOW_DAYS, POPULARITY_MIN_SELECTIONS, POPULARITY_MAX_LOCATIONS
+from config import BASE_URL, MAPBOX_TOKEN, POPULARITY_WINDOW_DAYS, POPULARITY_MAX_LOCATIONS
 from cache.accessors import get_usage_tracker
 
 # Configure logging
@@ -659,16 +659,13 @@ def _build_popular_locations(limit: int) -> List[LocationItem]:
     """
     Return ranked LocationItem objects for the popular endpoint.
 
-    Falls back to the preapproved list (alphabetical) when:
-    - the usage tracker is unavailable, or
-    - total selections in the rolling window are below POPULARITY_MIN_SELECTIONS.
+    Selection-ranked results are used whenever any signal exists; preapproved
+    locations always pad the list so there are at least as many results as
+    the preapproved list contains.  Falls back to preapproved (alphabetical)
+    only when the usage tracker is unavailable.
     """
     tracker = get_usage_tracker()
     if tracker is None:
-        return locations_data[:limit]
-
-    total = tracker.get_total_selections(days=POPULARITY_WINDOW_DAYS)
-    if total < POPULARITY_MIN_SELECTIONS:
         return locations_data[:limit]
 
     # Fetch extra to cover IDs that may not be in the preapproved list
@@ -820,7 +817,6 @@ async def get_popular_locations_stats():
             "status": "unavailable",
             "window_days": POPULARITY_WINDOW_DAYS,
             "total_selections": 0,
-            "min_selections_threshold": POPULARITY_MIN_SELECTIONS,
             "using_signal": False,
             "locations": [],
         }
@@ -833,8 +829,7 @@ async def get_popular_locations_stats():
         "status": "ok",
         "window_days": POPULARITY_WINDOW_DAYS,
         "total_selections": total,
-        "min_selections_threshold": POPULARITY_MIN_SELECTIONS,
-        "using_signal": total >= POPULARITY_MIN_SELECTIONS,
+        "using_signal": total > 0,
         "locations": [
             {
                 "location_id": loc_id,
@@ -930,7 +925,7 @@ async def get_popular_display_strings(
     Hungary' appear here as soon as they accumulate selection signal.
 
     Falls back to the preapproved list (alphabetical) when there is
-    insufficient selection signal (< POPULARITY_MIN_SELECTIONS).
+    insufficient selection signal (no selections recorded yet).
 
     Response: { "count": N, "locations": ["City, Region, Country", ...] }
     """
@@ -943,13 +938,11 @@ async def get_popular_display_strings(
     tracker = get_usage_tracker()
 
     if tracker is not None:
-        total = tracker.get_total_selections(days=POPULARITY_WINDOW_DAYS)
-        if total >= POPULARITY_MIN_SELECTIONS:
-            strings = tracker.get_popular_display_strings(
-                limit=effective_limit, days=POPULARITY_WINDOW_DAYS
-            )
-            if len(strings) >= 2:
-                return {"count": len(strings), "locations": strings}
+        strings = tracker.get_popular_display_strings(
+            limit=effective_limit, days=POPULARITY_WINDOW_DAYS
+        )
+        if strings:
+            return {"count": len(strings), "locations": strings}
 
     # Fallback: build display strings from preapproved list
     fallback = []
