@@ -479,5 +479,73 @@ class TestAnalyticsEndpointIntegration:
         except Exception as e:
             pytest.skip(f"Analytics integration test failed: {e}")
 
+class TestAnalyticsPerformanceFields:
+    """Tests for P1-098: response_time_ms, cache_hit, selection_method, location fields."""
+
+    def test_analytics_with_performance_fields(self, client):
+        """POST with all new performance fields should succeed."""
+        data = {
+            "session_duration": 120,
+            "api_calls": 3,
+            "api_failure_rate": "0%",
+            "retry_attempts": 0,
+            "location_failures": 0,
+            "error_count": 0,
+            "recent_errors": [],
+            "response_time_ms": 850,
+            "cache_hit": True,
+            "canonical_location": "London",
+            "requested_location": "london",
+            "selection_method": "search",
+        }
+        response = client.post("/analytics", json=data)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "success"
+        assert "analytics_id" in body
+
+    def test_analytics_invalid_selection_method(self, client):
+        """POST with an unrecognised selection_method value should return 422."""
+        data = {
+            "session_duration": 60,
+            "api_calls": 1,
+            "api_failure_rate": "0%",
+            "retry_attempts": 0,
+            "location_failures": 0,
+            "error_count": 0,
+            "recent_errors": [],
+            "selection_method": "invalid_value",
+        }
+        response = client.post("/analytics", json=data)
+        assert response.status_code == 422
+
+    def test_analytics_summary_has_response_times(self, client):
+        """After submitting a record with response_time_ms the summary should include response_times."""
+        payload = {
+            "session_duration": 60,
+            "api_calls": 1,
+            "api_failure_rate": "0%",
+            "retry_attempts": 0,
+            "location_failures": 0,
+            "error_count": 0,
+            "recent_errors": [],
+            "response_time_ms": 500,
+            "cache_hit": False,
+            "selection_method": "recent",
+        }
+        post_resp = client.post("/analytics", json=payload)
+        assert post_resp.status_code == 200
+
+        summary_resp = client.get("/analytics/summary")
+        assert summary_resp.status_code == 200
+        summary = summary_resp.json()
+        assert "data" in summary
+        assert "response_times" in summary["data"]
+        rt = summary["data"]["response_times"]
+        assert "overall" in rt
+        assert "by_selection_method" in rt
+        assert "by_cache_hit" in rt
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

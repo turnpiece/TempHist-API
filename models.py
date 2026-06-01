@@ -97,6 +97,13 @@ class AnalyticsData(BaseModel):
     platform: Optional[str] = Field(None, description="Platform (web, mobile, desktop)")
     user_agent: Optional[str] = Field(None, description="User agent string")
     session_id: Optional[str] = Field(None, description="Unique session identifier")
+    response_time_ms: Optional[int] = Field(None, ge=0, description="Client-measured response time in milliseconds")
+    cache_hit: Optional[bool] = Field(None, description="Whether the response was served from cache (derived from X-Cache header)")
+    canonical_location: Optional[str] = Field(None, description="Canonical location name resolved by the API")
+    requested_location: Optional[str] = Field(None, description="Location as originally entered by the user")
+    selection_method: Optional[Literal["own_location", "carousel", "recent", "popular", "search"]] = Field(
+        None, description="How the location was selected"
+    )
 
 
 class AnalyticsResponse(BaseModel):

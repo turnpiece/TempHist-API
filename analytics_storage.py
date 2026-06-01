@@ -3,11 +3,31 @@ import json
 import time
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from fastapi import HTTPException
 from models import AnalyticsData
 import redis
 from config import DEBUG
+
+_RT_MAX_SAMPLES = 10_000  # cap per Redis list
+_SELECTION_METHODS = ("own_location", "carousel", "recent", "popular", "search")
+
+
+def _compute_percentiles(values: List[int]) -> dict:
+    """Return p50/p95/p99 and sample_size for a list of integers."""
+    if not values:
+        return {"p50": None, "p95": None, "p99": None, "sample_size": 0}
+    s = sorted(values)
+    n = len(s)
+
+    def _pct(p: int) -> int:
+        idx = (p / 100) * (n - 1)
+        lo, frac = int(idx), idx - int(idx)
+        if lo + 1 < n:
+            return round(s[lo] + frac * (s[lo + 1] - s[lo]))
+        return s[lo]
+
+    return {"p50": _pct(50), "p95": _pct(95), "p99": _pct(99), "sample_size": n}
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +65,12 @@ class AnalyticsStorage:
             "app_version": analytics_data.app_version,
             "platform": analytics_data.platform,
             "user_agent": analytics_data.user_agent,
-            "session_id": analytics_data.session_id
+            "session_id": analytics_data.session_id,
+            "response_time_ms": analytics_data.response_time_ms,
+            "cache_hit": analytics_data.cache_hit,
+            "canonical_location": analytics_data.canonical_location,
+            "requested_location": analytics_data.requested_location,
+            "selection_method": analytics_data.selection_method,
         }
         
         try:
@@ -132,52 +157,104 @@ class AnalyticsStorage:
 
             # Store updated summary
             self.redis.setex(summary_key, self.retention_seconds, json.dumps(summary_data))
+
+            # Accumulate response times in capped Redis lists for percentile queries
+            rt = analytics_record.get("response_time_ms")
+            if rt is not None:
+                try:
+                    rt_int = int(rt)
+                    self._push_rt("analytics:rt:all", rt_int)
+
+                    method = analytics_record.get("selection_method")
+                    if method and method in _SELECTION_METHODS:
+                        self._push_rt(f"analytics:rt:method:{method}", rt_int)
+
+                    cache_hit = analytics_record.get("cache_hit")
+                    if cache_hit is True:
+                        self._push_rt("analytics:rt:cache:hit", rt_int)
+                    elif cache_hit is False:
+                        self._push_rt("analytics:rt:cache:miss", rt_int)
+                except (TypeError, ValueError):
+                    pass
             
         except Exception as e:
             logger.error(f"Failed to update analytics summary: {e}")
-    
+
+    def _push_rt(self, key: str, value: int) -> None:
+        """Append a response time sample to a capped Redis list."""
+        self.redis.lpush(key, value)
+        self.redis.ltrim(key, 0, _RT_MAX_SAMPLES - 1)
+        self.redis.expire(key, self.retention_seconds)
+
+    def _load_rt_percentiles(self, key: str) -> dict:
+        """Load a response-time list from Redis and return percentile stats."""
+        try:
+            raw = self.redis.lrange(key, 0, -1)
+            values = [int(v) for v in raw if v is not None]
+            return _compute_percentiles(values)
+        except Exception:
+            return {"p50": None, "p95": None, "p99": None, "sample_size": 0}
+
     def get_analytics_summary(self) -> dict:
         """Get analytics summary statistics."""
         try:
             summary_key = "analytics_summary"
             summary = self.redis.get(summary_key)
             if summary:
-                return json.loads(summary)
+                summary_data = json.loads(summary)
+            else:
+                # No pre-aggregated summary — recompute from individual records if any exist
+                analytics_ids = self.redis.lrange("analytics_index", 0, -1)
+                if not analytics_ids:
+                    summary_data = {
+                        "total_sessions": 0,
+                        "total_api_calls": 0,
+                        "total_errors": 0,
+                        "avg_session_duration": 0,
+                        "avg_failure_rate": 0,
+                        "platforms": {},
+                        "error_types": {},
+                        "last_updated": datetime.now().isoformat()
+                    }
+                else:
+                    summary_data = {
+                        "total_sessions": 0,
+                        "total_api_calls": 0,
+                        "total_errors": 0,
+                        "avg_session_duration": 0.0,
+                        "avg_failure_rate": 0.0,
+                        "platforms": {},
+                        "error_types": {},
+                        "last_updated": datetime.now().isoformat()
+                    }
+                    for analytics_id in analytics_ids:
+                        analytics_id = analytics_id.decode("utf-8") if isinstance(analytics_id, bytes) else analytics_id
+                        record_raw = self.redis.get(f"{self.analytics_prefix}{analytics_id}")
+                        if not record_raw:
+                            continue
+                        record = json.loads(record_raw.decode("utf-8") if isinstance(record_raw, bytes) else record_raw)
+                        self._update_analytics_summary(record)
 
-            # No pre-aggregated summary — recompute from individual records if any exist
-            analytics_ids = self.redis.lrange("analytics_index", 0, -1)
-            if not analytics_ids:
-                return {
-                    "total_sessions": 0,
-                    "total_api_calls": 0,
-                    "total_errors": 0,
-                    "avg_session_duration": 0,
-                    "avg_failure_rate": 0,
-                    "platforms": {},
-                    "error_types": {},
-                    "last_updated": datetime.now().isoformat()
-                }
+                    rebuilt = self.redis.get(summary_key)
+                    summary_data = json.loads(rebuilt) if rebuilt else summary_data
 
-            summary_data = {
-                "total_sessions": 0,
-                "total_api_calls": 0,
-                "total_errors": 0,
-                "avg_session_duration": 0.0,
-                "avg_failure_rate": 0.0,
-                "platforms": {},
-                "error_types": {},
-                "last_updated": datetime.now().isoformat()
+            # Attach live response-time percentiles from the RT lists
+            by_method = {}
+            for method in _SELECTION_METHODS:
+                stats = self._load_rt_percentiles(f"analytics:rt:method:{method}")
+                if stats["sample_size"] > 0:
+                    by_method[method] = stats
+
+            summary_data["response_times"] = {
+                "overall": self._load_rt_percentiles("analytics:rt:all"),
+                "by_selection_method": by_method,
+                "by_cache_hit": {
+                    "hit": self._load_rt_percentiles("analytics:rt:cache:hit"),
+                    "miss": self._load_rt_percentiles("analytics:rt:cache:miss"),
+                },
             }
-            for analytics_id in analytics_ids:
-                analytics_id = analytics_id.decode("utf-8") if isinstance(analytics_id, bytes) else analytics_id
-                record_raw = self.redis.get(f"{self.analytics_prefix}{analytics_id}")
-                if not record_raw:
-                    continue
-                record = json.loads(record_raw.decode("utf-8") if isinstance(record_raw, bytes) else record_raw)
-                self._update_analytics_summary(record)
 
-            rebuilt = self.redis.get(summary_key)
-            return json.loads(rebuilt) if rebuilt else summary_data
+            return summary_data
 
         except Exception as e:
             logger.error(f"Failed to get analytics summary: {e}")

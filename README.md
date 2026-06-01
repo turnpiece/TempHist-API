@@ -938,8 +938,45 @@ The analytics system collects **client-reported** session data submitted by the 
 | `platform` | string | No | Platform identifier, e.g. `"iOS"`, `"web"` |
 | `user_agent` | string | No | Client user-agent |
 | `session_id` | string | No | Unique session identifier; used for `GET /analytics/session/{id}` lookup |
+| `response_time_ms` | integer ≥ 0 | No | Client-measured wall-clock response time in milliseconds |
+| `cache_hit` | boolean | No | Whether the response was served from cache — read from the `X-Cache` response header |
+| `canonical_location` | string | No | Canonical location name as resolved by the API |
+| `requested_location` | string | No | Location string as originally entered by the user |
+| `selection_method` | string | No | How the location was selected: `own_location`, `carousel`, `recent`, `popular`, or `search` |
 
 > **Note on `GET /analytics/session/{session_id}`:** This performs a linear scan of the most recent 1000 records. There is no dedicated session index, so lookups across large datasets may miss older records.
+
+#### `GET /analytics/summary` response
+
+The summary includes a `response_times` block with P50/P95/P99 latencies (in ms) broken down by selection method and cache hit status:
+
+```json
+{
+  "response_times": {
+    "overall":   { "p50": 840, "p95": 1980, "p99": 3100, "sample_size": 1234 },
+    "by_selection_method": {
+      "own_location": { "p50": 750, "p95": 1800, "p99": 2900, "sample_size": 400 }
+    },
+    "by_cache_hit": {
+      "hit":  { "p50": 220, "p95": 580,  "p99": 900,  "sample_size": 800 },
+      "miss": { "p50": 1400, "p95": 2800, "p99": 4200, "sample_size": 434 }
+    }
+  }
+}
+```
+
+Percentiles are computed from up to 10,000 recent samples per dimension (7-day rolling window). `null` values indicate no data yet.
+
+#### `X-Cache` response header
+
+All temperature data endpoints (`/v1/records/*`) include an `X-Cache` header:
+
+| Value | Meaning |
+| ----- | ------- |
+| `HIT` | Response served from Redis cache (including approximate/stale hits) |
+| `MISS` | Response required a fresh data fetch |
+
+Clients should read this header to populate `cache_hit` in their analytics payloads.
 
 ### Monitoring Endpoints
 

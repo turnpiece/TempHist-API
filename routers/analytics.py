@@ -113,12 +113,40 @@ def _sanitize_analytics_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any]
     sanitized["recent_errors"] = _sanitize_recent_errors(data.get("recent_errors"), warnings)
 
     # Optional string metadata fields
-    for optional_field in ("app_version", "platform", "user_agent", "session_id"):
+    for optional_field in ("app_version", "platform", "user_agent", "session_id",
+                           "canonical_location", "requested_location", "selection_method"):
         value = data.get(optional_field)
         if value is None:
             sanitized[optional_field] = None
         else:
             sanitized[optional_field] = str(value)
+
+    # Optional int field (None if absent, coerced if present)
+    rt_raw = data.get("response_time_ms")
+    if rt_raw is None:
+        sanitized["response_time_ms"] = None
+    else:
+        sanitized["response_time_ms"] = _coerce_non_negative_int(rt_raw, "response_time_ms", 0, warnings)
+
+    # Optional bool field
+    cache_hit_raw = data.get("cache_hit")
+    if cache_hit_raw is None:
+        sanitized["cache_hit"] = None
+    elif isinstance(cache_hit_raw, bool):
+        sanitized["cache_hit"] = cache_hit_raw
+    elif isinstance(cache_hit_raw, int):
+        sanitized["cache_hit"] = bool(cache_hit_raw)
+    elif isinstance(cache_hit_raw, str):
+        if cache_hit_raw.lower() in ("true", "1", "yes"):
+            sanitized["cache_hit"] = True
+        elif cache_hit_raw.lower() in ("false", "0", "no"):
+            sanitized["cache_hit"] = False
+        else:
+            warnings.append(f"cache_hit: could not parse '{cache_hit_raw}', defaulted to None")
+            sanitized["cache_hit"] = None
+    else:
+        warnings.append(f"cache_hit: unsupported type {type(cache_hit_raw).__name__}, defaulted to None")
+        sanitized["cache_hit"] = None
 
     # Preserve any additional metadata fields not explicitly handled
     extra_fields = set(data.keys()) - {name for name, _ in INT_FIELDS_DEFAULTS} - {
@@ -128,6 +156,11 @@ def _sanitize_analytics_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any]
         "platform",
         "user_agent",
         "session_id",
+        "canonical_location",
+        "requested_location",
+        "selection_method",
+        "response_time_ms",
+        "cache_hit",
     }
     for extra_field in extra_fields:
         sanitized[extra_field] = data.get(extra_field)

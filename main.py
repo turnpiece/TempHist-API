@@ -1051,6 +1051,18 @@ async def performance_timing_middleware(request: Request, call_next):
     return response
 
 @app.middleware("http")
+async def x_cache_header_middleware(request: Request, call_next):
+    """Derive a simple X-Cache: HIT/MISS header from X-Cache-Status for client analytics."""
+    response = await call_next(request)
+    status = response.headers.get("X-Cache-Status", "")
+    if status in ("HIT", "APPROX", "STALE"):
+        response.headers["X-Cache"] = "HIT"
+    elif status in ("MISS", "PARTIAL"):
+        response.headers["X-Cache"] = "MISS"
+    return response
+
+
+@app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     """Log all requests when DEBUG is enabled or verbosity is verbose."""
     if DEBUG or LOG_VERBOSITY == "verbose":
