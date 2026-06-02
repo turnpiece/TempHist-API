@@ -202,6 +202,7 @@ class TestBackfillCooldown:
 
         mock_jm = MagicMock()
         mock_get_jm.return_value = mock_jm
+        mock_jm.redis.exists.return_value = 0  # no skip markers
         # Redis SET NX returns False (key already exists — cooldown active)
         mock_jm.redis.set.return_value = False
 
@@ -246,6 +247,21 @@ class TestBackfillCooldown:
         mock_jm.create_job.assert_not_called()
 
     @patch("routers.v1_records.get_job_manager")
+    def test_vc_confirmed_skip_marker_prevents_enqueue(self, mock_get_jm):
+        """backfill:skip marker (set by DB pre-check or VC result) blocks re-enqueue."""
+        from routers.v1_records import _enqueue_backfill_job
+
+        mock_jm = MagicMock()
+        mock_get_jm.return_value = mock_jm
+        # Per-year skip key present (e.g. set after VC confirmed no data)
+        mock_jm.redis.exists.return_value = 1
+
+        _enqueue_backfill_job("daily", "Mogadishu, Banaadir, Somalia", "01-15", 2010)
+
+        mock_jm.redis.set.assert_not_called()
+        mock_jm.create_job.assert_not_called()
+
+    @patch("routers.v1_records.get_job_manager")
     def test_no_job_manager_does_not_raise(self, mock_get_jm):
         """If job manager is unavailable, should silently return."""
         from routers.v1_records import _enqueue_backfill_job
@@ -254,3 +270,34 @@ class TestBackfillCooldown:
 
         # Should not raise
         _enqueue_backfill_job("weekly", "Singapore", "03-26", 2024)
+
+
+# ---------------------------------------------------------------------------
+# Dedup key refreshed on PROCESSING transition
+# ---------------------------------------------------------------------------
+
+class TestDedupKeyOnProcessing:
+
+    def test_processing_status_refreshes_dedup_key_with_job_ttl(self):
+        """update_job_status(PROCESSING) should extend the dedup key to the full job TTL."""
+        mgr = _make_manager()
+        job_id = "record_computation_999_abcd1234"
+        job_data = {
+            "id": job_id,
+            "type": TEST_JOB_TYPE,
+            "status": JobStatus.PENDING,
+            "params": TEST_PARAMS,
+        }
+        mgr.redis.get.return_value = json.dumps(job_data).encode()
+
+        mgr.update_job_status(job_id, JobStatus.PROCESSING)
+
+        dedup_key = f"job:dedup:{TEST_JOB_TYPE}:{TEST_HASH}"
+        # The dedup key should be refreshed with the full job TTL (not 300s)
+        matching = [
+            c for c in mgr.redis.setex.call_args_list
+            if c[0][0] == dedup_key
+        ]
+        assert len(matching) == 1
+        _key, ttl, _val = matching[0][0]
+        assert ttl == mgr.job_ttl, f"Expected TTL={mgr.job_ttl}, got {ttl}"

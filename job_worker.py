@@ -8,6 +8,7 @@ It runs as a background task in the FastAPI application lifecycle.
 import asyncio
 import json
 import logging
+import os
 import redis
 import signal
 import sys
@@ -27,6 +28,7 @@ WORKER_DEEP_CLEANUP_INTERVAL_CYCLES = 300  # Deep queue cleanup every 300 cycles
 WORKER_DEEP_CLEANUP_BATCH_SIZE = 1000  # Max entries to scan during deep cleanup
 WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES = 300  # Log heartbeat every 300 cycles (5 minutes)
 MAX_PENDING_AGE_SECONDS = 300  # Jobs pending longer than 5 minutes are expired unprocessed
+MAX_JOB_EXECUTION_SECONDS = int(os.environ.get("MAX_JOB_EXECUTION_SECONDS", "600"))  # Hard wall-clock cap per job
 
 class JobWorker:
     """Background worker for processing async jobs."""
@@ -283,16 +285,25 @@ class JobWorker:
             params = job_data.get("params", {})
             logger.info(f"📋 Job type: {job_type}, Params: {params}")
             
-            # Process based on job type
+            # Process based on job type, with a hard wall-clock cap so a single
+            # slow location can never block the queue indefinitely.
             try:
                 if job_type == "record_computation":
                     logger.info(f"🔢 Starting record computation...")
-                    result = await self.process_record_job(params)
+                    coro = self.process_record_job(params)
                 elif job_type == "cache_warming":
                     logger.info(f"🔥 Starting cache warming...")
-                    result = await self.process_cache_warming_job(params)
+                    coro = self.process_cache_warming_job(params)
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
+                result = await asyncio.wait_for(coro, timeout=MAX_JOB_EXECUTION_SECONDS)
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"⏰ Job {job_id} ({job_type}) timed out after {MAX_JOB_EXECUTION_SECONDS}s"
+                )
+                raise TimeoutError(
+                    f"Job exceeded {MAX_JOB_EXECUTION_SECONDS}s execution limit"
+                )
             except (ValueError, KeyError, TypeError) as data_error:
                 logger.error(f"❌ Data error for job {job_id}: {type(data_error).__name__}")
                 logger.error(f"❌ Error message: {str(data_error)}")
@@ -456,6 +467,17 @@ class JobWorker:
             
             if year not in per_year_records:
                 logger.warning(f"⏭️ No data available for year {year} at {location}, skipping")
+                # VC confirmed no data for this year. Persist a skip key so
+                # future _enqueue_backfill_job calls for this year skip fast.
+                # 24 h TTL matches the DB pre-check skip key; treats any VC
+                # absence for a historical year as permanent (data for past
+                # dates doesn't appear retroactively; only 5xx/timeouts are
+                # transient, and those are already retried in fetch_timeline_days).
+                try:
+                    skip_key = f"backfill:skip:{scope}:{slug}:{year}"
+                    self.redis.setex(skip_key, 86400, "1")
+                except Exception:
+                    pass
                 return {"skipped": True, "reason": f"no data available for year {year}"}
             
             # Get the specific year's record

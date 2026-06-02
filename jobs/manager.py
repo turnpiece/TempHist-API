@@ -180,16 +180,23 @@ class JobManager:
             result_key = f"{self.result_prefix}{job_id}"
             self.redis.setex(result_key, self.job_ttl, json.dumps(result))
 
-        # Keep deduplication key alive after completion so client retries don't
-        # re-enqueue the same work.
-        if status in [JobStatus.READY, JobStatus.ERROR]:
+        # Keep the dedup key alive across the job's full lifecycle so concurrent
+        # requests don't spawn duplicate jobs while one is already running.
+        # PROCESSING: extend to the full job TTL so the key outlives execution.
+        # READY/ERROR: shrink to a short cooldown to block immediate re-enqueue.
+        if status in [JobStatus.PROCESSING, JobStatus.READY, JobStatus.ERROR]:
             job_type = job.get("type")
             params = job.get("params")
             if job_type and params:
                 params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
                 dedup_key = f"job:dedup:{job_type}:{params_hash}"
-                cooldown_ttl = 300 if status == JobStatus.READY else 120
-                self.redis.setex(dedup_key, cooldown_ttl, job_id)
+                if status == JobStatus.PROCESSING:
+                    dedup_ttl = self.job_ttl
+                elif status == JobStatus.READY:
+                    dedup_ttl = 300
+                else:  # ERROR
+                    dedup_ttl = 120
+                self.redis.setex(dedup_key, dedup_ttl, job_id)
 
     def cleanup_expired_jobs(self) -> int:
         """Clean up expired jobs (Redis TTL handles this automatically)."""
