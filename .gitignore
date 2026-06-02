@@ -39,10 +39,5 @@ graphify-out/cache/
 .postman/
 postman/environments/
 postman/globals/
-postman/collections/Open Meteo/
-postman/collections/Visual Crossing/
-postman/collections/Development/
-postman/collections/Local/
-postman/collections/Staging/
-postman/collections/Production/
-postman/collections/Monitors/
+postman/collections/*
+!postman/collections/TempHist API/
