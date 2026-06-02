@@ -63,6 +63,7 @@ POPULARITY_WINDOW_DAYS    = int(os.getenv("POPULARITY_WINDOW_DAYS", "30"))
 # Set high — clients that need fewer should pass ?limit=N explicitly.
 # The hard cap MAX_LIMIT=500 in the router is the real safety net.
 POPULARITY_MAX_LOCATIONS  = int(os.getenv("POPULARITY_MAX_LOCATIONS", "500"))
+CANONICALIZATION_RADIUS_KM = int(os.getenv("CANONICALIZATION_RADIUS_KM", "45"))
 # HTTP timeout configuration
 HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
 HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks

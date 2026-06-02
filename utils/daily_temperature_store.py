@@ -17,6 +17,7 @@ def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[b
     return has_temp, has_max, has_min
 
 from cache.keys import normalize_location_for_cache
+from config import CANONICALIZATION_RADIUS_KM
 
 logger = logging.getLogger(__name__)
 
@@ -591,7 +592,7 @@ class DailyTemperatureStore:
         """Fetch cached temperature records for a location and list of dates.
 
         Uses location aliases to resolve the canonical location_id, ensuring that
-        different location variations (e.g., nearby locations within 25km) share
+        different location variations (e.g., nearby locations within the configured canonicalization radius) share
         the same cached data.
 
         Args:
@@ -879,7 +880,7 @@ class DailyTemperatureStore:
         conn: asyncpg.Connection,
         latitude: Optional[float],
         longitude: Optional[float],
-        max_distance_km: float = 25.0,
+        max_distance_km: float = CANONICALIZATION_RADIUS_KM,
     ) -> Optional[asyncpg.Record]:
         """Return closest existing location within max_distance_km km of (lat, lng), or None.
 
