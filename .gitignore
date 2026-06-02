@@ -35,10 +35,11 @@ graphify-out/obsidian/
 graphify-out/converted/
 graphify-out/cache/
 
-# Postman — only track the TempHist API collection; everything else is
-# ephemeral scratch work or contains secrets (e.g. Visual Crossing API keys)
+# Postman — only track the TempHist API collection; workspace config is personal
+.postman/
 postman/environments/
 postman/globals/
+postman/collections/Open Meteo/
 postman/collections/Visual Crossing/
 postman/collections/Development/
 postman/collections/Local/
