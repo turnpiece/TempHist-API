@@ -5,3 +5,12 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # Style errors and warnings
+    "F",         # Flakes (unused variables/imports)
+    "I",         # Organise imports automatically
+    "ASYNC",     # Catches missing FastAPI 'await' calls
+    "S",         # Security (catches hardcoded AI passwords/keys)
+]
