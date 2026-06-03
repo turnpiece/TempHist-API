@@ -1,6 +1,9 @@
 """Cache header utilities."""
+
 import hashlib
-from datetime import datetime, timezone, date as dt_date, timedelta
+from datetime import date as dt_date
+from datetime import datetime, timedelta, timezone
+
 from fastapi import Response
 
 
@@ -15,13 +18,11 @@ def set_weather_cache_headers(response: Response, *, req_date: dt_date, key_part
         )
     else:
         # Safer policy for the last ~48h (recent data might be revised)
-        response.headers["Cache-Control"] = (
-            "public, max-age=21600, stale-while-revalidate=86400, stale-if-error=86400"
-        )
+        response.headers["Cache-Control"] = "public, max-age=21600, stale-while-revalidate=86400, stale-if-error=86400"
 
     # Deterministic weak ETag: location|date|unit_group|schema_version
     etag = hashlib.sha256(key_parts.encode("utf-8")).hexdigest()[:32]  # Use 32 chars (128-bit security)
     response.headers["ETag"] = f'W/"{etag}"'
-    
+
     # Use the requested calendar day as Last-Modified (UTC midnight)
     response.headers["Last-Modified"] = f"{req_date.isoformat()}T00:00:00Z"

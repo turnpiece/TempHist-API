@@ -1,13 +1,16 @@
 """Root endpoint and API information."""
-import redis
+
 from datetime import timedelta
+
+import redis
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from version import __version__
-from config import CACHE_CONTROL_HEADER
-from cache.core import set_cache_value, get_cache_value
+
 from cache.accessors import get_cache_stats
+from cache.core import get_cache_value, set_cache_value
+from config import CACHE_CONTROL_HEADER
 from routers.dependencies import get_redis_client
+from version import __version__
 
 router = APIRouter()
 
@@ -25,20 +28,17 @@ async def root():
                 "/v1/records/{period}/{location}/{identifier}/average",
                 "/v1/records/{period}/{location}/{identifier}/trend",
                 "/v1/records/{period}/{location}/{identifier}/summary",
-                "/v1/records/{period}/{location}/{identifier}/updated"
+                "/v1/records/{period}/{location}/{identifier}/updated",
             ],
             "periods": ["daily", "weekly", "monthly", "yearly"],
-            "locations": [
-                "/v1/locations/preapproved",
-                "/v1/locations/preapproved/status"
-            ],
+            "locations": ["/v1/locations/preapproved", "/v1/locations/preapproved/status"],
             "examples": [
                 "/v1/records/daily/london/01-15",
                 "/v1/records/weekly/london/01-15",
                 "/v1/records/monthly/london/01-15",
                 "/v1/records/yearly/london/01-15",
-                "/v1/records/daily/london/01-15/updated"
-            ]
+                "/v1/records/daily/london/01-15/updated",
+            ],
         },
         "removed_endpoints": {
             "status": "removed",
@@ -46,10 +46,10 @@ async def root():
                 "/data/{location}/{month_day}",
                 "/average/{location}/{month_day}",
                 "/trend/{location}/{month_day}",
-                "/summary/{location}/{month_day}"
+                "/summary/{location}/{month_day}",
             ],
             "note": "These endpoints have been removed. Please use v1 endpoints instead.",
-            "migration": "Use /v1/records/daily/{location}/{month_day} and subresources"
+            "migration": "Use /v1/records/daily/{location}/{month_day} and subresources",
         },
         "other_endpoints": [
             "/weather/{location}/{date}",
@@ -78,14 +78,14 @@ async def root():
             "/cache/invalidate/forecast",
             "/cache/invalidate/today",
             "/cache/invalidate/expired",
-            "/cache/clear"
+            "/cache/clear",
         ],
         "analytics_endpoints": [
             "/analytics",
-            "/analytics/summary", 
+            "/analytics/summary",
             "/analytics/recent",
-            "/analytics/session/{session_id}"
-        ]
+            "/analytics/session/{session_id}",
+        ],
     }
 
 
@@ -111,21 +111,18 @@ async def test_redis(redis_client: redis.Redis = Depends(get_redis_client)):
         test_value = get_cache_value("test_key", redis_client, "test", "test", get_cache_stats())
         if test_value:
             # Handle both bytes and string responses
-            test_str = test_value.decode('utf-8') if isinstance(test_value, bytes) else test_value
+            test_str = test_value.decode("utf-8") if isinstance(test_value, bytes) else test_value
             if test_str == "test_value":
                 return JSONResponse(
                     content={"status": "success", "message": "Redis connection is working"},
-                    headers={"Cache-Control": CACHE_CONTROL_HEADER}
+                    headers={"Cache-Control": CACHE_CONTROL_HEADER},
                 )
         return JSONResponse(
             content={"status": "error", "message": "Redis connection test failed"},
-            headers={"Cache-Control": CACHE_CONTROL_HEADER}
+            headers={"Cache-Control": CACHE_CONTROL_HEADER},
         )
     except Exception as e:
         return JSONResponse(
-            content={
-                "status": "error",
-                "message": f"Redis connection error: {str(e)}"
-            },
-            headers={"Cache-Control": CACHE_CONTROL_HEADER}
+            content={"status": "error", "message": f"Redis connection error: {str(e)}"},
+            headers={"Cache-Control": CACHE_CONTROL_HEADER},
         )

@@ -1,4 +1,5 @@
 """Application configuration and environment variables."""
+
 import logging
 import os
 from pathlib import Path
@@ -28,6 +29,7 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 # Prevent DEBUG mode in production
 if ENVIRONMENT == "production" and DEBUG:
     import logging as _logging
+
     _logging.basicConfig(level=_logging.INFO)
     _temp_logger = _logging.getLogger(__name__)
     _temp_logger.error("❌ DEBUG mode cannot be enabled in production environment")
@@ -56,16 +58,16 @@ IP_BLACKLIST = [ip.strip() for ip in os.getenv("IP_BLACKLIST", "").split(",") if
 # Usage Tracking Configuration
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
-POPULARITY_WINDOW_DAYS    = int(os.getenv("POPULARITY_WINDOW_DAYS", "30"))
+POPULARITY_WINDOW_DAYS = int(os.getenv("POPULARITY_WINDOW_DAYS", "30"))
 # Default limit when the popular endpoint is called without ?limit=.
 # Set high — clients that need fewer should pass ?limit=N explicitly.
 # The hard cap MAX_LIMIT=500 in the router is the real safety net.
-POPULARITY_MAX_LOCATIONS  = int(os.getenv("POPULARITY_MAX_LOCATIONS", "500"))
+POPULARITY_MAX_LOCATIONS = int(os.getenv("POPULARITY_MAX_LOCATIONS", "500"))
 CANONICALIZATION_RADIUS_KM = int(os.getenv("CANONICALIZATION_RADIUS_KM", "45"))
 # HTTP timeout configuration
 HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
-HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks
-HTTP_TIMEOUT_LONG = 120.0    # Long timeout for large data requests
+HTTP_TIMEOUT_SHORT = 5.0  # Short timeout for health checks
+HTTP_TIMEOUT_LONG = 120.0  # Long timeout for large data requests
 HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection
 
@@ -82,6 +84,7 @@ FORECAST_NIGHT_CACHE_DURATION_SECONDS = 7200  # 2 hours
 
 # Import timedelta for compatibility
 from datetime import timedelta
+
 SHORT_CACHE_DURATION = timedelta(seconds=SHORT_CACHE_DURATION_SECONDS)
 LONG_CACHE_DURATION = timedelta(seconds=LONG_CACHE_DURATION_SECONDS)
 FORECAST_DAY_CACHE_DURATION = timedelta(seconds=FORECAST_DAY_CACHE_DURATION_SECONDS)
@@ -90,23 +93,29 @@ FORECAST_NIGHT_CACHE_DURATION = timedelta(seconds=FORECAST_NIGHT_CACHE_DURATION_
 # Analytics rate limiting
 ANALYTICS_RATE_LIMIT = int(os.getenv("ANALYTICS_RATE_LIMIT", "100"))  # 100 requests per hour per IP
 
+
 # CORS configuration
 def validate_cors_config():
     """Validate CORS configuration to prevent misconfiguration."""
     origins = os.getenv("CORS_ORIGINS", "").strip()
     regex = os.getenv("CORS_ORIGIN_REGEX", "").strip()
     env = ENVIRONMENT
-    
+
     # Configure logging first if not already configured
     if not logging.getLogger().handlers:
-        log_level = logging.WARNING if LOG_VERBOSITY == "minimal" else (logging.DEBUG if DEBUG or LOG_VERBOSITY == "verbose" else logging.INFO)
+        log_level = (
+            logging.WARNING
+            if LOG_VERBOSITY == "minimal"
+            else (logging.DEBUG if DEBUG or LOG_VERBOSITY == "verbose" else logging.INFO)
+        )
         logging.basicConfig(level=log_level)
-    
+
     logger = logging.getLogger(__name__)
-    
+
     if regex:
         # Test regex is valid and not too permissive
         import re
+
         try:
             re.compile(regex)
             # Warn if regex looks too permissive
@@ -120,15 +129,16 @@ def validate_cors_config():
         except re.error as e:
             logger.error(f"❌ Invalid CORS_ORIGIN_REGEX: {e}")
             raise ValueError(f"Invalid CORS_ORIGIN_REGEX: {e}")
-    
+
     if origins == "*":
         logger.error("❌ CORS_ORIGINS set to '*' - this is insecure!")
         if env == "production":
             raise ValueError("Wildcard CORS not allowed in production")
         else:
             logger.warning("⚠️  Wildcard CORS in non-production environment")
-    
+
     return origins, regex
+
 
 CORS_ORIGINS, CORS_ORIGIN_REGEX = validate_cors_config()
 

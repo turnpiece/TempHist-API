@@ -1,11 +1,11 @@
 import logging
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple
 
 import redis
 
-from config import USAGE_TRACKING_ENABLED, DEBUG, POPULARITY_WINDOW_DAYS
+from config import DEBUG, POPULARITY_WINDOW_DAYS, USAGE_TRACKING_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -150,10 +150,7 @@ class LocationUsageTracker:
         raw = self.redis_client.zrevrange(tmp_key, 0, limit - 1, withscores=True)
         self.redis_client.delete(tmp_key)
 
-        return [
-            (item.decode() if isinstance(item, bytes) else item, int(score))
-            for item, score in raw
-        ]
+        return [(item.decode() if isinstance(item, bytes) else item, int(score)) for item, score in raw]
 
     def store_location_display(self, location_id: str, display_string: str) -> None:
         """Persist a human-readable display string for a location ID.
@@ -213,8 +210,6 @@ class LocationUsageTracker:
         self.redis_client.zunionstore(tmp_key, daily_keys, aggregate="SUM")
         self.redis_client.expire(tmp_key, 60)
 
-        total = sum(
-            int(score) for _, score in self.redis_client.zrange(tmp_key, 0, -1, withscores=True)
-        )
+        total = sum(int(score) for _, score in self.redis_client.zrange(tmp_key, 0, -1, withscores=True))
         self.redis_client.delete(tmp_key)
         return total

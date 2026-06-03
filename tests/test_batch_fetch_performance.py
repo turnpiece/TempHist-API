@@ -3,8 +3,8 @@
 Quick performance test to demonstrate the batch fetch optimization.
 This test shows that we fetch all dates in a single query instead of 51 separate queries.
 """
+
 import asyncio
-from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,8 +33,8 @@ async def test_batch_fetch_reduces_database_calls():
     mock_store.fetch = counting_fetch
 
     # Mock fetch_timeline_days to return empty results (avoid external API calls)
-    with patch('routers.v1_records.get_daily_temperature_store', return_value=mock_store):
-        with patch('routers.v1_records.fetch_timeline_days', return_value=([], {})):
+    with patch("routers.v1_records.get_daily_temperature_store", return_value=mock_store):
+        with patch("routers.v1_records.fetch_timeline_days", return_value=([], {})):
             # Call the function with a yearly rolling window (365 days) across 51 years
             years = list(range(1975, 2026))  # 51 years
             await _collect_rolling_window_values(
@@ -71,8 +71,8 @@ async def test_batch_fetch_calculates_unique_dates():
     mock_store.fetch = capture_fetch
     mock_store.upsert = AsyncMock()
 
-    with patch('routers.v1_records.get_daily_temperature_store', return_value=mock_store):
-        with patch('routers.v1_records.fetch_timeline_days', return_value=([], {})):
+    with patch("routers.v1_records.get_daily_temperature_store", return_value=mock_store):
+        with patch("routers.v1_records.fetch_timeline_days", return_value=([], {})):
             # Test with just 3 years to make verification easier
             years = [2023, 2024, 2025]
             await _collect_rolling_window_values(

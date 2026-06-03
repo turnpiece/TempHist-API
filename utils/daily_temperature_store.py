@@ -1,5 +1,4 @@
 import asyncio
-import asyncpg  # type: ignore[import-untyped]
 import json
 import logging
 import os
@@ -7,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+import asyncpg  # type: ignore[import-untyped]
 
 
 def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[bool, bool, bool]:
@@ -16,10 +17,12 @@ def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[b
     has_min = any(record.temp_min_c is not None for record in records)
     return has_temp, has_max, has_min
 
+
 from cache.keys import normalize_location_for_cache
 from config import CANONICALIZATION_RADIUS_KM
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class DailyTemperatureRecord:
@@ -152,12 +155,10 @@ class DailyTemperatureStore:
         self._dsn = dsn or os.getenv("TEMPHIST_PG_DSN") or os.getenv("DATABASE_URL")
         # asyncpg requires postgresql:// scheme; Railway provides postgres://
         if self._dsn and self._dsn.startswith("postgres://"):
-            self._dsn = "postgresql://" + self._dsn[len("postgres://"):]
+            self._dsn = "postgresql://" + self._dsn[len("postgres://") :]
         self._disabled = False
         if not self._dsn:
-            logger.warning(
-                "DailyTemperatureStore disabled: TEMPHIST_PG_DSN (or DATABASE_URL) is not configured."
-            )
+            logger.warning("DailyTemperatureStore disabled: TEMPHIST_PG_DSN (or DATABASE_URL) is not configured.")
             self._disabled = True
         self._pool: Optional[asyncpg.Pool] = None
         self._pool_lock = asyncio.Lock()
@@ -177,6 +178,7 @@ class DailyTemperatureStore:
             asyncpg.Pool instance or None if disabled/not yet connectable
         """
         import time
+
         if self._disabled:
             return None
         if self._pool:
@@ -210,15 +212,12 @@ class DailyTemperatureStore:
             self._pool = pool
             return self._pool
 
-    async def get_coordinates(
-        self, location: str
-    ) -> "Optional[Tuple[float, float, Optional[str]]]":
+    async def get_coordinates(self, location: str) -> "Optional[Tuple[float, float, Optional[str]]]":
         """Return (lat, lon, timezone) for a known location, or None.
 
         Checks the Postgres locations table first (alias + direct match), then
         falls back to the in-memory preapproved_locations.json mapping.
         """
-        from typing import Tuple as _Tuple
         normalized = normalize_location_for_cache(location)
 
         pool = await self._ensure_pool()
@@ -242,9 +241,7 @@ class DailyTemperatureStore:
                             row.get("timezone"),
                         )
             except Exception as exc:
-                logger.debug(
-                    "DB coordinate lookup failed for %r: %s", location, exc
-                )
+                logger.debug("DB coordinate lookup failed for %r: %s", location, exc)
 
         info = _get_preapproved_location_info(normalized)
         if info and info.get("latitude") is not None:
@@ -259,6 +256,7 @@ class DailyTemperatureStore:
     async def ping(self) -> dict:
         """Check database connectivity. Returns a status dict suitable for health endpoints."""
         import time
+
         if self._disabled:
             return {"status": "disabled", "message": "No DSN configured"}
         pool = await self._ensure_pool()
@@ -372,9 +370,7 @@ class DailyTemperatureStore:
         Args:
             conn: asyncpg database connection
         """
-        table_exists = await conn.fetchval(
-            "SELECT to_regclass('public.daily_temperatures') IS NOT NULL"
-        )
+        table_exists = await conn.fetchval("SELECT to_regclass('public.daily_temperatures') IS NOT NULL")
         if not table_exists:
             await self._create_daily_temperatures_table(conn)
             return
@@ -531,9 +527,7 @@ class DailyTemperatureStore:
         await conn.execute("ALTER TABLE daily_temperatures RENAME TO daily_temperatures_legacy")
         await self._create_daily_temperatures_table(conn)
 
-        legacy_locations = await conn.fetch(
-            "SELECT DISTINCT location FROM daily_temperatures_legacy"
-        )
+        legacy_locations = await conn.fetch("SELECT DISTINCT location FROM daily_temperatures_legacy")
         location_id_map: Dict[str, int] = {}
         for record in legacy_locations:
             original_name = record["location"]
@@ -731,7 +725,9 @@ class DailyTemperatureStore:
                     end_date,
                     len(date_texts),
                 )
-                logger.error("DailyTemperatureStore.fetch parameters: %s", parameters if 'parameters' in locals() else None)
+                logger.error(
+                    "DailyTemperatureStore.fetch parameters: %s", parameters if "parameters" in locals() else None
+                )
             else:
                 logger.warning(
                     "DailyTemperatureStore.fetch failed for %s due to %s. Returning empty result.",
@@ -841,9 +837,7 @@ class DailyTemperatureStore:
         try:
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    location_id = await self._get_or_create_location_id(
-                        conn, location, normalized_location, metadata
-                    )
+                    location_id = await self._get_or_create_location_id(conn, location, normalized_location, metadata)
                     if location_id is None:
                         return
                     param_rows = [
@@ -938,6 +932,7 @@ class DailyTemperatureStore:
         # Calculate bounding box for fast pre-filtering
         # Approximation: 1 degree latitude ≈ 111 km, longitude varies by latitude
         import math
+
         lat_delta = max_distance_km / 111.0
         # At equator, 1 degree longitude ≈ 111 km, narrows at higher latitudes
         lon_delta = max_distance_km / (111.0 * abs(math.cos(math.radians(latitude))))
@@ -1043,18 +1038,10 @@ class DailyTemperatureStore:
             return location_id
 
         # 3. Extract Visual Crossing metadata
-        resolved_name = self._extract_metadata_value(
-            metadata, ["resolvedAddress", "resolved_address"]
-        )
-        latitude = self._extract_numeric_metadata(
-            metadata, ["latitude", "lat"]
-        )
-        longitude = self._extract_numeric_metadata(
-            metadata, ["longitude", "lon", "lng"]
-        )
-        timezone_name = self._extract_metadata_value(
-            metadata, ["timezone", "tz"]
-        )
+        resolved_name = self._extract_metadata_value(metadata, ["resolvedAddress", "resolved_address"])
+        latitude = self._extract_numeric_metadata(metadata, ["latitude", "lat"])
+        longitude = self._extract_numeric_metadata(metadata, ["longitude", "lon", "lng"])
+        timezone_name = self._extract_metadata_value(metadata, ["timezone", "tz"])
 
         # Apply preapproved info if available (do not remove existing logic)
         preapproved = _get_preapproved_location_info(normalized_name)
@@ -1199,4 +1186,3 @@ async def get_daily_temperature_store() -> DailyTemperatureStore:
         if _store is None:
             _store = DailyTemperatureStore()
         return _store
-

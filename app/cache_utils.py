@@ -18,7 +18,7 @@ import gzip
 import json
 import logging
 from datetime import date, datetime, timezone
-from typing import Literal, Optional, Dict, Any
+from typing import Literal, Optional
 
 import redis
 
@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 Agg = Literal["daily", "weekly", "monthly", "yearly"]
 
 TEMPORAL_TOLERANCE: dict[str, int] = {
-    "daily": 0,    # Exact match only
-    "weekly": 0,   # Exact match only
+    "daily": 0,  # Exact match only
+    "weekly": 0,  # Exact match only
     "monthly": 2,  # ±2 days for monthly data
-    "yearly": 7,   # ±7 days for yearly data
+    "yearly": 7,  # ±7 days for yearly data
 }
 
 KEY_NS = "thv1"  # Namespace for cache keys (allows migration without mass deletes)
@@ -245,9 +245,7 @@ def cache_get(
             "end_date": end_iso,
         }
 
-        logger.debug(
-            f"Temporal cache hit (approx): {canonical}:{agg}:{end_iso} -> {nearest_iso} (Δ{delta_days}d)"
-        )
+        logger.debug(f"Temporal cache hit (approx): {canonical}:{agg}:{end_iso} -> {nearest_iso} (Δ{delta_days}d)")
         return obj
 
     except Exception as e:

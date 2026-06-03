@@ -42,13 +42,14 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import aiohttp
+
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 class _RateLimiter:
@@ -79,6 +80,7 @@ _ENV_FILE = _API_DIR / ".env"
 if _ENV_FILE.exists():
     try:
         from dotenv import load_dotenv
+
         load_dotenv(dotenv_path=_ENV_FILE, override=False)
     except ImportError:
         pass  # dotenv not available; env vars must be set manually
@@ -86,10 +88,7 @@ if _ENV_FILE.exists():
 # ── Constants ─────────────────────────────────────────────────────────────────
 DATA_FILE = _API_DIR / "data" / "preapproved_locations.json"
 
-VC_BASE = (
-    "https://weather.visualcrossing.com"
-    "/VisualCrossingWebServices/rest/services/timeline"
-)
+VC_BASE = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
 OM_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 OM_FORECAST = "https://api.open-meteo.com/v1/forecast"
 MAPBOX_BASE = "https://api.mapbox.com/geocoding/v5/mapbox.places"
@@ -108,35 +107,35 @@ YEARS_BACK = 50
 
 # ── Fresh test locations (not in preapproved_locations.json) ──────────────────
 FRESH_LOCATIONS = [
-    {"name": "Paris, France",            "query": "Paris, France"},
-    {"name": "Berlin, Germany",          "query": "Berlin, Germany"},
-    {"name": "Tokyo, Japan",             "query": "Tokyo, Japan"},
-    {"name": "Rio de Janeiro, Brazil",   "query": "Rio de Janeiro, Brazil"},
-    {"name": "Mumbai, India",            "query": "Mumbai, India"},
-    {"name": "Cairo, Egypt",             "query": "Cairo, Egypt"},
-    {"name": "Buenos Aires, Argentina",  "query": "Buenos Aires, Argentina"},
-    {"name": "Nairobi, Kenya",           "query": "Nairobi, Kenya"},
-    {"name": "Seoul, South Korea",       "query": "Seoul, South Korea"},
-    {"name": "Mexico City, Mexico",      "query": "Mexico City, Mexico"},
+    {"name": "Paris, France", "query": "Paris, France"},
+    {"name": "Berlin, Germany", "query": "Berlin, Germany"},
+    {"name": "Tokyo, Japan", "query": "Tokyo, Japan"},
+    {"name": "Rio de Janeiro, Brazil", "query": "Rio de Janeiro, Brazil"},
+    {"name": "Mumbai, India", "query": "Mumbai, India"},
+    {"name": "Cairo, Egypt", "query": "Cairo, Egypt"},
+    {"name": "Buenos Aires, Argentina", "query": "Buenos Aires, Argentina"},
+    {"name": "Nairobi, Kenya", "query": "Nairobi, Kenya"},
+    {"name": "Seoul, South Korea", "query": "Seoul, South Korea"},
+    {"name": "Mexico City, Mexico", "query": "Mexico City, Mexico"},
 ]
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
 @dataclass
 class BenchmarkResult:
-    variant: str        # "VC" | "OM-warm" | "OM-cold" | "OM-batch"
-    period: str         # "daily" | "weekly" | "monthly" | "yearly"
+    variant: str  # "VC" | "OM-warm" | "OM-cold" | "OM-batch"
+    period: str  # "daily" | "weekly" | "monthly" | "yearly"
     location_name: str
-    location_set: str   # "warm" | "fresh"
-    run: int            # 0-based run index
+    location_set: str  # "warm" | "fresh"
+    run: int  # 0-based run index
     total_time_s: float
-    geocode_ms: float   # Mapbox call duration (0 for VC and OM-warm)
-    fetch_time_s: float # Wall-clock time for all HTTP requests (incl. OM pacing)
+    geocode_ms: float  # Mapbox call duration (0 for VC and OM-warm)
+    fetch_time_s: float  # Wall-clock time for all HTTP requests (incl. OM pacing)
     avg_http_ms: float  # Mean per-request HTTP round-trip (excl. pacing; fair VC comparison)
-    process_ms: float   # temp conversion / field mapping after fetch
+    process_ms: float  # temp conversion / field mapping after fetch
     request_count: int  # actual HTTP requests made
-    total_bytes: int    # compressed bytes received
-    data_points: int    # non-null temperature values in final result
+    total_bytes: int  # compressed bytes received
+    data_points: int  # non-null temperature values in final result
     error: Optional[str] = None
 
     @property
@@ -154,10 +153,7 @@ def _vc_daily_url(location: str, target: date, api_key: str) -> str:
     """Single-date VC URL — matches weather_data.build_visual_crossing_url(remote=False).
     No elements filter: returns all ~50 fields per day."""
     encoded = quote(location, safe="")
-    return (
-        f"{VC_BASE}/{encoded}/{target.isoformat()}"
-        f"?unitGroup=us&include=days&key={api_key}"
-    )
+    return f"{VC_BASE}/{encoded}/{target.isoformat()}?unitGroup=us&include=days&key={api_key}"
 
 
 def _vc_range_url(location: str, start: date, end: date, api_key: str) -> str:
@@ -190,9 +186,7 @@ def _om_forecast_url(lat: float, lon: float) -> str:
     )
 
 
-def _om_requests_for_range(
-    lat: float, lon: float, start: date, end: date
-) -> List[Tuple[str, date, date]]:
+def _om_requests_for_range(lat: float, lon: float, start: date, end: date) -> List[Tuple[str, date, date]]:
     """
     Return (url, filter_start, filter_end) tuples covering [start, end].
     Splits at the archive/forecast boundary for windows that straddle it.
@@ -220,10 +214,7 @@ def _om_requests_for_range(
 
 def _mapbox_url(query: str, token: str) -> str:
     encoded = quote(query, safe="")
-    return (
-        f"{MAPBOX_BASE}/{encoded}.json"
-        f"?access_token={token}&limit=1&types=place,locality,district,region"
-    )
+    return f"{MAPBOX_BASE}/{encoded}.json?access_token={token}&limit=1&types=place,locality,district,region"
 
 
 # ── Temperature processing (matching production code) ────────────────────────
@@ -245,7 +236,7 @@ def _process_vc_days(days: list) -> Tuple[list, int]:
     for day in days:
         d = {
             "datetime": day.get("datetime"),
-            "temp":    _f_to_c(day.get("temp")),
+            "temp": _f_to_c(day.get("temp")),
             "tempmax": _f_to_c(day.get("tempmax")),
             "tempmin": _f_to_c(day.get("tempmin")),
         }
@@ -262,11 +253,11 @@ def _process_om_response(payload: dict, filter_start: date, filter_end: date) ->
     daily = payload.get("daily", {})
     times = daily.get("time", [])
     means = daily.get("temperature_2m_mean", [])
-    maxs  = daily.get("temperature_2m_max", [])
-    mins  = daily.get("temperature_2m_min", [])
+    maxs = daily.get("temperature_2m_max", [])
+    mins = daily.get("temperature_2m_min", [])
 
     start_s = filter_start.isoformat()
-    end_s   = filter_end.isoformat()
+    end_s = filter_end.isoformat()
 
     return [
         {"datetime": t, "temp": m, "tempmax": mx, "tempmin": mn}
@@ -289,9 +280,7 @@ def _resolve_anchor(year: int, month: int, day: int) -> Optional[date]:
     return None
 
 
-def _year_ranges(
-    years: List[int], month: int, day: int, period: str
-) -> List[Tuple[int, date, date]]:
+def _year_ranges(years: List[int], month: int, day: int, period: str) -> List[Tuple[int, date, date]]:
     """Return [(year, window_start, anchor_date)] for the given period."""
     window = WINDOW_DAYS[period]
     result = []
@@ -328,9 +317,7 @@ async def _fetch_vc(
             url = _vc_range_url(location_str, start, end, api_key)
         async with sem:
             try:
-                async with session.get(
-                    url, headers={"Accept-Encoding": "gzip"}
-                ) as resp:
+                async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
                     raw = await resp.read()
                     total_bytes += len(raw)
                     if resp.status != 200:
@@ -394,9 +381,7 @@ async def _fetch_om(
             async with sem:
                 try:
                     t_http = time.perf_counter()
-                    async with session.get(
-                        url, headers={"Accept-Encoding": "gzip"}
-                    ) as resp:
+                    async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
                         raw = await resp.read()
                     http_elapsed = time.perf_counter() - t_http
                     total_bytes += len(raw)
@@ -404,9 +389,7 @@ async def _fetch_om(
                     async with http_lock:
                         http_times.append(http_elapsed)
                     if resp.status == 429:
-                        retry_wait = float(
-                            resp.headers.get("Retry-After", 2.0 * (attempt + 1))
-                        )
+                        retry_wait = float(resp.headers.get("Retry-After", 2.0 * (attempt + 1)))
                         continue  # release sem, wait, retry
                     if resp.status != 200:
                         return
@@ -459,7 +442,7 @@ async def _fetch_om_batch(
     # Cap end_date at yesterday to stay within archive coverage
     yesterday = date.today() - timedelta(days=1)
     start = _resolve_anchor(min(years), month, day) or date(min(years), 1, 1)
-    end   = min(_resolve_anchor(max(years), month, day) or yesterday, yesterday)
+    end = min(_resolve_anchor(max(years), month, day) or yesterday, yesterday)
 
     url = _om_archive_url(lat, lon, start, end)
 
@@ -469,9 +452,7 @@ async def _fetch_om_batch(
     await _OM_RATE_LIMITER.acquire()
     t_fetch = time.perf_counter()
     try:
-        async with session.get(
-            url, headers={"Accept-Encoding": "gzip"}
-        ) as resp:
+        async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
             raw = await resp.read()
             total_bytes = len(raw)
             if resp.status == 200:
@@ -526,9 +507,7 @@ def _count_valid(days: list) -> int:
     return sum(1 for d in days if d.get("temp") is not None)
 
 
-async def run_vc(
-    session, sem, period, location, month, day, api_key, run_idx, location_set
-) -> BenchmarkResult:
+async def run_vc(session, sem, period, location, month, day, api_key, run_idx, location_set) -> BenchmarkResult:
     years = list(range(date.today().year - YEARS_BACK, date.today().year + 1))
     ranges = _year_ranges(years, month, day, period)
     t0 = time.perf_counter()
@@ -536,48 +515,64 @@ async def run_vc(
         session, sem, period, location["name"], ranges, api_key
     )
     return BenchmarkResult(
-        variant="VC", period=period,
-        location_name=location["name"], location_set=location_set,
-        run=run_idx, total_time_s=time.perf_counter() - t0,
-        geocode_ms=0.0, fetch_time_s=fetch_t, avg_http_ms=avg_http, process_ms=proc_ms,
-        request_count=req_count, total_bytes=nbytes,
+        variant="VC",
+        period=period,
+        location_name=location["name"],
+        location_set=location_set,
+        run=run_idx,
+        total_time_s=time.perf_counter() - t0,
+        geocode_ms=0.0,
+        fetch_time_s=fetch_t,
+        avg_http_ms=avg_http,
+        process_ms=proc_ms,
+        request_count=req_count,
+        total_bytes=nbytes,
         data_points=_count_valid(days),
     )
 
 
-async def run_om_warm(
-    session, sem, period, location, month, day, run_idx
-) -> BenchmarkResult:
+async def run_om_warm(session, sem, period, location, month, day, run_idx) -> BenchmarkResult:
     lat, lon = location["lat"], location["lon"]
     years = list(range(date.today().year - YEARS_BACK, date.today().year + 1))
     ranges = _year_ranges(years, month, day, period)
     t0 = time.perf_counter()
-    fetch_t, avg_http, proc_ms, req_count, nbytes, days = await _fetch_om(
-        session, sem, lat, lon, ranges
-    )
+    fetch_t, avg_http, proc_ms, req_count, nbytes, days = await _fetch_om(session, sem, lat, lon, ranges)
     return BenchmarkResult(
-        variant="OM-warm", period=period,
-        location_name=location["name"], location_set="warm",
-        run=run_idx, total_time_s=time.perf_counter() - t0,
-        geocode_ms=0.0, fetch_time_s=fetch_t, avg_http_ms=avg_http, process_ms=proc_ms,
-        request_count=req_count, total_bytes=nbytes,
+        variant="OM-warm",
+        period=period,
+        location_name=location["name"],
+        location_set="warm",
+        run=run_idx,
+        total_time_s=time.perf_counter() - t0,
+        geocode_ms=0.0,
+        fetch_time_s=fetch_t,
+        avg_http_ms=avg_http,
+        process_ms=proc_ms,
+        request_count=req_count,
+        total_bytes=nbytes,
         data_points=_count_valid(days),
     )
 
 
-async def run_om_cold(
-    session, sem, period, location, month, day, mapbox_token, run_idx
-) -> BenchmarkResult:
+async def run_om_cold(session, sem, period, location, month, day, mapbox_token, run_idx) -> BenchmarkResult:
     # Step 1 — Mapbox geocoding (timed separately)
     geo_ms, lat, lon = await _geocode(session, location["query"], mapbox_token)
 
     if lat is None or lon is None:
         return BenchmarkResult(
-            variant="OM-cold", period=period,
-            location_name=location["name"], location_set="fresh",
-            run=run_idx, total_time_s=geo_ms / 1000,
-            geocode_ms=geo_ms, fetch_time_s=0.0, avg_http_ms=0.0, process_ms=0.0,
-            request_count=0, total_bytes=0, data_points=0,
+            variant="OM-cold",
+            period=period,
+            location_name=location["name"],
+            location_set="fresh",
+            run=run_idx,
+            total_time_s=geo_ms / 1000,
+            geocode_ms=geo_ms,
+            fetch_time_s=0.0,
+            avg_http_ms=0.0,
+            process_ms=0.0,
+            request_count=0,
+            total_bytes=0,
+            data_points=0,
             error="geocoding failed",
         )
 
@@ -585,37 +580,45 @@ async def run_om_cold(
     years = list(range(date.today().year - YEARS_BACK, date.today().year + 1))
     ranges = _year_ranges(years, month, day, period)
     t_fetch_start = time.perf_counter()
-    fetch_t, avg_http, proc_ms, req_count, nbytes, days = await _fetch_om(
-        session, sem, lat, lon, ranges
-    )
+    fetch_t, avg_http, proc_ms, req_count, nbytes, days = await _fetch_om(session, sem, lat, lon, ranges)
     total_t = geo_ms / 1000 + (time.perf_counter() - t_fetch_start)
 
     return BenchmarkResult(
-        variant="OM-cold", period=period,
-        location_name=location["name"], location_set="fresh",
-        run=run_idx, total_time_s=total_t,
-        geocode_ms=geo_ms, fetch_time_s=fetch_t, avg_http_ms=avg_http, process_ms=proc_ms,
-        request_count=req_count, total_bytes=nbytes,
+        variant="OM-cold",
+        period=period,
+        location_name=location["name"],
+        location_set="fresh",
+        run=run_idx,
+        total_time_s=total_t,
+        geocode_ms=geo_ms,
+        fetch_time_s=fetch_t,
+        avg_http_ms=avg_http,
+        process_ms=proc_ms,
+        request_count=req_count,
+        total_bytes=nbytes,
         data_points=_count_valid(days),
     )
 
 
-async def run_om_batch(
-    session, period, location, month, day, run_idx
-) -> BenchmarkResult:
+async def run_om_batch(session, period, location, month, day, run_idx) -> BenchmarkResult:
     """OM single-call spanning the full date range (daily period only)."""
     lat, lon = location["lat"], location["lon"]
     years = list(range(date.today().year - YEARS_BACK, date.today().year + 1))
     t0 = time.perf_counter()
-    fetch_t, proc_ms, req_count, nbytes, days = await _fetch_om_batch(
-        session, lat, lon, month, day, years
-    )
+    fetch_t, proc_ms, req_count, nbytes, days = await _fetch_om_batch(session, lat, lon, month, day, years)
     return BenchmarkResult(
-        variant="OM-batch", period="daily",
-        location_name=location["name"], location_set="warm",
-        run=run_idx, total_time_s=time.perf_counter() - t0,
-        geocode_ms=0.0, fetch_time_s=fetch_t, avg_http_ms=fetch_t * 1000, process_ms=proc_ms,
-        request_count=req_count, total_bytes=nbytes,
+        variant="OM-batch",
+        period="daily",
+        location_name=location["name"],
+        location_set="warm",
+        run=run_idx,
+        total_time_s=time.perf_counter() - t0,
+        geocode_ms=0.0,
+        fetch_time_s=fetch_t,
+        avg_http_ms=fetch_t * 1000,
+        process_ms=proc_ms,
+        request_count=req_count,
+        total_bytes=nbytes,
         data_points=_count_valid(days),
     )
 
@@ -629,29 +632,38 @@ def _average_runs(runs: List[BenchmarkResult]) -> dict:
         return {**asdict(ref), "runs_ok": 0, "avg_req_ms": 0.0, "data_kb": 0.0}
     n = len(ok)
     return {
-        "variant":       ref.variant,
-        "period":        ref.period,
+        "variant": ref.variant,
+        "period": ref.period,
         "location_name": ref.location_name,
-        "location_set":  ref.location_set,
-        "runs_ok":       n,
-        "total_time_s":  round(sum(r.total_time_s  for r in ok) / n, 3),
-        "geocode_ms":    round(sum(r.geocode_ms    for r in ok) / n, 1),
-        "fetch_time_s":  round(sum(r.fetch_time_s  for r in ok) / n, 3),
-        "avg_http_ms":   round(sum(r.avg_http_ms   for r in ok) / n, 1),
-        "process_ms":    round(sum(r.process_ms    for r in ok) / n, 2),
+        "location_set": ref.location_set,
+        "runs_ok": n,
+        "total_time_s": round(sum(r.total_time_s for r in ok) / n, 3),
+        "geocode_ms": round(sum(r.geocode_ms for r in ok) / n, 1),
+        "fetch_time_s": round(sum(r.fetch_time_s for r in ok) / n, 3),
+        "avg_http_ms": round(sum(r.avg_http_ms for r in ok) / n, 1),
+        "process_ms": round(sum(r.process_ms for r in ok) / n, 2),
         "request_count": ok[0].request_count,
-        "avg_req_ms":    round(sum(r.avg_req_ms    for r in ok) / n, 1),
-        "data_kb":       round(sum(r.data_kb       for r in ok) / n, 1),
-        "data_points":   round(sum(r.data_points   for r in ok) / n),
-        "error":         None,
+        "avg_req_ms": round(sum(r.avg_req_ms for r in ok) / n, 1),
+        "data_kb": round(sum(r.data_kb for r in ok) / n, 1),
+        "data_points": round(sum(r.data_points for r in ok) / n),
+        "error": None,
     }
 
 
 # ── Output ────────────────────────────────────────────────────────────────────
 _HEADERS = [
-    "Variant", "Period", "Location", "Set", "Runs",
-    "Wall(s)", "Geocode(ms)", "AvgHTTP(ms)", "Proc(ms)",
-    "Requests", "Data(KB)", "Points",
+    "Variant",
+    "Period",
+    "Location",
+    "Set",
+    "Runs",
+    "Wall(s)",
+    "Geocode(ms)",
+    "AvgHTTP(ms)",
+    "Proc(ms)",
+    "Requests",
+    "Data(KB)",
+    "Points",
 ]
 # Note: "Wall(s)" includes OM rate-limiter pacing; "AvgHTTP(ms)" is pure per-request
 # HTTP time (excludes pacing) and is the fair metric for VC vs OM comparison.
@@ -675,8 +687,7 @@ def _row_values(r: dict) -> List[str]:
 
 
 def _print_table(rows: List[dict]) -> None:
-    widths = [max(len(_HEADERS[i]), *[len(_row_values(r)[i]) for r in rows])
-              for i in range(len(_HEADERS))]
+    widths = [max(len(_HEADERS[i]), *[len(_row_values(r)[i]) for r in rows]) for i in range(len(_HEADERS))]
     sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
     hdr = "|" + "|".join(f" {h:<{w}} " for h, w in zip(_HEADERS, widths)) + "|"
 
@@ -699,16 +710,20 @@ def _print_table(rows: List[dict]) -> None:
 def _print_summary(rows: List[dict]) -> None:
     print("\n── OM-warm vs VC, warm locations (geocoding excluded) ──────────────")
     for period in ALL_PERIODS:
-        vc = [r for r in rows if r["variant"] == "VC" and r["period"] == period and r["location_set"] == "warm" and r["runs_ok"] > 0]
+        vc = [
+            r
+            for r in rows
+            if r["variant"] == "VC" and r["period"] == period and r["location_set"] == "warm" and r["runs_ok"] > 0
+        ]
         om = [r for r in rows if r["variant"] == "OM-warm" and r["period"] == period and r["runs_ok"] > 0]
         if not vc or not om:
             continue
         # Use avg_http_ms (pure HTTP time, excludes OM pacing) for fair comparison
-        vc_t  = sum(r["avg_http_ms"] for r in vc) / len(vc)
-        om_t  = sum(r["avg_http_ms"] for r in om) / len(om)
+        vc_t = sum(r["avg_http_ms"] for r in vc) / len(vc)
+        om_t = sum(r["avg_http_ms"] for r in om) / len(om)
         vc_kb = sum(r["data_kb"] for r in vc) / len(vc)
         om_kb = sum(r["data_kb"] for r in om) / len(om)
-        t_ratio  = om_t / vc_t if vc_t else float("nan")
+        t_ratio = om_t / vc_t if vc_t else float("nan")
         kb_ratio = om_kb / vc_kb if vc_kb else float("nan")
         verdict = "OM faster ✓" if t_ratio < 1 else "VC faster"
         print(f"  {period:8s}: {t_ratio:.2f}× AvgHTTP  |  {kb_ratio:.2f}× data  ({verdict})")
@@ -717,16 +732,22 @@ def _print_summary(rows: List[dict]) -> None:
 
     print("\n── OM-cold vs VC, fresh locations (first-access, includes geocoding) ─")
     for period in ALL_PERIODS:
-        vc   = [r for r in rows if r["variant"] == "VC"      and r["period"] == period and r["location_set"] == "fresh" and r["runs_ok"] > 0]
+        vc = [
+            r
+            for r in rows
+            if r["variant"] == "VC" and r["period"] == period and r["location_set"] == "fresh" and r["runs_ok"] > 0
+        ]
         cold = [r for r in rows if r["variant"] == "OM-cold" and r["period"] == period and r["runs_ok"] > 0]
         if not vc or not cold:
             continue
-        vc_t   = sum(r["avg_http_ms"] for r in vc)   / len(vc)
+        vc_t = sum(r["avg_http_ms"] for r in vc) / len(vc)
         cold_t = sum(r["avg_http_ms"] for r in cold) / len(cold)
-        geo_t  = sum(r["geocode_ms"]  for r in cold) / len(cold)
+        geo_t = sum(r["geocode_ms"] for r in cold) / len(cold)
         t_ratio = (cold_t + geo_t) / vc_t if vc_t else float("nan")
         verdict = "OM-cold faster ✓" if t_ratio < 1 else "VC faster"
-        print(f"  {period:8s}: {t_ratio:.2f}× (avg {cold_t:.0f}ms/req + {geo_t:.0f}ms geocode vs {vc_t:.0f}ms/req)  ({verdict})")
+        print(
+            f"  {period:8s}: {t_ratio:.2f}× (avg {cold_t:.0f}ms/req + {geo_t:.0f}ms geocode vs {vc_t:.0f}ms/req)  ({verdict})"
+        )
 
     cold_all = [r for r in rows if r["variant"] == "OM-cold" and r["runs_ok"] > 0 and r["geocode_ms"] > 0]
     if cold_all:
@@ -735,21 +756,21 @@ def _print_summary(rows: List[dict]) -> None:
 
     print("\n── OM-batch vs OM-warm (daily, single call vs 51 calls) ────────────")
     batch = [r for r in rows if r["variant"] == "OM-batch" and r["runs_ok"] > 0]
-    warm  = [r for r in rows if r["variant"] == "OM-warm" and r["period"] == "daily" and r["runs_ok"] > 0]
+    warm = [r for r in rows if r["variant"] == "OM-warm" and r["period"] == "daily" and r["runs_ok"] > 0]
     if batch and warm:
         bt = sum(r["avg_http_ms"] for r in batch) / len(batch) / 1000
-        wt = sum(r["avg_http_ms"] for r in warm)  / len(warm)  / 1000 * 51
-        bk = sum(r["data_kb"]     for r in batch) / len(batch)
-        wk = sum(r["data_kb"]     for r in warm)  / len(warm)
+        wt = sum(r["avg_http_ms"] for r in warm) / len(warm) / 1000 * 51
+        bk = sum(r["data_kb"] for r in batch) / len(batch)
+        wk = sum(r["data_kb"] for r in warm) / len(warm)
         verdict = "batch faster ✓" if bt < wt else "51-call approach faster"
-        print(f"  HTTP time: batch ~{bt:.2f}s vs 51-call ~{wt:.2f}s  ({bt/wt:.2f}×, {verdict})")
-        print(f"  Data     : batch {bk:.1f} KB vs warm {wk:.1f} KB  ({bk/wk:.2f}× data)")
+        print(f"  HTTP time: batch ~{bt:.2f}s vs 51-call ~{wt:.2f}s  ({bt / wt:.2f}×, {verdict})")
+        print(f"  Data     : batch {bk:.1f} KB vs warm {wk:.1f} KB  ({bk / wk:.2f}× data)")
 
 
 # ── Main orchestration ────────────────────────────────────────────────────────
 async def _run_all(args, vc_key: str, mapbox_token: str) -> List[BenchmarkResult]:
     connector = aiohttp.TCPConnector(limit=30, enable_cleanup_closed=True)
-    timeout   = aiohttp.ClientTimeout(total=120, connect=15, sock_read=90)
+    timeout = aiohttp.ClientTimeout(total=120, connect=15, sock_read=90)
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         sem = asyncio.Semaphore(args.concurrency)
@@ -759,12 +780,10 @@ async def _run_all(args, vc_key: str, mapbox_token: str) -> List[BenchmarkResult
             raw_locs = json.load(f)
         warm_locs = [
             {
-                "name": ", ".join(filter(None, [
-                    l.get("name"), l.get("admin1"), l.get("country_name")
-                ])),
+                "name": ", ".join(filter(None, [l.get("name"), l.get("admin1"), l.get("country_name")])),
                 "lat": l["latitude"],
                 "lon": l["longitude"],
-                "tz":  l.get("timezone"),
+                "tz": l.get("timezone"),
             }
             for l in raw_locs[: args.locations]
         ]
@@ -791,45 +810,43 @@ async def _run_all(args, vc_key: str, mapbox_token: str) -> List[BenchmarkResult
 
         # ── Warm locations: VC vs OM-warm ────────────────────────────────────
         if not args.skip_warm:
-            print(f"\n{'─'*60}")
+            print(f"\n{'─' * 60}")
             print(f" WARM LOCATIONS  ({len(warm_locs)} locations × {len(periods)} periods × {args.runs} runs)")
-            print(f"{'─'*60}")
+            print(f"{'─' * 60}")
             for loc in warm_locs:
                 for period in periods:
                     for run in range(args.runs):
                         if not args.skip_vc:
-                            _tick(f"VC          / {period:8s} / {loc['name'][:30]} / run {run+1}")
+                            _tick(f"VC          / {period:8s} / {loc['name'][:30]} / run {run + 1}")
                             r = await run_vc(session, sem, period, loc, month, day, vc_key, run, "warm")
                             results.append(r)
 
-                        _tick(f"OM-warm     / {period:8s} / {loc['name'][:30]} / run {run+1}")
+                        _tick(f"OM-warm     / {period:8s} / {loc['name'][:30]} / run {run + 1}")
                         r = await run_om_warm(session, sem, period, loc, month, day, run)
                         results.append(r)
 
         # ── Fresh locations: VC vs OM-cold ───────────────────────────────────
         if not args.skip_cold:
-            print(f"\n{'─'*60}")
+            print(f"\n{'─' * 60}")
             print(f" FRESH LOCATIONS ({len(fresh_locs)} locations × {len(periods)} periods × {args.runs} runs)")
-            print(f"{'─'*60}")
+            print(f"{'─' * 60}")
             for loc in fresh_locs:
                 for period in periods:
                     for run in range(args.runs):
                         if not args.skip_vc:
-                            _tick(f"VC(fresh)   / {period:8s} / {loc['name'][:30]} / run {run+1}")
+                            _tick(f"VC(fresh)   / {period:8s} / {loc['name'][:30]} / run {run + 1}")
                             r = await run_vc(session, sem, period, loc, month, day, vc_key, run, "fresh")
                             results.append(r)
 
-                        _tick(f"OM-cold     / {period:8s} / {loc['name'][:30]} / run {run+1}")
-                        r = await run_om_cold(
-                            session, sem, period, loc, month, day, mapbox_token, run
-                        )
+                        _tick(f"OM-cold     / {period:8s} / {loc['name'][:30]} / run {run + 1}")
+                        r = await run_om_cold(session, sem, period, loc, month, day, mapbox_token, run)
                         results.append(r)
 
         # ── OM-batch: single-call daily, first 3 warm locations ──────────────
         if not args.no_batch and not args.skip_warm:
-            print(f"\n{'─'*60}")
-            print(f" OM-BATCH (daily, single archive call, first 3 warm locations)")
-            print(f"{'─'*60}")
+            print(f"\n{'─' * 60}")
+            print(" OM-BATCH (daily, single archive call, first 3 warm locations)")
+            print(f"{'─' * 60}")
             for loc in warm_locs[:3]:
                 _tick(f"OM-batch    / daily    / {loc['name'][:30]} / run 1")
                 r = await run_om_batch(session, "daily", loc, month, day, 0)
@@ -844,33 +861,30 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--date", metavar="MM-DD", default=None,
-                        help="Anchor month-day (default: today)")
-    parser.add_argument("--locations", type=int, default=5, metavar="N",
-                        help="Locations per set, 1–20 (default: 5)")
-    parser.add_argument("--runs", type=int, default=3, metavar="N",
-                        help="Repetitions per test (default: 3)")
-    parser.add_argument("--concurrency", type=int, default=2, metavar="N",
-                        help="Semaphore limit, matches production (default: 2)")
-    parser.add_argument("--periods", nargs="+", choices=ALL_PERIODS,
-                        default=ALL_PERIODS, metavar="PERIOD",
-                        help="Periods to test (default: all four)")
-    parser.add_argument("--csv", metavar="PATH", default=None,
-                        help="Write averaged results to CSV")
-    parser.add_argument("--raw-csv", metavar="PATH", default=None,
-                        help="Write every individual run to CSV")
-    parser.add_argument("--skip-vc", action="store_true",
-                        help="Skip VC tests (saves API record budget)")
-    parser.add_argument("--skip-cold", action="store_true",
-                        help="Skip OM-cold / Mapbox geocoding tests")
-    parser.add_argument("--skip-warm", action="store_true",
-                        help="Skip warm-location tests")
-    parser.add_argument("--no-batch", action="store_true",
-                        help="Skip OM-batched-daily bonus test")
+    parser.add_argument("--date", metavar="MM-DD", default=None, help="Anchor month-day (default: today)")
+    parser.add_argument("--locations", type=int, default=5, metavar="N", help="Locations per set, 1–20 (default: 5)")
+    parser.add_argument("--runs", type=int, default=3, metavar="N", help="Repetitions per test (default: 3)")
+    parser.add_argument(
+        "--concurrency", type=int, default=2, metavar="N", help="Semaphore limit, matches production (default: 2)"
+    )
+    parser.add_argument(
+        "--periods",
+        nargs="+",
+        choices=ALL_PERIODS,
+        default=ALL_PERIODS,
+        metavar="PERIOD",
+        help="Periods to test (default: all four)",
+    )
+    parser.add_argument("--csv", metavar="PATH", default=None, help="Write averaged results to CSV")
+    parser.add_argument("--raw-csv", metavar="PATH", default=None, help="Write every individual run to CSV")
+    parser.add_argument("--skip-vc", action="store_true", help="Skip VC tests (saves API record budget)")
+    parser.add_argument("--skip-cold", action="store_true", help="Skip OM-cold / Mapbox geocoding tests")
+    parser.add_argument("--skip-warm", action="store_true", help="Skip warm-location tests")
+    parser.add_argument("--no-batch", action="store_true", help="Skip OM-batched-daily bonus test")
     args = parser.parse_args()
     args.locations = max(1, min(20, args.locations))
 
-    vc_key      = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
+    vc_key = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
     mapbox_token = os.getenv("MAPBOX_TOKEN", "").strip()
 
     if not args.skip_vc and not vc_key:
@@ -883,15 +897,12 @@ def main() -> None:
     # Rough call estimate (VC records consumed)
     n_years = YEARS_BACK + 1
     if not args.skip_vc and not args.skip_warm:
-        vc_records = (
-            args.locations * args.runs *
-            sum(n_years * WINDOW_DAYS[p] for p in args.periods)
-        )
+        vc_records = args.locations * args.runs * sum(n_years * WINDOW_DAYS[p] for p in args.periods)
         print(f"\nNote: VC tests will consume ~{vc_records:,} VC records from your daily budget.")
 
-    print(f"\n{'='*64}")
-    print(f"  TempHist API Benchmark: Visual Crossing vs Open-Meteo")
-    print(f"{'='*64}")
+    print(f"\n{'=' * 64}")
+    print("  TempHist API Benchmark: Visual Crossing vs Open-Meteo")
+    print(f"{'=' * 64}")
     print(f"  Anchor date  : {args.date or date.today().strftime('%m-%d') + ' (today)'}")
     print(f"  Locations/set: {args.locations}")
     print(f"  Runs         : {args.runs}")
@@ -900,7 +911,7 @@ def main() -> None:
     print(f"  VC tests     : {'yes' if not args.skip_vc else 'SKIPPED'}")
     print(f"  OM-cold      : {'yes' if not args.skip_cold else 'SKIPPED'}")
     print(f"  OM-batch     : {'yes' if not args.no_batch else 'SKIPPED'}")
-    print(f"{'='*64}")
+    print(f"{'=' * 64}")
 
     t_wall = time.perf_counter()
     all_results = asyncio.run(_run_all(args, vc_key, mapbox_token))
@@ -917,16 +928,18 @@ def main() -> None:
     # Sort: period order, then location_set, then variant, then location
     period_order = {p: i for i, p in enumerate(ALL_PERIODS)}
     variant_order = {"VC": 0, "OM-warm": 1, "OM-cold": 2, "OM-batch": 3}
-    averaged.sort(key=lambda r: (
-        period_order.get(r["period"], 99),
-        r["location_set"],
-        variant_order.get(r["variant"], 9),
-        r["location_name"],
-    ))
+    averaged.sort(
+        key=lambda r: (
+            period_order.get(r["period"], 99),
+            r["location_set"],
+            variant_order.get(r["variant"], 9),
+            r["location_name"],
+        )
+    )
 
-    print(f"\n\n{'='*64}")
+    print(f"\n\n{'=' * 64}")
     print(f"  Results  (total wall time: {elapsed:.1f}s)")
-    print(f"{'='*64}\n")
+    print(f"{'=' * 64}\n")
     _print_table(averaged)
     _print_summary(averaged)
 

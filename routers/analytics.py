@@ -1,15 +1,18 @@
 """Analytics endpoints."""
+
 import json
 import logging
-import redis
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
-from fastapi import APIRouter, Request, Query, HTTPException, Depends
-from models import AnalyticsData, AnalyticsResponse
-from utils.ip_utils import get_client_ip
-from config import ANALYTICS_RATE_LIMIT, DEBUG
-from routers.dependencies import get_redis_client, get_analytics_storage
+
+import redis
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
 from analytics_storage import AnalyticsStorage
+from config import ANALYTICS_RATE_LIMIT, DEBUG
+from models import AnalyticsData, AnalyticsResponse
+from routers.dependencies import get_analytics_storage, get_redis_client
+from utils.ip_utils import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +116,15 @@ def _sanitize_analytics_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any]
     sanitized["recent_errors"] = _sanitize_recent_errors(data.get("recent_errors"), warnings)
 
     # Optional string metadata fields
-    for optional_field in ("app_version", "platform", "user_agent", "session_id",
-                           "canonical_location", "requested_location", "selection_method"):
+    for optional_field in (
+        "app_version",
+        "platform",
+        "user_agent",
+        "session_id",
+        "canonical_location",
+        "requested_location",
+        "selection_method",
+    ):
         value = data.get(optional_field)
         if value is None:
             sanitized[optional_field] = None
@@ -149,19 +159,23 @@ def _sanitize_analytics_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any]
         sanitized["cache_hit"] = None
 
     # Preserve any additional metadata fields not explicitly handled
-    extra_fields = set(data.keys()) - {name for name, _ in INT_FIELDS_DEFAULTS} - {
-        "api_failure_rate",
-        "recent_errors",
-        "app_version",
-        "platform",
-        "user_agent",
-        "session_id",
-        "canonical_location",
-        "requested_location",
-        "selection_method",
-        "response_time_ms",
-        "cache_hit",
-    }
+    extra_fields = (
+        set(data.keys())
+        - {name for name, _ in INT_FIELDS_DEFAULTS}
+        - {
+            "api_failure_rate",
+            "recent_errors",
+            "app_version",
+            "platform",
+            "user_agent",
+            "session_id",
+            "canonical_location",
+            "requested_location",
+            "selection_method",
+            "response_time_ms",
+            "cache_hit",
+        }
+    )
     for extra_field in extra_fields:
         sanitized[extra_field] = data.get(extra_field)
 
@@ -172,11 +186,11 @@ def _sanitize_analytics_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any]
 async def submit_analytics(
     request: Request,
     redis_client: redis.Redis = Depends(get_redis_client),
-    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
+    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage),
 ):
     """Submit client analytics data for monitoring and error tracking (MED-007: Rate limited)."""
     client_ip = get_client_ip(request)
-    
+
     # MED-007: Add rate limiting for analytics endpoint to prevent spam/DoS
     # Skip rate limiting in test environment or if limit is very high (indicates test mode)
     if ANALYTICS_RATE_LIMIT < 10000:  # Normal production limit
@@ -186,11 +200,13 @@ async def submit_analytics(
             if current_count:
                 current_count = int(current_count) if isinstance(current_count, (str, bytes)) else current_count
                 if current_count >= ANALYTICS_RATE_LIMIT:
-                    logger.warning(f"⚠️  ANALYTICS RATE LIMIT EXCEEDED: {client_ip} ({current_count}/{ANALYTICS_RATE_LIMIT})")
+                    logger.warning(
+                        f"⚠️  ANALYTICS RATE LIMIT EXCEEDED: {client_ip} ({current_count}/{ANALYTICS_RATE_LIMIT})"
+                    )
                     raise HTTPException(
                         status_code=429,
                         detail=f"Analytics submission rate limit exceeded ({ANALYTICS_RATE_LIMIT} per hour). Please try again later.",
-                        headers={"Retry-After": "3600"}
+                        headers={"Retry-After": "3600"},
                     )
             # Increment counter
             redis_client.incr(analytics_key)
@@ -200,22 +216,19 @@ async def submit_analytics(
             logger.warning(f"⚠️  Analytics rate limiting unavailable (Redis error): {e}")
     elif DEBUG:
         logger.debug(f"📊 Analytics rate limiting bypassed (test mode): limit={ANALYTICS_RATE_LIMIT}")
-    
+
     try:
         # Log request details for debugging
         content_type = request.headers.get("content-type", "")
         content_length = request.headers.get("content-length", "unknown")
-        
+
         logger.info(f"📊 ANALYTICS REQUEST: IP={client_ip} | Content-Type={content_type} | Length={content_length}")
-        
+
         # Validate content type
         if not content_type.startswith("application/json"):
             logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-TYPE: {content_type} | IP={client_ip}")
-            raise HTTPException(
-                status_code=415, 
-                detail="Content-Type must be application/json"
-            )
-        
+            raise HTTPException(status_code=415, detail="Content-Type must be application/json")
+
         # Check content length (limit to 1MB for analytics data)
         max_content_length = 1024 * 1024  # 1MB
         try:
@@ -223,55 +236,44 @@ async def submit_analytics(
             if content_length_int and content_length_int > max_content_length:
                 logger.warning(f"⚠️  ANALYTICS REQUEST TOO LARGE: {content_length_int} bytes | IP={client_ip}")
                 raise HTTPException(
-                    status_code=413,
-                    detail=f"Request body too large. Maximum size is {max_content_length} bytes"
+                    status_code=413, detail=f"Request body too large. Maximum size is {max_content_length} bytes"
                 )
         except ValueError:
             # If we can't parse content-length, continue but log it
             logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-LENGTH: {content_length} | IP={client_ip}")
-        
+
         # Read and parse request body
         try:
             body = await request.body()
             if not body:
                 logger.warning(f"⚠️  ANALYTICS EMPTY BODY: IP={client_ip}")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Request body cannot be empty"
-                )
-            
+                raise HTTPException(status_code=400, detail="Request body cannot be empty")
+
             # Check actual body size
             if len(body) > max_content_length:
                 logger.warning(f"⚠️  ANALYTICS BODY TOO LARGE: {len(body)} bytes | IP={client_ip}")
                 raise HTTPException(
-                    status_code=413,
-                    detail=f"Request body too large. Maximum size is {max_content_length} bytes"
+                    status_code=413, detail=f"Request body too large. Maximum size is {max_content_length} bytes"
                 )
-            
+
             # Log request body for debugging (truncated for security)
-            body_str = body.decode('utf-8')
+            body_str = body.decode("utf-8")
             body_preview = body_str[:500] + "..." if len(body_str) > 500 else body_str
             logger.info(f"📊 ANALYTICS BODY PREVIEW: {body_preview}")
-            
+
             # Parse JSON
             try:
                 json_data = json.loads(body_str)
             except json.JSONDecodeError as e:
                 logger.error(f"❌ ANALYTICS JSON PARSE ERROR: {e} | IP={client_ip} | Body: {body_preview}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid JSON format: {str(e)}"
-                )
-            
+                raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
+
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"❌ ANALYTICS BODY READ ERROR: {e} | IP={client_ip}")
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to read request body"
-            )
-        
+            raise HTTPException(status_code=400, detail="Failed to read request body")
+
         # Sanitize analytics payload before validation
         sanitized_payload, sanitization_warnings = _sanitize_analytics_payload(json_data)
 
@@ -280,76 +282,59 @@ async def submit_analytics(
             analytics_data = AnalyticsData(**sanitized_payload)
         except Exception as e:
             logger.error(f"❌ ANALYTICS VALIDATION ERROR: {e} | IP={client_ip} | Data: {sanitized_payload}")
-            
+
             # Provide detailed validation error information
-            if hasattr(e, 'errors'):
+            if hasattr(e, "errors"):
                 error_details = []
                 for error in e.errors():
-                    field = " -> ".join(str(loc) for loc in error['loc'])
+                    field = " -> ".join(str(loc) for loc in error["loc"])
                     error_details.append(f"{field}: {error['msg']}")
                 error_message = f"Validation failed after sanitization: {'; '.join(error_details)}"
             else:
                 error_message = f"Validation failed after sanitization: {str(e)}"
-            
+
             raise HTTPException(
                 status_code=422,
                 detail={
                     "error": "Validation Error",
                     "message": error_message,
-                    "details": str(e) if hasattr(e, 'errors') else None
-                }
+                    "details": str(e) if hasattr(e, "errors") else None,
+                },
             )
-        
+
         # Store analytics data
         try:
             analytics_id = analytics_storage.store_analytics(analytics_data, client_ip)
             logger.info(f"📊 ANALYTICS STORED: {analytics_id} | IP={client_ip}")
         except Exception as e:
             logger.error(f"❌ ANALYTICS STORAGE ERROR: {e} | IP={client_ip}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to store analytics data"
-            )
-        
+            raise HTTPException(status_code=500, detail="Failed to store analytics data")
+
         if sanitization_warnings:
-            logger.warning(
-                f"⚠️  ANALYTICS SANITIZATION WARNINGS: {sanitization_warnings} | IP={client_ip}"
-            )
+            logger.warning(f"⚠️  ANALYTICS SANITIZATION WARNINGS: {sanitization_warnings} | IP={client_ip}")
 
         response_message = "Analytics data submitted successfully"
         if sanitization_warnings:
             response_message += f" (sanitized {len(sanitization_warnings)} field(s))"
 
         return AnalyticsResponse(
-            status="success",
-            message=response_message,
-            analytics_id=analytics_id,
-            timestamp=datetime.now().isoformat()
+            status="success", message=response_message, analytics_id=analytics_id, timestamp=datetime.now().isoformat()
         )
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions (they already have proper status codes)
         raise
     except Exception as e:
         logger.error(f"❌ ANALYTICS UNEXPECTED ERROR: {e} | IP={client_ip}")
-        raise HTTPException(
-            status_code=500, 
-            detail="Internal server error while processing analytics data"
-        )
+        raise HTTPException(status_code=500, detail="Internal server error while processing analytics data")
 
 
 @router.get("/analytics/summary")
-async def get_analytics_summary(
-    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
-):
+async def get_analytics_summary(analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)):
     """Get analytics summary statistics."""
     try:
         summary = analytics_storage.get_analytics_summary()
-        return {
-            "status": "success",
-            "data": summary,
-            "timestamp": datetime.now().isoformat()
-        }
+        return {"status": "success", "data": summary, "timestamp": datetime.now().isoformat()}
     except Exception as e:
         logger.error(f"Error getting analytics summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve analytics summary")
@@ -357,8 +342,7 @@ async def get_analytics_summary(
 
 @router.get("/analytics/recent")
 async def get_recent_analytics(
-    limit: int = Query(100, ge=1, le=1000),
-    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
+    limit: int = Query(100, ge=1, le=1000), analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
 ):
     """Get recent analytics records."""
     try:
@@ -367,7 +351,7 @@ async def get_recent_analytics(
             "status": "success",
             "data": analytics_records,
             "count": len(analytics_records),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:
         logger.error(f"Error getting recent analytics: {e}")
@@ -376,8 +360,7 @@ async def get_recent_analytics(
 
 @router.get("/analytics/session/{session_id}")
 async def get_analytics_by_session(
-    session_id: str,
-    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
+    session_id: str, analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
 ):
     """Get analytics records for a specific session."""
     try:
@@ -387,7 +370,7 @@ async def get_analytics_by_session(
             "data": session_analytics,
             "count": len(session_analytics),
             "session_id": session_id,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:
         logger.error(f"Error getting session analytics: {e}")

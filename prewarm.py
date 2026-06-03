@@ -17,20 +17,17 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote  # URL-encode location path segments
 
 import aiohttp
 import redis
-from urllib.parse import quote  # URL-encode location path segments
 
 # Load .env from project root (config.DOTENV_PATH).
 import config  # noqa: F401
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -49,7 +46,7 @@ def load_preapproved_locations(locations_file: str = None) -> List[str]:
         List of full location strings (e.g., "London, England, United Kingdom")
     """
     locations: List[str] = []
-    
+
     # Find project root by looking for pyproject.toml
     if locations_file is None:
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -58,13 +55,13 @@ def load_preapproved_locations(locations_file: str = None) -> List[str]:
             if os.path.exists(os.path.join(project_root, "pyproject.toml")):
                 break
             project_root = os.path.dirname(project_root)
-        
+
         locations_file = os.path.join(project_root, "data", "preapproved_locations.json")
-    
+
     try:
-        with open(locations_file, 'r', encoding='utf-8') as f:
+        with open(locations_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
+
         seen = set()
         for item in data:
             name = item.get("name")
@@ -126,10 +123,7 @@ def load_locations_to_prewarm(
                 f"(need ≥ 2) — falling back to preapproved list"
             )
         except Exception as exc:
-            logger.warning(
-                f"Could not load popular locations from API ({exc}) "
-                f"— falling back to preapproved list"
-            )
+            logger.warning(f"Could not load popular locations from API ({exc}) — falling back to preapproved list")
     else:
         logger.info("No API token available — loading locations from preapproved list")
 
@@ -139,16 +133,12 @@ def load_locations_to_prewarm(
 # Populated lazily in main() via load_locations_to_prewarm()
 DEFAULT_LOCATIONS: List[str] = []
 
-DEFAULT_ENDPOINTS = [
-    "v1/records/daily",
-    "v1/records/weekly", 
-    "v1/records/monthly",
-    "v1/records/yearly"
-]
+DEFAULT_ENDPOINTS = ["v1/records/daily", "v1/records/weekly", "v1/records/monthly", "v1/records/yearly"]
+
 
 class PrewarmStats:
     """Track prewarming statistics."""
-    
+
     def __init__(self):
         self.total_requests = 0
         self.successful_requests = 0
@@ -157,29 +147,33 @@ class PrewarmStats:
         self.cache_misses = 0
         self.total_time = 0
         self.request_times = []
-        
+
     def add_request(self, success: bool, duration: float, cache_hit: bool = None):
         """Add a request result to statistics."""
         self.total_requests += 1
         self.total_time += duration
         self.request_times.append(duration)
-        
+
         if success:
             self.successful_requests += 1
         else:
             self.failed_requests += 1
-            
+
         if cache_hit is not None:
             if cache_hit:
                 self.cache_hits += 1
             else:
                 self.cache_misses += 1
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """Get current statistics."""
-        hit_rate = (self.cache_hits / (self.cache_hits + self.cache_misses) * 100) if (self.cache_hits + self.cache_misses) > 0 else 0
+        hit_rate = (
+            (self.cache_hits / (self.cache_hits + self.cache_misses) * 100)
+            if (self.cache_hits + self.cache_misses) > 0
+            else 0
+        )
         avg_time = (self.total_time / self.total_requests) if self.total_requests > 0 else 0
-        
+
         return {
             "total_requests": self.total_requests,
             "successful_requests": self.successful_requests,
@@ -189,29 +183,30 @@ class PrewarmStats:
             "cache_misses": self.cache_misses,
             "cache_hit_rate": hit_rate,
             "avg_request_time": round(avg_time, 3),
-            "total_time": round(self.total_time, 3)
+            "total_time": round(self.total_time, 3),
         }
+
 
 class CachePrewarmer:
     """Cache prewarmer for popular locations and endpoints."""
-    
+
     def __init__(self, base_url: str, redis_url: str = None, api_token: Optional[str] = None):
-        self.base_url = base_url.rstrip('/')
+        self.base_url = base_url.rstrip("/")
         self.redis = redis.from_url(redis_url) if redis_url else None
         self.stats = PrewarmStats()
         self.api_token = api_token
-        
+
     async def prewarm_location(self, location: str, endpoints: List[str], days: int = 7) -> Dict[str, Any]:
         """Prewarm cache for a specific location."""
         logger.info(f"🔥 Prewarming cache for: {location}")
-        
+
         location_stats = {
             "location": location,
             "requests": 0,
             "successes": 0,
             "failures": 0,
             "cache_misses": 0,
-            "total_time": 0
+            "total_time": 0,
         }
         date_patterns = self._generate_date_patterns(days)
 
@@ -244,47 +239,47 @@ class CachePrewarmer:
 
                     # Small delay to avoid overwhelming the server
                     await asyncio.sleep(0.1)
-        
+
         return location_stats
-    
+
     def _generate_date_patterns(self, days: int) -> List[Dict[str, str]]:
         """Generate date patterns for prewarming."""
         patterns = []
         today = datetime.now()
-        
+
         # Today's date patterns
         today_str = today.strftime("%m-%d")
         patterns.append({"identifier": today_str, "anchor": today.strftime("%Y-%m-%d")})
-        
+
         # Recent days
         for i in range(1, min(days + 1, 30)):
             date = today - timedelta(days=i)
             date_str = date.strftime("%m-%d")
             patterns.append({"identifier": date_str, "anchor": date.strftime("%Y-%m-%d")})
-        
+
         # Monthly patterns (same month-day across years)
         current_month = today.month
         current_day = today.day
         patterns.append({"identifier": f"{current_month:02d}-{current_day:02d}"})
-        
+
         # Weekly patterns (recent weeks, use week-ending MM-DD identifier)
         for i in range(4):  # Last 4 weeks
             week_start = today - timedelta(weeks=i, days=today.weekday())
             week_end = week_start + timedelta(days=6)
             patterns.append({"identifier": week_end.strftime("%m-%d")})
-        
+
         return patterns
-    
+
     def _build_url(self, endpoint: str, location: str, date_pattern: Dict[str, str]) -> str:
         """Build URL for the given endpoint and parameters.
-        
+
         Args:
             endpoint: Endpoint path (e.g., 'v1/records/daily')
             location: Location slug (e.g., 'london', 'new-york')
             date_pattern: Dict with 'identifier' key (e.g., {'identifier': '11-06'})
         """
         encoded_location = quote(location, safe="")
-        
+
         if endpoint == "v1/records/daily":
             return f"{self.base_url}/v1/records/daily/{encoded_location}/{date_pattern['identifier']}"
         elif endpoint == "v1/records/weekly":
@@ -295,14 +290,16 @@ class CachePrewarmer:
             return f"{self.base_url}/v1/records/yearly/{encoded_location}/{date_pattern['identifier']}"
         else:
             raise ValueError(f"Unknown endpoint: {endpoint}")
-    
+
     async def _make_request(self, session: aiohttp.ClientSession, url: str) -> tuple[bool, bool]:
         """Make a request and return (success, cache_hit)."""
         try:
             async with session.get(url) as response:
                 if response.status == 200:
-                    cache_hit = response.headers.get("X-Cache-Status") == "HIT" or \
-                               "cache" in response.headers.get("X-Cache", "").lower()
+                    cache_hit = (
+                        response.headers.get("X-Cache-Status") == "HIT"
+                        or "cache" in response.headers.get("X-Cache", "").lower()
+                    )
                     return True, cache_hit
                 if response.status == 304:
                     return True, True
@@ -312,42 +309,35 @@ class CachePrewarmer:
         except Exception as exc:
             logger.error(f"Request error for {url}: {exc}")
             return False, False
-    
+
     async def prewarm_popular_locations(self, locations: List[str], endpoints: List[str], days: int = 7):
         """Prewarm cache for multiple popular locations."""
         logger.info(f"🚀 Starting cache prewarming for {len(locations)} locations")
-        
+
         start_time = time.time()
         results = []
-        
+
         for location in locations:
             try:
                 result = await self.prewarm_location(location, endpoints, days)
                 results.append(result)
-                logger.info(f"✅ Completed {location}: {result['successes']}/{result['requests']} requests, {result['cache_misses']} cache misses")
+                logger.info(
+                    f"✅ Completed {location}: {result['successes']}/{result['requests']} requests, {result['cache_misses']} cache misses"
+                )
             except Exception as e:
                 logger.error(f"❌ Failed to prewarm {location}: {e}")
-                results.append({
-                    "location": location,
-                    "error": str(e),
-                    "requests": 0,
-                    "successes": 0,
-                    "failures": 0
-                })
-        
+                results.append({"location": location, "error": str(e), "requests": 0, "successes": 0, "failures": 0})
+
         total_time = time.time() - start_time
         stats = self.stats.get_stats()
-        
+
         logger.info(f"🏁 Prewarming completed in {total_time:.2f} seconds")
         logger.info(f"📊 Stats: {stats['successful_requests']}/{stats['total_requests']} requests successful")
         logger.info(f"📊 Cache hit rate: {stats['cache_hit_rate']:.1f}%")
         logger.info(f"📊 Average request time: {stats['avg_request_time']:.3f}s")
-        
-        return {
-            "total_time": total_time,
-            "stats": stats,
-            "location_results": results
-        }
+
+        return {"total_time": total_time, "stats": stats, "location_results": results}
+
 
 async def main():
     """Main prewarming function."""
@@ -358,14 +348,17 @@ async def main():
     parser.add_argument("--endpoints", nargs="+", default=DEFAULT_ENDPOINTS, help="Endpoints to prewarm")
     parser.add_argument("--redis-url", help="Redis URL for cache inspection")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--api-token", help="Bearer token for authenticated endpoints (defaults to API_ACCESS_TOKEN/PREWARM_API_TOKEN env vars)")
+    parser.add_argument(
+        "--api-token",
+        help="Bearer token for authenticated endpoints (defaults to API_ACCESS_TOKEN/PREWARM_API_TOKEN env vars)",
+    )
     parser.add_argument("--locations-file", help="JSON file with custom locations list")
-    
+
     args = parser.parse_args()
-    
+
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     # Resolve API token first — needed for both location loading and prewarming requests
     api_token = args.api_token or DEFAULT_API_TOKEN
     if api_token:
@@ -376,46 +369,49 @@ async def main():
     # Load locations
     if args.locations_file:
         # Explicit file overrides the popular-API lookup
-        if args.locations_file.endswith('.json'):
+        if args.locations_file.endswith(".json"):
             locs = load_preapproved_locations(args.locations_file)
-            locations = locs[:args.locations] if locs else []
+            locations = locs[: args.locations] if locs else []
         else:
             # Simple text file with one location per line
-            with open(args.locations_file, 'r') as f:
-                locations = [line.strip() for line in f if line.strip()][:args.locations]
+            with open(args.locations_file, "r") as f:
+                locations = [line.strip() for line in f if line.strip()][: args.locations]
     else:
         # Query /v1/locations/popular first; fall back to preapproved list
         locations = load_locations_to_prewarm(args.base_url, api_token, args.locations)
 
     if not locations:
-        logger.warning("No locations to prewarm. Check that preapproved_locations.json exists and contains valid entries.")
+        logger.warning(
+            "No locations to prewarm. Check that preapproved_locations.json exists and contains valid entries."
+        )
         sys.exit(1)
 
     prewarmer = CachePrewarmer(args.base_url, args.redis_url, api_token=api_token)
-    
+
     # Run prewarming
     try:
         results = await prewarmer.prewarm_popular_locations(locations, args.endpoints, args.days)
-        
+
         # Save results to file
         results_file = f"prewarm_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(results_file, 'w') as f:
+        with open(results_file, "w") as f:
             json.dump(results, f, indent=2)
-        
+
         logger.info(f"📄 Results saved to: {results_file}")
-        
+
         # Exit with appropriate code
         if results["stats"]["failed_requests"] > 0:
             sys.exit(1)
         else:
             sys.exit(0)
-            
+
     except KeyboardInterrupt:
         logger.info("⏹️  Prewarming interrupted by user")
         sys.exit(130)
     except Exception as e:
         logger.error(f"💥 Prewarming failed: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

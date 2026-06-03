@@ -1,11 +1,11 @@
 """Persistent store for social share records, backed by Postgres."""
-import json
+
 import logging
 import math
 import os
 import secrets
 import string
-from typing import Optional, List
+from typing import List, Optional
 
 import asyncpg
 
@@ -25,10 +25,9 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
-         * math.sin(dlon / 2) ** 2)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
     return R * 2 * math.asin(math.sqrt(a))
+
 
 _share_store_instance: Optional["ShareStore"] = None
 
@@ -112,8 +111,14 @@ class ShareStore:
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                         RETURNING id, location, period, identifier, ref_year, unit, created_at
                         """,
-                        share_id, location, period, identifier, ref_year, unit,
-                        latitude, longitude,
+                        share_id,
+                        location,
+                        period,
+                        identifier,
+                        ref_year,
+                        unit,
+                        latitude,
+                        longitude,
                     )
                     return {
                         "id": row["id"],
@@ -150,7 +155,8 @@ class ShareStore:
                 ORDER BY created_at DESC
                 LIMIT $2
                 """,
-                period, fetch_limit,
+                period,
+                fetch_limit,
             )
 
         # Proximity deduplication: for each candidate (most-recent first), keep it
@@ -183,23 +189,25 @@ class ShareStore:
                         break
 
             if not duplicate:
-                accepted.append({
-                    "id": row["id"],
-                    "location": r_location,
-                    "period": r_period,
-                    "identifier": r_identifier,
-                    "ref_year": row["ref_year"],
-                    "unit": row["unit"],
-                    "created_at": row["created_at"].isoformat(),
-                    "og_image_url": f"/v1/og/{row['id']}.png",
-                    "share_url": f"/s/{row['id']}",
-                    # Private fields used only during dedup — stripped before return
-                    "_lat": r_lat,
-                    "_lon": r_lon,
-                })
+                accepted.append(
+                    {
+                        "id": row["id"],
+                        "location": r_location,
+                        "period": r_period,
+                        "identifier": r_identifier,
+                        "ref_year": row["ref_year"],
+                        "unit": row["unit"],
+                        "created_at": row["created_at"].isoformat(),
+                        "og_image_url": f"/v1/og/{row['id']}.png",
+                        "share_url": f"/s/{row['id']}",
+                        # Private fields used only during dedup — stripped before return
+                        "_lat": r_lat,
+                        "_lon": r_lon,
+                    }
+                )
 
         # Apply pagination, then strip the private coordinate fields
-        page = accepted[offset: offset + limit]
+        page = accepted[offset : offset + limit]
         for entry in page:
             entry.pop("_lat", None)
             entry.pop("_lon", None)

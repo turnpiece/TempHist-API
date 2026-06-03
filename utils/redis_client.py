@@ -1,8 +1,11 @@
 """Redis client creation and management."""
+
 import logging
 from urllib.parse import urlparse
+
 import redis
-from config import ENVIRONMENT, DEBUG
+
+from config import DEBUG, ENVIRONMENT
 
 logger = logging.getLogger(__name__)
 
@@ -11,24 +14,23 @@ def create_redis_client(url: str) -> redis.Redis:
     """Create Redis client with security validation."""
     parsed = urlparse(url)
     env = ENVIRONMENT
-    
+
     # Enforce password in production
     if env == "production" and not parsed.password:
         logger.error("❌ Redis password required in production")
         raise ValueError("Redis password required in production environment")
-    
+
     # Enforce SSL in production
     if parsed.scheme != "rediss" and env == "production":
-        logger.warning("⚠️  Redis not using SSL (rediss://) in production! Consider using rediss:// for encrypted connections.")
+        logger.warning(
+            "⚠️  Redis not using SSL (rediss://) in production! Consider using rediss:// for encrypted connections."
+        )
         # In production, warn but don't fail (some providers handle SSL at network level)
-    
+
     # Create Redis client with SSL if needed
     # Note: from_url handles SSL automatically when using rediss:// scheme
-    client = redis.from_url(
-        url,
-        decode_responses=True
-    )
-    
+    client = redis.from_url(url, decode_responses=True)
+
     # Test connection
     try:
         client.ping()
@@ -37,5 +39,5 @@ def create_redis_client(url: str) -> redis.Redis:
     except Exception as e:
         logger.error(f"❌ Redis connection failed: {e}")
         raise
-    
+
     return client

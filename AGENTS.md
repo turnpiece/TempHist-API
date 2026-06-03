@@ -1,10 +1,10 @@
 # AGENTS.md
 
-## Cursor Cloud specific instructions
+## Cursor / AI agent instructions
 
 ### Overview
 
-TempHist API is a Python/FastAPI backend serving historical temperature data (50 years) via the Visual Crossing weather API. It uses Redis for caching/rate-limiting/queuing and optionally PostgreSQL for persistent cache with location aliasing.
+TempHist API is a Python/FastAPI backend serving historical temperature data (50 years) via Open-Meteo (free, no API key). It uses Redis for caching/rate-limiting/queuing and optionally PostgreSQL for persistent cache with location aliasing.
 
 ### Services
 
@@ -15,9 +15,13 @@ TempHist API is a Python/FastAPI backend serving historical temperature data (50
 | Job Worker | Optional (async jobs) | `python3 worker_service.py` |
 | PostgreSQL | Optional (persistent cache) | Not needed locally; app degrades gracefully |
 
+Or use `./start.sh` to start both the API server and worker together via uv.
+
 ### Required environment variables
 
-Secrets are injected automatically. Key ones: `REDIS_URL`, `VISUAL_CROSSING_API_KEY`, `API_ACCESS_TOKEN`, `TEMPHIST_PG_DSN`. See `README.md` for the full list.
+Secrets are injected automatically. Key ones: `REDIS_URL`, `API_ACCESS_TOKEN`, `TEMPHIST_PG_DSN`, `MAPBOX_TOKEN`. See `README.md` for the full list.
+
+`VISUAL_CROSSING_API_KEY` is no longer used — the weather source is now Open-Meteo.
 
 ### Running tests
 
@@ -27,6 +31,18 @@ python3 -m pytest tests/ -v
 
 All tests use mocks and do not require external services. Redis does not need to be running for tests.
 
+### Linting
+
+[ruff](https://docs.astral.sh/ruff/) is configured in `pyproject.toml`. Run via `uvx` (no separate install needed):
+
+```bash
+uvx ruff check .            # show lint issues
+uvx ruff check . --fix      # auto-fix safe lint issues
+uvx ruff format .           # fix whitespace/blank-line issues (run this too — the linter skips these)
+```
+
+Rules enabled: `E/W` (style), `F` (unused imports/vars), `I` (import order), `ASYNC` (missing awaits), `S` (security). Line length is 120. `E501` (line-too-long) and `S101` (assert in tests) are ignored.
+
 ### Running the dev server
 
 1. Start Redis: `redis-server --daemonize yes`
@@ -35,11 +51,11 @@ All tests use mocks and do not require external services. Redis does not need to
 
 ### Gotchas
 
-- `pip install` puts binaries in `~/.local/bin`; ensure this is on `PATH`.
+- Use `uv` for dependency management (`uv pip install -r requirements.txt`). `uv.lock` is gitignored.
 - The `.env` file is loaded from the project root via `config.DOTENV_PATH` (directory containing `config.py` / `main.py`), not from the process working directory.
 - Firebase auth is optional; `API_ACCESS_TOKEN` in the `Authorization: Bearer` header is sufficient for all endpoints during development.
 - Firebase App Check (`APP_CHECK_ENFORCEMENT`) defaults to `off`. When the frontend has `VITE_RECAPTCHA_SITE_KEY` set it sends an `X-Firebase-AppCheck` header; the API's CORS config allows this header so browser preflights don't fail.
 - The Swagger UI at `/docs` requires external CDN access (cdn.jsdelivr.net) for its JS/CSS assets.
-- `CACHE_WARMING_ENABLED` should be `false` for local dev to avoid background API calls to Visual Crossing.
+- `CACHE_WARMING_ENABLED` should be `false` for local dev to avoid spurious background requests.
 - `RATE_LIMIT_ENABLED` can be `false` for local dev to simplify testing.
 - The `package.json` in the repo root is vestigial (only a `cors` npm dependency) and irrelevant to the Python application.

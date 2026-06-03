@@ -1,15 +1,18 @@
 """Health check and status endpoints."""
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
-from datetime import datetime, timedelta
+
 import time
+from datetime import datetime, timedelta
+
 import httpx
 import redis
-from config import OPEN_METEO_ARCHIVE_URL
-from version import __version__
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
+
 from cache.accessors import get_cache_stats
+from config import OPEN_METEO_ARCHIVE_URL
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import get_daily_temperature_store
+from version import __version__
 
 router = APIRouter()
 
@@ -23,15 +26,10 @@ async def health_check():
 @router.get("/health/detailed")
 async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_client)):
     """Comprehensive health check endpoint for debugging and monitoring (LOW-007: Enhanced dependencies check)."""
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": __version__,
-        "checks": {}
-    }
-    
+    health_status = {"status": "healthy", "timestamp": datetime.now().isoformat(), "version": __version__, "checks": {}}
+
     overall_healthy = True
-    
+
     # Check Redis connection (LOW-007: Enhanced)
     try:
         redis_client.ping()
@@ -40,52 +38,41 @@ async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_cl
         redis_client.setex(test_key, 60, "test_value")
         test_value = redis_client.get(test_key)
         redis_client.delete(test_key)
-        
+
         if test_value == "test_value":
-            health_status["checks"]["redis"] = {
-                "status": "healthy",
-                "message": "Connection and read/write successful"
-            }
+            health_status["checks"]["redis"] = {"status": "healthy", "message": "Connection and read/write successful"}
         else:
             health_status["checks"]["redis"] = {
                 "status": "degraded",
-                "message": "Connection successful but read/write test failed"
+                "message": "Connection successful but read/write test failed",
             }
             overall_healthy = False
             health_status["status"] = "degraded"
     except Exception as e:
-        health_status["checks"]["redis"] = {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+        health_status["checks"]["redis"] = {"status": "unhealthy", "error": str(e)}
         overall_healthy = False
         health_status["status"] = "unhealthy"
-    
+
     # Check Firebase auth service (LOW-007)
     try:
         from firebase_admin import auth
+
         # Attempt to verify a clearly invalid token - if it rejects properly, service is up
         auth.verify_id_token("invalid_token_test", check_revoked=False)
         health_status["checks"]["firebase"] = {
             "status": "unknown",
-            "message": "Firebase accepted invalid token (unexpected)"
+            "message": "Firebase accepted invalid token (unexpected)",
         }
     except Exception as e:
         error_str = str(e).lower()
         if "invalid" in error_str or "token" in error_str or "expired" in error_str:
             # Expected rejection of invalid token means service is healthy
-            health_status["checks"]["firebase"] = {
-                "status": "healthy",
-                "message": "Service responding correctly"
-            }
+            health_status["checks"]["firebase"] = {"status": "healthy", "message": "Service responding correctly"}
         else:
-            health_status["checks"]["firebase"] = {
-                "status": "degraded",
-                "error": f"Unexpected error: {str(e)}"
-            }
+            health_status["checks"]["firebase"] = {"status": "degraded", "error": f"Unexpected error: {str(e)}"}
             if overall_healthy:
                 health_status["status"] = "degraded"
-    
+
     # Check Open-Meteo API availability
     try:
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -130,45 +117,39 @@ async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_cl
                 if age_seconds < 300:  # Less than 5 minutes old
                     health_status["checks"]["worker"] = {
                         "status": "healthy",
-                        "last_heartbeat_seconds_ago": round(age_seconds, 2)
+                        "last_heartbeat_seconds_ago": round(age_seconds, 2),
                     }
                 else:
                     health_status["checks"]["worker"] = {
                         "status": "degraded",
-                        "message": f"Worker heartbeat is {round(age_seconds/60, 1)} minutes old (may be idle)"
+                        "message": f"Worker heartbeat is {round(age_seconds / 60, 1)} minutes old (may be idle)",
                     }
             except (ValueError, TypeError):
                 # Heartbeat exists but not in expected format
-                health_status["checks"]["worker"] = {
-                    "status": "healthy",
-                    "message": "Worker heartbeat present"
-                }
+                health_status["checks"]["worker"] = {"status": "healthy", "message": "Worker heartbeat present"}
         else:
             health_status["checks"]["worker"] = {
                 "status": "unknown",
-                "message": "No worker heartbeat found (worker may not be running)"
+                "message": "No worker heartbeat found (worker may not be running)",
             }
     except Exception as e:
         health_status["checks"]["worker"] = {
             "status": "unknown",
-            "error": f"Could not check worker heartbeat: {str(e)}"
+            "error": f"Could not check worker heartbeat: {str(e)}",
         }
-    
+
     # Check cache statistics if available
     try:
         cache_stats_instance = get_cache_stats()
-        if cache_stats_instance and hasattr(cache_stats_instance, 'get_cache_health'):
+        if cache_stats_instance and hasattr(cache_stats_instance, "get_cache_health"):
             cache_health = cache_stats_instance.get_cache_health()
             health_status["checks"]["cache"] = cache_health
             # Only consider cache "unhealthy" status as a failure, not "degraded"
             if cache_health.get("status") == "unhealthy":
                 overall_healthy = False
     except Exception as e:
-        health_status["checks"]["cache"] = {
-            "status": "unknown",
-            "message": f"Cache stats unavailable: {str(e)}"
-        }
-    
+        health_status["checks"]["cache"] = {"status": "unknown", "message": f"Cache stats unavailable: {str(e)}"}
+
     # Check Postgres connectivity
     try:
         store = await get_daily_temperature_store()
@@ -186,9 +167,5 @@ async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_cl
 
     # Return appropriate HTTP status code
     status_code = 200 if health_status["status"] == "healthy" else 503
-    
-    return JSONResponse(
-        content=health_status,
-        status_code=status_code,
-        headers={"Cache-Control": "no-cache"}
-    )
+
+    return JSONResponse(content=health_status, status_code=status_code, headers={"Cache-Control": "no-cache"})

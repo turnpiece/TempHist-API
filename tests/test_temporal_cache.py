@@ -3,29 +3,27 @@
 import base64
 import gzip
 import json
-import pytest
 from datetime import date
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from app.cache_utils import (
-    canonicalize_location,
-    cache_get,
-    cache_set,
-    cache_invalidate,
-    _val_key,
-    _tindex_key,
-    _epoch,
-    TEMPORAL_TOLERANCE,
     KEY_NS,
+    TEMPORAL_TOLERANCE,
+    _epoch,
+    _tindex_key,
+    _val_key,
+    cache_get,
+    cache_invalidate,
+    cache_set,
+    canonicalize_location,
 )
-
 
 # ---------------------------------------------------------------------------
 # canonicalize_location
 # ---------------------------------------------------------------------------
 
-class TestCanonicalizeLocation:
 
+class TestCanonicalizeLocation:
     def test_basic_normalization(self):
         assert canonicalize_location("London") == "london"
 
@@ -60,6 +58,7 @@ class TestCanonicalizeLocation:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_redis_mock():
     """Create a MagicMock that behaves like redis.Redis."""
     r = MagicMock()
@@ -79,8 +78,8 @@ def _compress(obj: dict) -> str:
 # cache_set
 # ---------------------------------------------------------------------------
 
-class TestCacheSet:
 
+class TestCacheSet:
     def test_stores_compressed_payload_with_metadata(self):
         r, pipe = _make_redis_mock()
         payload = {"records": [{"year": 2024, "temp": 15.0}]}
@@ -173,8 +172,8 @@ class TestCacheSet:
 # cache_get — exact match
 # ---------------------------------------------------------------------------
 
-class TestCacheGetExact:
 
+class TestCacheGetExact:
     def test_exact_hit(self):
         r, _ = _make_redis_mock()
         wrapped = {
@@ -191,9 +190,7 @@ class TestCacheGetExact:
         }
         r.get.return_value = _compress(wrapped)
 
-        result = cache_get(
-            r, agg="daily", original_location="London", end_date=date(2024, 3, 25)
-        )
+        result = cache_get(r, agg="daily", original_location="London", end_date=date(2024, 3, 25))
 
         assert result is not None
         assert result["data"] == {"records": [1, 2, 3]}
@@ -204,9 +201,7 @@ class TestCacheGetExact:
         r, _ = _make_redis_mock()
         r.get.return_value = None
 
-        result = cache_get(
-            r, agg="daily", original_location="London", end_date=date(2024, 3, 25)
-        )
+        result = cache_get(r, agg="daily", original_location="London", end_date=date(2024, 3, 25))
 
         assert result is None
         # Should not call zrangebyscore for daily
@@ -217,26 +212,28 @@ class TestCacheGetExact:
 # cache_get — temporal tolerance
 # ---------------------------------------------------------------------------
 
-class TestCacheGetTemporal:
 
+class TestCacheGetTemporal:
     def _setup_temporal_hit(self, r, agg, stored_date_iso, requested_location):
         """Set up mock for a temporal tolerance hit."""
         canonical = canonicalize_location(requested_location)
 
         # Exact match returns None
         r.get.side_effect = lambda key: {
-            _val_key(agg, canonical, stored_date_iso): _compress({
-                "data": {"records": ["stored_data"]},
-                "meta": {
-                    "requested": {"location": requested_location, "end_date": stored_date_iso},
-                    "served_from": {
-                        "canonical_location": canonical,
-                        "end_date": stored_date_iso,
-                        "temporal_delta_days": 0,
+            _val_key(agg, canonical, stored_date_iso): _compress(
+                {
+                    "data": {"records": ["stored_data"]},
+                    "meta": {
+                        "requested": {"location": requested_location, "end_date": stored_date_iso},
+                        "served_from": {
+                            "canonical_location": canonical,
+                            "end_date": stored_date_iso,
+                            "temporal_delta_days": 0,
+                        },
+                        "approximate": {"temporal": False},
                     },
-                    "approximate": {"temporal": False},
-                },
-            }),
+                }
+            ),
         }.get(key)
 
         # Sorted set returns the stored date
@@ -246,9 +243,7 @@ class TestCacheGetTemporal:
         r, _ = _make_redis_mock()
         self._setup_temporal_hit(r, "yearly", "2024-03-20", "London")
 
-        result = cache_get(
-            r, agg="yearly", original_location="London", end_date=date(2024, 3, 25)
-        )
+        result = cache_get(r, agg="yearly", original_location="London", end_date=date(2024, 3, 25))
 
         assert result is not None
         assert result["meta"]["approximate"]["temporal"] is True
@@ -260,9 +255,7 @@ class TestCacheGetTemporal:
         r, _ = _make_redis_mock()
         self._setup_temporal_hit(r, "monthly", "2024-06-14", "Paris")
 
-        result = cache_get(
-            r, agg="monthly", original_location="Paris", end_date=date(2024, 6, 15)
-        )
+        result = cache_get(r, agg="monthly", original_location="Paris", end_date=date(2024, 6, 15))
 
         assert result is not None
         assert result["meta"]["approximate"]["temporal"] is True
@@ -273,9 +266,7 @@ class TestCacheGetTemporal:
         r.get.return_value = None
         r.zrangebyscore.return_value = []
 
-        result = cache_get(
-            r, agg="yearly", original_location="London", end_date=date(2024, 3, 25)
-        )
+        result = cache_get(r, agg="yearly", original_location="London", end_date=date(2024, 3, 25))
 
         assert result is None
 
@@ -285,9 +276,7 @@ class TestCacheGetTemporal:
         r.get.return_value = None  # Both exact and candidate data miss
         r.zrangebyscore.return_value = [b"2024-03-20"]
 
-        result = cache_get(
-            r, agg="yearly", original_location="London", end_date=date(2024, 3, 25)
-        )
+        result = cache_get(r, agg="yearly", original_location="London", end_date=date(2024, 3, 25))
 
         assert result is None
 
@@ -317,9 +306,7 @@ class TestCacheGetTemporal:
         r.get.side_effect = get_side_effect
         r.zrangebyscore.return_value = [b"2024-03-19", b"2024-03-23"]
 
-        result = cache_get(
-            r, agg="yearly", original_location="London", end_date=date(2024, 3, 25)
-        )
+        result = cache_get(r, agg="yearly", original_location="London", end_date=date(2024, 3, 25))
 
         assert result is not None
         assert result["meta"]["served_from"]["end_date"] == "2024-03-23"
@@ -330,14 +317,12 @@ class TestCacheGetTemporal:
 # cache_invalidate
 # ---------------------------------------------------------------------------
 
-class TestCacheInvalidate:
 
+class TestCacheInvalidate:
     def test_invalidate_specific_date(self):
         r, pipe = _make_redis_mock()
 
-        result = cache_invalidate(
-            r, agg="daily", original_location="London", end_date=date(2024, 3, 25)
-        )
+        result = cache_invalidate(r, agg="daily", original_location="London", end_date=date(2024, 3, 25))
 
         assert result is True
         pipe.delete.assert_called_once()
@@ -348,9 +333,7 @@ class TestCacheInvalidate:
         r, pipe = _make_redis_mock()
         r.zrange.return_value = [b"2024-03-20", b"2024-03-25"]
 
-        result = cache_invalidate(
-            r, agg="yearly", original_location="London"
-        )
+        result = cache_invalidate(r, agg="yearly", original_location="London")
 
         assert result is True
         # Should delete both data keys + the sorted set
@@ -361,8 +344,8 @@ class TestCacheInvalidate:
 # Key format
 # ---------------------------------------------------------------------------
 
-class TestKeyFormat:
 
+class TestKeyFormat:
     def test_val_key_format(self):
         assert _val_key("daily", "london", "2024-03-25") == f"{KEY_NS}:daily:london:2024-03-25"
 
@@ -379,8 +362,8 @@ class TestKeyFormat:
 # Temporal tolerance config
 # ---------------------------------------------------------------------------
 
-class TestTemporalToleranceConfig:
 
+class TestTemporalToleranceConfig:
     def test_daily_is_exact(self):
         assert TEMPORAL_TOLERANCE["daily"] == 0
 

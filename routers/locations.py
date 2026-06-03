@@ -12,19 +12,19 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Union
 from collections import defaultdict
+from datetime import datetime
+from typing import Dict, FrozenSet, List, Optional, Tuple, Union
 from urllib.parse import quote
 
 import aiohttp
 import pycountry
 import redis
-from fastapi import APIRouter, HTTPException, Query, Request, Response, Depends
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from config import BASE_URL, MAPBOX_TOKEN, POPULARITY_WINDOW_DAYS, POPULARITY_MAX_LOCATIONS
 from cache.accessors import get_usage_tracker
+from config import BASE_URL, MAPBOX_TOKEN, POPULARITY_MAX_LOCATIONS, POPULARITY_WINDOW_DAYS
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -46,20 +46,50 @@ COUNTRY_CODE_ALIASES: Dict[str, str] = {
 }
 
 # EU member state codes for the "EU" convenience grouping
-EU_MEMBER_CODES: FrozenSet[str] = frozenset([
-    "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
-    "FR", "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT",
-    "NL", "PL", "PT", "RO", "SE", "SI", "SK",
-])
+EU_MEMBER_CODES: FrozenSet[str] = frozenset(
+    [
+        "AT",
+        "BE",
+        "BG",
+        "CY",
+        "CZ",
+        "DE",
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "HU",
+        "IE",
+        "IT",
+        "LT",
+        "LU",
+        "LV",
+        "MT",
+        "NL",
+        "PL",
+        "PT",
+        "RO",
+        "SE",
+        "SI",
+        "SK",
+    ]
+)
+
 
 # Pydantic Models
 class ImageUrl(BaseModel):
     """Image URL with format options."""
+
     webp: str = Field(..., description="WebP format image URL")
     jpeg: str = Field(..., description="JPEG format image URL")
 
+
 class ImageAttribution(BaseModel):
     """Image attribution details."""
+
     title: Optional[str] = Field(None, description="Title or description of the image")
     photographerName: Optional[str] = Field(None, description="Name of the photographer or image creator")
     sourceName: Optional[str] = Field(None, description="Name of the source (e.g., Wikimedia Commons, Pexels)")
@@ -68,8 +98,10 @@ class ImageAttribution(BaseModel):
     licenseUrl: Optional[str] = Field(None, description="URL to the full license text")
     attributionRequired: Optional[bool] = Field(None, description="Whether attribution is required by the license")
 
+
 class LocationItem(BaseModel):
     """Individual location item."""
+
     id: str = Field(..., description="Unique location identifier")
     slug: str = Field(..., description="URL-friendly location slug")
     name: str = Field(..., description="Human-readable location name")
@@ -84,27 +116,32 @@ class LocationItem(BaseModel):
     imageAlt: str = Field(..., description="Alt text for location image")
     imageAttribution: Optional[ImageAttribution] = Field(None, description="Location image attribution")
 
-    @field_validator('country_code')
+    @field_validator("country_code")
     @classmethod
     def validate_country_code(cls, v):
         """Validate country code format (ISO 3166-1 alpha-2)."""
-        if not re.match(r'^[A-Z]{2}$', v):
-            raise ValueError('Country code must be a 2-letter ISO 3166-1 alpha-2 code')
+        if not re.match(r"^[A-Z]{2}$", v):
+            raise ValueError("Country code must be a 2-letter ISO 3166-1 alpha-2 code")
         return v
+
 
 class PreapprovedResponse(BaseModel):
     """Response model for preapproved locations endpoint."""
+
     version: int = Field(default=1, description="API version")
     count: int = Field(..., description="Number of locations returned")
     generated_at: datetime = Field(..., description="Response generation timestamp")
     locations: List[LocationItem] = Field(..., description="List of location items")
 
+
 class PopularResponse(BaseModel):
     """Response model for popular locations endpoint."""
+
     version: int = Field(default=1, description="API version")
     count: int = Field(..., description="Number of locations returned")
     generated_at: datetime = Field(..., description="Response generation timestamp")
     locations: List[LocationItem] = Field(..., description="List of location items")
+
 
 class SelectionRequest(BaseModel):
     """Request body for recording a location selection.
@@ -113,20 +150,28 @@ class SelectionRequest(BaseModel):
     fields ``name`` + optionally ``admin1`` / ``country_code``.  At least one
     of ``location_id`` or ``name`` is required.
     """
+
     location_id: Optional[str] = Field(
-        None, min_length=1, max_length=100,
+        None,
+        min_length=1,
+        max_length=100,
         description="Canonical location ID returned by the API (id field on location objects)",
     )
     name: Optional[str] = Field(
-        None, min_length=1, max_length=200,
+        None,
+        min_length=1,
+        max_length=200,
         description="City or place name",
     )
     admin1: Optional[str] = Field(
-        None, max_length=200,
+        None,
+        max_length=200,
         description="First-level administrative division (state, county, region, etc.)",
     )
     country_code: Optional[str] = Field(
-        None, min_length=2, max_length=2,
+        None,
+        min_length=2,
+        max_length=2,
         description="ISO 3166-1 alpha-2 country code",
     )
 
@@ -135,6 +180,7 @@ class SelectionRequest(BaseModel):
         if not self.location_id and not self.name:
             raise ValueError("Provide either 'location_id' or 'name' (with optional admin1 / country_code)")
         return self
+
 
 # Global state
 locations_data: List[LocationItem] = []
@@ -149,11 +195,13 @@ rate_limit_lock = asyncio.Lock()
 # Router
 router = APIRouter()
 
+
 def get_redis_client() -> redis.Redis:
     """Get Redis client instance."""
     if redis_client is None:
         raise HTTPException(status_code=500, detail="Redis client not initialized")
     return redis_client
+
 
 def validate_country_code(country_code: str) -> Tuple[bool, Optional[str]]:
     """
@@ -166,8 +214,11 @@ def validate_country_code(country_code: str) -> Tuple[bool, Optional[str]]:
         return True, None
     if country_code in COUNTRY_CODE_ALIASES:
         return True, None
-    if not re.match(r'^[A-Z]{2}$', country_code):
-        return False, f"Invalid country code '{country_code}'. Use a 2-letter ISO 3166-1 code (e.g. 'GB', 'US'), 'EU' for all EU members, or 'UK' as an alias for 'GB'."
+    if not re.match(r"^[A-Z]{2}$", country_code):
+        return (
+            False,
+            f"Invalid country code '{country_code}'. Use a 2-letter ISO 3166-1 code (e.g. 'GB', 'US'), 'EU' for all EU members, or 'UK' as an alias for 'GB'.",
+        )
     if pycountry.countries.get(alpha_2=country_code) is None:
         suggestion = COUNTRY_CODE_ALIASES.get(country_code)
         msg = f"Unknown country code '{country_code}'."
@@ -183,13 +234,16 @@ def resolve_country_code(country_code: str) -> Union[str, FrozenSet[str]]:
         return EU_MEMBER_CODES
     return COUNTRY_CODE_ALIASES.get(country_code, country_code)
 
+
 def validate_limit(limit: int) -> bool:
     """Validate limit parameter."""
     return 1 <= limit <= MAX_LIMIT
 
+
 def generate_etag(data: str) -> str:
     """Generate ETag from data content using SHA256 (32 chars for 128-bit security)."""
     return f'"{hashlib.sha256(data.encode()).hexdigest()[:32]}"'
+
 
 def get_cache_key(country_code: Optional[str] = None, tier: Optional[str] = None) -> str:
     """Generate cache key for filtered data."""
@@ -202,6 +256,7 @@ def get_cache_key(country_code: Optional[str] = None, tier: Optional[str] = None
     else:
         return f"{CACHE_PREFIX}:all"
 
+
 def get_popular_cache_key(country_code: Optional[str] = None, tier: Optional[str] = None) -> str:
     """Generate cache key for popular locations filtered data."""
     if country_code and tier:
@@ -213,25 +268,24 @@ def get_popular_cache_key(country_code: Optional[str] = None, tier: Optional[str
     else:
         return f"{POPULAR_CACHE_PREFIX}:all"
 
+
 async def check_rate_limit(ip: str) -> Tuple[bool, str]:
     """Check if IP is within rate limits."""
     async with rate_limit_lock:
         current_time = time.time()
         window_start = current_time - RATE_LIMIT_WINDOW
-        
+
         # Clean old requests outside the window
-        rate_limit_requests[ip] = [
-            req_time for req_time in rate_limit_requests[ip]
-            if req_time > window_start
-        ]
-        
+        rate_limit_requests[ip] = [req_time for req_time in rate_limit_requests[ip] if req_time > window_start]
+
         # Check if limit exceeded
         if len(rate_limit_requests[ip]) >= RATE_LIMIT_REQUESTS:
             return False, f"Rate limit exceeded: {RATE_LIMIT_REQUESTS} requests per minute"
-        
+
         # Add current request
         rate_limit_requests[ip].append(current_time)
         return True, "OK"
+
 
 def filter_locations(
     locations: List[LocationItem],
@@ -260,6 +314,7 @@ def filter_locations(
         filtered = filtered[:limit]
 
     return filtered
+
 
 _IMAGE_FIELDS = frozenset({"imageUrl", "imageAlt", "imageAttribution"})
 
@@ -308,10 +363,8 @@ def _resolve_canonical_id(body: "SelectionRequest") -> str:
 
 def convert_image_urls(image_urls: Dict[str, str]) -> Dict[str, str]:
     """Convert relative image URLs to full URLs."""
-    return {
-        format_type: f"{BASE_URL}{url}" if url.startswith('/') else url
-        for format_type, url in image_urls.items()
-    }
+    return {format_type: f"{BASE_URL}{url}" if url.startswith("/") else url for format_type, url in image_urls.items()}
+
 
 async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
     """Load and validate locations data from JSON file."""
@@ -326,7 +379,7 @@ async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
     data_file = os.path.join(project_root, "data", "preapproved_locations.json")
 
     try:
-        with open(data_file, 'r', encoding='utf-8') as f:
+        with open(data_file, "r", encoding="utf-8") as f:
             raw_data = f.read()
 
         # Parse JSON
@@ -334,8 +387,8 @@ async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
 
         # Transform relative URLs to full URLs
         for item in json_data:
-            if 'imageUrl' in item:
-                item['imageUrl'] = convert_image_urls(item['imageUrl'])
+            if "imageUrl" in item:
+                item["imageUrl"] = convert_image_urls(item["imageUrl"])
 
         # Validate against schema
         locations = [LocationItem(**item) for item in json_data]
@@ -343,7 +396,7 @@ async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
         # Generate ETag and Last-Modified
         etag = generate_etag(raw_data)
         file_stat = os.stat(data_file)
-        last_modified = datetime.fromtimestamp(file_stat.st_mtime).strftime('%a, %d %b %Y %H:%M:%S GMT')
+        last_modified = datetime.fromtimestamp(file_stat.st_mtime).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
         logger.info(f"Loaded {len(locations)} preapproved locations from {data_file}")
         return locations, etag, last_modified
@@ -358,6 +411,7 @@ async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
         logger.error(f"Error loading locations data: {e}")
         raise HTTPException(status_code=500, detail="Error loading locations data")
 
+
 async def get_cached_response(cache_key: str) -> Optional[Dict]:
     """Get cached response from Redis."""
     try:
@@ -369,6 +423,7 @@ async def get_cached_response(cache_key: str) -> Optional[Dict]:
         logger.warning(f"Cache get error: {e}")
     return None
 
+
 async def set_cached_response(cache_key: str, data: Dict, ttl: int = CACHE_TTL) -> None:
     """Cache response in Redis."""
     try:
@@ -377,6 +432,7 @@ async def set_cached_response(cache_key: str, data: Dict, ttl: int = CACHE_TTL) 
     except Exception as e:
         logger.warning(f"Cache set error: {e}")
 
+
 async def warm_cache() -> None:
     """Warm the cache with all locations data."""
     try:
@@ -384,13 +440,14 @@ async def warm_cache() -> None:
             "version": 1,
             "count": len(locations_data),
             "generated_at": datetime.now().isoformat(),
-            "locations": [loc.model_dump() for loc in locations_data]
+            "locations": [loc.model_dump() for loc in locations_data],
         }
         await set_cached_response(get_cache_key(), response_data)
         await set_cached_response(get_popular_cache_key(), response_data)
         logger.info("Warmed preapproved and popular locations caches")
     except Exception as e:
         logger.error(f"Error warming cache: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Mapbox geocoding
@@ -426,10 +483,7 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
         return cached.get("results", [])
 
     encoded = quote(query.strip(), safe="")
-    url = (
-        f"{MAPBOX_GEOCODE_URL}/{encoded}.json"
-        f"?types=place&language=en&limit={limit}&access_token={MAPBOX_TOKEN}"
-    )
+    url = f"{MAPBOX_GEOCODE_URL}/{encoded}.json?types=place&language=en&limit={limit}&access_token={MAPBOX_TOKEN}"
 
     session = await _get_mapbox_client()
     try:
@@ -461,12 +515,14 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
         if not country_name:
             # Top-level feature may itself be a country-level result; skip it
             continue
-        results.append({
-            "name": name,
-            "admin1": admin1,
-            "country_name": country_name,
-            "country_code": country_code,
-        })
+        results.append(
+            {
+                "name": name,
+                "admin1": admin1,
+                "country_name": country_name,
+                "country_code": country_code,
+            }
+        )
 
     await set_cached_response(cache_key, {"results": results}, ttl=SEARCH_CACHE_TTL)
     return results
@@ -476,17 +532,18 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
 # Preapproved locations endpoint
 # ---------------------------------------------------------------------------
 
+
 @router.get("/v1/locations/preapproved", response_model=PreapprovedResponse)
 async def get_preapproved_locations(
     request: Request,
     response: Response,
     country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code"),
     tier: Optional[str] = Query(None, description="Filter by location tier"),
-    limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})")
+    limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})"),
 ):
     """
     Get preapproved locations with optional filtering.
-    
+
     Returns a curated list of preapproved locations that can be used with the weather API.
     Supports filtering by country code and tier, with optional result limiting.
     """
@@ -531,15 +588,15 @@ async def get_preapproved_locations(
         return PreapprovedResponse(**cached_response)
 
     filtered_locations = filter_locations(locations_data, resolved_country, tier, limit)
-    
+
     # Build response
     response_data = {
         "version": 1,
         "count": len(filtered_locations),
         "generated_at": datetime.now().isoformat(),
-        "locations": [loc.model_dump() for loc in filtered_locations]
+        "locations": [loc.model_dump() for loc in filtered_locations],
     }
-    
+
     # Cache the response
     await set_cached_response(cache_key, response_data)
 
@@ -549,6 +606,7 @@ async def get_preapproved_locations(
     response.headers["Last-Modified"] = locations_last_modified
 
     return PreapprovedResponse(**response_data)
+
 
 @router.get("/v1/locations/search")
 async def search_locations(
@@ -584,9 +642,7 @@ async def search_locations(
         # _geocode_mapbox returns fresh dicts (JSON-deserialised on each call),
         # so mutation here is safe.
         for result in results:
-            result["location_id"] = _find_preapproved_id(
-                result.get("name", ""), result.get("country_code", "")
-            )
+            result["location_id"] = _find_preapproved_id(result.get("name", ""), result.get("country_code", ""))
         return {
             "count": len(results),
             "locations": results,
@@ -644,16 +700,14 @@ async def get_locations_status():
         "etag": locations_etag,
         "last_modified": locations_last_modified,
         "cache_enabled": redis_client is not None,
-        "rate_limit": {
-            "requests_per_minute": RATE_LIMIT_REQUESTS,
-            "window_seconds": RATE_LIMIT_WINDOW
-        }
+        "rate_limit": {"requests_per_minute": RATE_LIMIT_REQUESTS, "window_seconds": RATE_LIMIT_WINDOW},
     }
 
 
 # ---------------------------------------------------------------------------
 # Popular locations helpers
 # ---------------------------------------------------------------------------
+
 
 def _build_popular_locations(limit: int) -> List[LocationItem]:
     """
@@ -696,6 +750,7 @@ def _build_popular_locations(limit: int) -> List[LocationItem]:
 # Popular locations endpoint
 # ---------------------------------------------------------------------------
 
+
 @router.get("/v1/locations/popular")
 async def get_popular_locations(
     request: Request,
@@ -703,7 +758,9 @@ async def get_popular_locations(
     country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code"),
     tier: Optional[str] = Query(None, description="Filter by location tier"),
     limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})"),
-    include_images: bool = Query(False, description="Include imageUrl, imageAlt, imageAttribution fields (default false)"),
+    include_images: bool = Query(
+        False, description="Include imageUrl, imageAlt, imageAttribution fields (default false)"
+    ),
 ):
     """
     Get popular locations with optional filtering.
@@ -793,10 +850,7 @@ async def get_popular_locations_status():
         "last_modified": locations_last_modified,
         "cache_enabled": redis_client is not None,
         "fallback": "preapproved",
-        "rate_limit": {
-            "requests_per_minute": RATE_LIMIT_REQUESTS,
-            "window_seconds": RATE_LIMIT_WINDOW
-        }
+        "rate_limit": {"requests_per_minute": RATE_LIMIT_REQUESTS, "window_seconds": RATE_LIMIT_WINDOW},
     }
 
 
@@ -913,7 +967,9 @@ async def record_location_selection(request: Request, body: SelectionRequest):
 @router.get("/v1/locations/popular/display-strings")
 async def get_popular_display_strings(
     request: Request,
-    limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Max locations to return (default: {POPULARITY_MAX_LOCATIONS})"),
+    limit: Optional[int] = Query(
+        None, ge=1, le=MAX_LIMIT, description=f"Max locations to return (default: {POPULARITY_MAX_LOCATIONS})"
+    ),
 ):
     """
     Return display strings for the most-selected locations, including
@@ -938,9 +994,7 @@ async def get_popular_display_strings(
     tracker = get_usage_tracker()
 
     if tracker is not None:
-        strings = tracker.get_popular_display_strings(
-            limit=effective_limit, days=POPULARITY_WINDOW_DAYS
-        )
+        strings = tracker.get_popular_display_strings(limit=effective_limit, days=POPULARITY_WINDOW_DAYS)
         if strings:
             return {"count": len(strings), "locations": strings}
 
@@ -959,7 +1013,7 @@ async def get_popular_display_strings(
 async def initialize_locations_data(redis: redis.Redis):
     """Initialize locations data and warm cache."""
     global locations_data, locations_etag, locations_last_modified, redis_client
-    
+
     redis_client = redis
     locations_data, locations_etag, locations_last_modified = await load_locations_data()
     await warm_cache()

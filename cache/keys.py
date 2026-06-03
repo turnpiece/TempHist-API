@@ -6,13 +6,14 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone, date as dt_date
+from datetime import date as dt_date
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis
 
-from config import DEBUG
 from cache.core import COORD_PRECISION
+from config import DEBUG
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ except ImportError:
 # CacheKeyBuilder
 # ---------------------------------------------------------------------------
 
+
 class CacheKeyBuilder:
     """Build canonical cache keys with normalized parameters."""
 
@@ -42,19 +44,19 @@ class CacheKeyBuilder:
             str_value = str(value).strip()
             if not str_value:
                 continue
-            if key in ['location']:
+            if key in ["location"]:
                 str_value = str_value.lower().replace(" ", "_").replace(",", "_")
-            if key in ['lat', 'lon', 'latitude', 'longitude']:
+            if key in ["lat", "lon", "latitude", "longitude"]:
                 try:
                     coord = float(str_value)
                     str_value = f"{coord:.{COORD_PRECISION}f}"
                 except (ValueError, TypeError):
                     pass
-            if key == 'unit_group' and str_value == 'celsius':
+            if key == "unit_group" and str_value == "celsius":
                 continue
-            if key == 'month_mode' and str_value == 'rolling1m':
+            if key == "month_mode" and str_value == "rolling1m":
                 continue
-            if key == 'days_back' and str_value in ['7', '0']:
+            if key == "days_back" and str_value in ["7", "0"]:
                 continue
             normalized[key] = str_value
         return normalized
@@ -66,13 +68,13 @@ class CacheKeyBuilder:
         query_params: Dict[str, Any] = None,
         prefix: str = "temphist",
     ) -> str:
-        path_params  = path_params or {}
+        path_params = path_params or {}
         query_params = query_params or {}
 
         path_parts = []
         for key in sorted(path_params.keys()):
             value = str(path_params[key]).strip().lower()
-            if key == 'location':
+            if key == "location":
                 value = value.replace(" ", "_").replace(",", "_")
             path_parts.append(f"{key}={value}")
 
@@ -92,6 +94,7 @@ class CacheKeyBuilder:
 # Simple key functions
 # ---------------------------------------------------------------------------
 
+
 def normalize_location_for_cache(location: str) -> str:
     return location.lower().replace(" ", "_").replace(",", "_")
 
@@ -103,7 +106,7 @@ def get_weather_cache_key(location: str, date_str: str) -> str:
 def generate_cache_key(prefix: str, location: str, date_part: str = "") -> str:
     location = normalize_location_for_cache(location)
     if date_part:
-        date_part = date_part.replace('-', '_')
+        date_part = date_part.replace("-", "_")
         return f"{prefix}_{location}_{date_part}"
     return f"{prefix}_{location}"
 
@@ -121,10 +124,7 @@ def rec_etag_key(scope: str, slug: str, identifier: str, year: int) -> str:
 
 
 def compute_bundle_etag(year_etags: Dict[int, str]) -> str:
-    sorted_etags = [
-        f"{year}:{year_etags[year].strip(chr(34) + chr(39))}"
-        for year in sorted(year_etags.keys())
-    ]
+    sorted_etags = [f"{year}:{year_etags[year].strip(chr(34) + chr(39))}" for year in sorted(year_etags.keys())]
     etag_string = "|".join(sorted_etags)
     return f'"{hashlib.sha256(etag_string.encode()).hexdigest()[:32]}"'
 
@@ -132,6 +132,7 @@ def compute_bundle_etag(year_etags: Dict[int, str]) -> str:
 # ---------------------------------------------------------------------------
 # Timezone helpers
 # ---------------------------------------------------------------------------
+
 
 def _get_location_timezone_from_cache(
     location: str,
@@ -142,6 +143,7 @@ def _get_location_timezone_from_cache(
         if redis_client is None:
             try:
                 from cache.accessors import get_cache  # lazy to avoid circular import
+
                 redis_client = get_cache().redis
             except Exception:
                 return None
@@ -150,7 +152,7 @@ def _get_location_timezone_from_cache(
         normalized = normalize_location_for_cache(location)
         cached = redis_client.get(f"location_timezone:{normalized}")
         if cached:
-            return cached.decode('utf-8') if isinstance(cached, bytes) else cached
+            return cached.decode("utf-8") if isinstance(cached, bytes) else cached
         return None
     except Exception as e:
         if DEBUG:
@@ -169,6 +171,7 @@ def store_location_timezone(
         if redis_client is None:
             try:
                 from cache.accessors import get_cache  # lazy
+
                 redis_client = get_cache().redis
             except Exception:
                 return
@@ -193,18 +196,18 @@ def _get_location_timezone_from_preapproved(location: str) -> Optional[str]:
                 if os.path.exists(os.path.join(project_root, "pyproject.toml")):
                     break
                 project_root = os.path.dirname(project_root)
-            with open(os.path.join(project_root, "data", "preapproved_locations.json"), 'r', encoding='utf-8') as f:
+            with open(os.path.join(project_root, "data", "preapproved_locations.json"), "r", encoding="utf-8") as f:
                 _preapproved_locations_cache = json.load(f)
 
         location_lower = location.lower().strip()
         for item in _preapproved_locations_cache:
-            if 'name' in item and 'admin1' in item and 'country_name' in item:
+            if "name" in item and "admin1" in item and "country_name" in item:
                 if f"{item['name']}, {item['admin1']}, {item['country_name']}".lower() == location_lower:
-                    return item.get('timezone')
-            if item.get('name', '').lower() == location_lower:
-                return item.get('timezone')
-            if item.get('slug', '').lower() == location_lower:
-                return item.get('timezone')
+                    return item.get("timezone")
+            if item.get("name", "").lower() == location_lower:
+                return item.get("timezone")
+            if item.get("slug", "").lower() == location_lower:
+                return item.get("timezone")
         return None
     except Exception as e:
         if DEBUG:
@@ -253,6 +256,7 @@ def get_local_today(
 # ---------------------------------------------------------------------------
 # Batch record helpers (MGET-based)
 # ---------------------------------------------------------------------------
+
 
 async def get_records(
     redis_client: redis.Redis,
@@ -342,7 +346,7 @@ async def assemble_and_cache(
     bundle_etag_key_str = f"{bkey}:etag"
 
     try:
-        json_data = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+        json_data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         redis_client.setex(bkey, TTL_BUNDLE, json_data)
         redis_client.setex(bundle_etag_key_str, TTL_BUNDLE, bundle_etag_computed)
         if DEBUG:

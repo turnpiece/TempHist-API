@@ -1,7 +1,7 @@
-from datetime import date, timedelta
-from typing import Dict
 import sys
+from datetime import date, timedelta
 from pathlib import Path
+from typing import Dict
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
@@ -231,4 +231,3 @@ async def test_collect_rolling_window_allows_partial_yearly_average(monkeypatch)
     assert coverage[0]["approximate"] is True
     assert coverage[0]["missing_days"] == 5
     assert coverage[0]["available_days"] == 360
-

@@ -3,12 +3,15 @@
 Test script to verify job deduplication is working correctly.
 Creates the same job multiple times and checks if deduplication prevents duplicates.
 """
+
 import os
 import sys
-import redis
-import json
 import time
-from cache.accessors import initialize_cache, get_job_manager
+
+import redis
+
+from cache.accessors import get_job_manager, initialize_cache
+
 
 def main():
     print("=== Job Deduplication Test ===\n")
@@ -43,7 +46,7 @@ def main():
         "slug": "test-location",
         "identifier": "11-12",
         "year": 2024,
-        "location": {"name": "Test Location", "lat": 40.7128, "lon": -74.0060}
+        "location": {"name": "Test Location", "lat": 40.7128, "lon": -74.0060},
     }
 
     # Create the same job 10 times
@@ -52,7 +55,7 @@ def main():
     for i in range(10):
         job_id = job_manager.create_job("record_computation", test_params)
         job_ids.append(job_id)
-        print(f"  Attempt {i+1}: job_id = {job_id}")
+        print(f"  Attempt {i + 1}: job_id = {job_id}")
         time.sleep(0.1)  # Small delay to ensure timestamps would differ
 
     # Check if all job IDs are the same (deduplication working)
@@ -77,6 +80,7 @@ def main():
 
     # Check the deduplication key exists
     import hashlib
+
     params_hash = hashlib.sha256(str(test_params).encode()).hexdigest()[:16]
     dedup_key = f"job:dedup:record_computation:{params_hash}"
     dedup_value = redis_client.get(dedup_key)
@@ -101,6 +105,7 @@ def main():
         print("❌ FAILURE: Different parameters returned same job_id")
 
     print("\n=== Test Complete ===")
+
 
 if __name__ == "__main__":
     main()

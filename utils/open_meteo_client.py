@@ -5,6 +5,7 @@ Two endpoints cover all use cases:
   - archive-api.open-meteo.com/v1/archive  — dates older than ~7 days
   - api.open-meteo.com/v1/forecast         — recent, today, and forecast dates
 """
+
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
@@ -13,8 +14,6 @@ from urllib.parse import quote
 
 import aiohttp
 
-from cache.keys import normalize_location_for_cache
-
 logger = logging.getLogger(__name__)
 
 # ── Exception ─────────────────────────────────────────────────────────────────
@@ -22,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class LocationNotFoundError(RuntimeError):
     """Raised when a location string cannot be resolved to coordinates."""
+
     pass
 
 
@@ -46,9 +46,7 @@ async def _get_client() -> aiohttp.ClientSession:
         return _client
     async with _client_lock:
         if _client is None or _client.closed:
-            _client = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30.0, connect=10.0)
-            )
+            _client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30.0, connect=10.0))
         return _client
 
 
@@ -64,6 +62,7 @@ async def close_client() -> None:
 
 def _om_archive_url(lat: float, lon: float, start: date, end: date) -> str:
     from config import OPEN_METEO_ARCHIVE_URL
+
     return (
         f"{OPEN_METEO_ARCHIVE_URL}?latitude={lat}&longitude={lon}"
         f"&start_date={start.isoformat()}&end_date={end.isoformat()}"
@@ -74,6 +73,7 @@ def _om_archive_url(lat: float, lon: float, start: date, end: date) -> str:
 
 def _om_forecast_url(lat: float, lon: float) -> str:
     from config import OPEN_METEO_FORECAST_URL
+
     return (
         f"{OPEN_METEO_FORECAST_URL}?latitude={lat}&longitude={lon}"
         f"&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min"
@@ -82,9 +82,7 @@ def _om_forecast_url(lat: float, lon: float) -> str:
     )
 
 
-def _om_requests_for_range(
-    lat: float, lon: float, start: date, end: date
-) -> List[Tuple[str, date, date]]:
+def _om_requests_for_range(lat: float, lon: float, start: date, end: date) -> List[Tuple[str, date, date]]:
     """Return (url, filter_start, filter_end) tuples covering [start, end].
 
     Splits at the archive/forecast boundary for windows that straddle it.
@@ -111,9 +109,7 @@ def _om_requests_for_range(
 # ── Response normalisation ────────────────────────────────────────────────────
 
 
-def _process_om_response(
-    payload: dict, filter_start: date, filter_end: date
-) -> List[Dict]:
+def _process_om_response(payload: dict, filter_start: date, filter_end: date) -> List[Dict]:
     """Normalise OM's array-based response to [{datetime, temp, tempmax, tempmin}],
     filtered to [filter_start, filter_end] inclusive.
     """
@@ -152,6 +148,7 @@ async def _get_coordinates_from_store(
     """Look up coordinates from Postgres locations table or preapproved list."""
     try:
         from utils.daily_temperature_store import get_daily_temperature_store
+
         store = await get_daily_temperature_store()
         return await store.get_coordinates(location)
     except Exception as exc:
@@ -168,6 +165,7 @@ async def _geocode_mapbox(
     The third element (timezone) is always None — Mapbox doesn't return timezone.
     """
     from config import MAPBOX_TOKEN
+
     if not MAPBOX_TOKEN:
         return None
 
@@ -181,9 +179,7 @@ async def _geocode_mapbox(
     try:
         async with session.get(url) as resp:
             if resp.status != 200:
-                logger.warning(
-                    "Mapbox geocoding returned status %s for %r", resp.status, query
-                )
+                logger.warning("Mapbox geocoding returned status %s for %r", resp.status, query)
                 return None
             data = await resp.json()
             features = data.get("features", [])
@@ -252,28 +248,21 @@ async def fetch_days(
             attempt += 1
             try:
                 async with _sem:
-                    async with session.get(
-                        url, headers={"Accept-Encoding": "gzip"}
-                    ) as resp:
+                    async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
                         if resp.status == 429:
-                            retry_after = float(
-                                resp.headers.get("Retry-After", _RETRY_BASE_DELAY * attempt)
-                            )
+                            retry_after = float(resp.headers.get("Retry-After", _RETRY_BASE_DELAY * attempt))
                             if attempt < _RETRY_ATTEMPTS:
                                 logger.warning(
                                     "OM rate limited, retrying in %.1fs (attempt %d)",
-                                    retry_after, attempt,
+                                    retry_after,
+                                    attempt,
                                 )
                                 await asyncio.sleep(retry_after)
                                 continue
-                            logger.error(
-                                "OM rate limit exceeded after %d attempts: %s", attempt, url
-                            )
+                            logger.error("OM rate limit exceeded after %d attempts: %s", attempt, url)
                             return
                         if resp.status != 200:
-                            logger.warning(
-                                "OM returned status %s for %s", resp.status, url
-                            )
+                            logger.warning("OM returned status %s for %s", resp.status, url)
                             return
                         payload = await resp.json()
                         if payload.get("error"):
@@ -290,14 +279,10 @@ async def fetch_days(
                         return
             except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
                 if attempt >= _RETRY_ATTEMPTS:
-                    logger.error(
-                        "OM fetch failed after %d attempts for %s: %s", attempt, url, exc
-                    )
+                    logger.error("OM fetch failed after %d attempts for %s: %s", attempt, url, exc)
                     return
                 delay = _RETRY_BASE_DELAY * attempt
-                logger.warning(
-                    "OM fetch attempt %d failed, retrying in %.1fs: %s", attempt, delay, exc
-                )
+                logger.warning("OM fetch attempt %d failed, retrying in %.1fs: %s", attempt, delay, exc)
                 await asyncio.sleep(delay)
 
     await asyncio.gather(*[fetch_one(url, fs, fe) for url, fs, fe in requests])
@@ -322,8 +307,7 @@ async def fetch_timeline_for_location(
         raise ValueError("start date must be before end date")
 
     lat, lon, timezone_hint = await geocode_location(location)
-    logger.debug("🌡️ OM fetch %s → lat=%.4f lon=%.4f [%s – %s]",
-                 location, lat, lon, start.isoformat(), end.isoformat())
+    logger.debug("🌡️ OM fetch %s → lat=%.4f lon=%.4f [%s – %s]", location, lat, lon, start.isoformat(), end.isoformat())
     days, metadata = await fetch_days(lat, lon, start, end)
     if timezone_hint and not metadata.get("timezone"):
         metadata["timezone"] = timezone_hint

@@ -1,6 +1,8 @@
 """Legacy endpoints (410 Gone)."""
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+
 from utils.firebase import verify_firebase_token
 
 router = APIRouter()
@@ -14,14 +16,14 @@ async def removed_data_endpoint():
             "error": "Endpoint removed",
             "message": "This endpoint has been removed. Please use the v1 API instead.",
             "new_endpoint": "/v1/records/daily/{location}/{month_day}",
-            "migration_guide": "/"
+            "migration_guide": "/",
         },
         status_code=410,
         headers={
             "X-Removed": "true",
             "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}",
-            "Cache-Control": "no-cache"
-        }
+            "Cache-Control": "no-cache",
+        },
     )
 
 
@@ -33,14 +35,14 @@ async def removed_average_endpoint():
             "error": "Endpoint removed",
             "message": "This endpoint has been removed. Please use the v1 API instead.",
             "new_endpoint": "/v1/records/daily/{location}/{month_day}/average",
-            "migration_guide": "/"
+            "migration_guide": "/",
         },
         status_code=410,
         headers={
             "X-Removed": "true",
             "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/average",
-            "Cache-Control": "no-cache"
-        }
+            "Cache-Control": "no-cache",
+        },
     )
 
 
@@ -52,14 +54,14 @@ async def removed_trend_endpoint():
             "error": "Endpoint removed",
             "message": "This endpoint has been removed. Please use the v1 API instead.",
             "new_endpoint": "/v1/records/daily/{location}/{month_day}/trend",
-            "migration_guide": "/"
+            "migration_guide": "/",
         },
         status_code=410,
         headers={
             "X-Removed": "true",
             "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/trend",
-            "Cache-Control": "no-cache"
-        }
+            "Cache-Control": "no-cache",
+        },
     )
 
 
@@ -71,14 +73,14 @@ async def removed_summary_endpoint():
             "error": "Endpoint removed",
             "message": "This endpoint has been removed. Please use the v1 API instead.",
             "new_endpoint": "/v1/records/daily/{location}/{month_day}/summary",
-            "migration_guide": "/"
+            "migration_guide": "/",
         },
         status_code=410,
         headers={
             "X-Removed": "true",
             "X-New-Endpoint": "/v1/records/daily/{location}/{month_day}/summary",
-            "Cache-Control": "no-cache"
-        }
+            "Cache-Control": "no-cache",
+        },
     )
 
 

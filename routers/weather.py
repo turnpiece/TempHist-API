@@ -1,19 +1,22 @@
 """Weather endpoints."""
+
+import asyncio
 import json
 import logging
-import asyncio
-import redis
 from datetime import date as dt_date
-from fastapi import APIRouter, HTTPException, Path, Query, Response, Depends
+
+import redis
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from fastapi.responses import JSONResponse
-from config import CACHE_ENABLED, DEBUG
+
+from cache.accessors import get_cache_stats
 from cache.core import get_cache_value, set_cache_value
 from cache.keys import generate_cache_key
-from cache.accessors import get_cache_stats
-from utils.weather_data import get_weather_for_date, get_forecast_data, _c_to_f
-from utils.sanitization import sanitize_for_logging
+from config import CACHE_ENABLED, DEBUG
 from utils.cache_headers import set_weather_cache_headers
-from utils.weather import is_today_or_future, get_forecast_cache_duration
+from utils.sanitization import sanitize_for_logging
+from utils.weather import get_forecast_cache_duration, is_today_or_future
+from utils.weather_data import _c_to_f, get_forecast_data, get_weather_for_date
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,24 +49,24 @@ def get_weather(
     date: str = Path(..., description="Date in YYYY-MM-DD format"),
     unit_group: str = Query("celsius", description="Temperature unit: 'celsius' or 'fahrenheit'"),
     response: Response = None,
-    redis_client: redis.Redis = Depends(get_redis_client)
+    redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """Get weather data for a specific location and date.
-    
+
     Note: Location is validated by validate_location_for_ssrf() which enforces
     max_length=200 and prevents SSRF attacks.
     """
     logger.info(f"[DEBUG] Weather endpoint called with location={sanitize_for_logging(location)}, date={date}")
-    
+
     # Parse the date for cache headers
     try:
         req_date = dt_date.fromisoformat(date)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
-    
+
     cache_key = generate_cache_key("weather", location, date)
     logger.info(f"[DEBUG] Cache key: {cache_key}")
-    
+
     # Check cache first if caching is enabled
     if CACHE_ENABLED:
         if DEBUG:
@@ -72,7 +75,7 @@ def get_weather(
         if cached_data:
             if DEBUG:
                 logger.info(f"✅ SERVING CACHED DATA: {cache_key} | Location: {location} | Date: {date}")
-            data_str = cached_data.decode('utf-8') if isinstance(cached_data, bytes) else cached_data
+            data_str = cached_data.decode("utf-8") if isinstance(cached_data, bytes) else cached_data
             result = json.loads(data_str)
             result = _apply_unit_group_to_weather(result, unit_group)
             # Set smart cache headers for cached data too
@@ -82,9 +85,9 @@ def get_weather(
             logger.info(f"❌ CACHE MISS: {cache_key} — fetching from API")
     else:
         if DEBUG:
-            logger.info(f"⚠️  CACHING DISABLED: fetching from API")
-    
-    logger.info(f"[DEBUG] About to call get_weather_for_date...")
+            logger.info("⚠️  CACHING DISABLED: fetching from API")
+
+    logger.info("[DEBUG] About to call get_weather_for_date...")
     # Use the shared async function for consistency
     # Since this is a sync endpoint, run the async function in the event loop
     result = asyncio.run(get_weather_for_date(location, date, redis_client))
@@ -101,7 +104,8 @@ def get_weather(
     if CACHE_ENABLED and "error" not in result:
         try:
             year, month, day = map(int, date.split("-")[:3])
-            from config import SHORT_CACHE_DURATION, LONG_CACHE_DURATION
+            from config import LONG_CACHE_DURATION, SHORT_CACHE_DURATION
+
             cache_duration = SHORT_CACHE_DURATION if is_today_or_future(year, month, day) else LONG_CACHE_DURATION
         except Exception:
             cache_duration = LONG_CACHE_DURATION
@@ -113,20 +117,20 @@ def get_weather(
 async def get_forecast(
     location: str = Path(..., description="Location name", max_length=200),
     unit_group: str = Query("celsius", description="Temperature unit: 'celsius' or 'fahrenheit'"),
-    redis_client: redis.Redis = Depends(get_redis_client)
+    redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """Get weather forecast for a location with time-based caching."""
     try:
         # Create cache key for forecast
         cache_key = generate_cache_key("forecast", location)
-        
+
         # Check cache first if caching is enabled
         if CACHE_ENABLED:
             cached_forecast = get_cache_value(cache_key, redis_client, "forecast", location, get_cache_stats())
             if cached_forecast:
                 if DEBUG:
                     logger.debug(f"✅ SERVING CACHED FORECAST: {cache_key} | Location: {location}")
-                data_str = cached_forecast.decode('utf-8') if isinstance(cached_forecast, bytes) else cached_forecast
+                data_str = cached_forecast.decode("utf-8") if isinstance(cached_forecast, bytes) else cached_forecast
                 cached_result = json.loads(data_str)
                 # Cache always stores Celsius; convert on output if needed
                 use_fahrenheit = unit_group.lower() in ("fahrenheit", "us")
@@ -140,6 +144,7 @@ async def get_forecast(
 
         # Fetch fresh forecast data — always in Celsius for caching consistency
         from datetime import datetime
+
         today = datetime.now().date()
         result = await get_forecast_data(location, today, redis_client, unit_group="celsius")
 
@@ -147,16 +152,16 @@ async def get_forecast(
         if CACHE_ENABLED and "error" not in result:
             cache_duration = get_forecast_cache_duration()
             # Convert date object to string for JSON serialization
-            if "date" in result and hasattr(result["date"], 'strftime'):
+            if "date" in result and hasattr(result["date"], "strftime"):
                 result["date"] = result["date"].strftime("%Y-%m-%d")
             set_cache_value(cache_key, cache_duration, json.dumps(result), redis_client)
             if DEBUG:
                 current_hour = datetime.now().hour
                 time_period = "stable" if current_hour >= 18 else "active"
                 logger.debug(f"💾 CACHED FORECAST: {cache_key} | Duration: {cache_duration} | Time: {time_period}")
-        
+
         # Convert date object to string for JSON response
-        if "date" in result and hasattr(result["date"], 'strftime'):
+        if "date" in result and hasattr(result["date"], "strftime"):
             result["date"] = result["date"].strftime("%Y-%m-%d")
 
         # Apply unit conversion after caching (cache always stores Celsius)
@@ -167,10 +172,7 @@ async def get_forecast(
             result["unit"] = "fahrenheit"
 
         return JSONResponse(content=result, headers={"Cache-Control": "public, max-age=1800"})
-    
+
     except Exception as e:
         logger.error(f"Error in forecast endpoint: {e}")
-        return JSONResponse(
-            content={"error": f"Forecast error: {str(e)}"},
-            status_code=500
-        )
+        return JSONResponse(content={"error": f"Forecast error: {str(e)}"}, status_code=500)

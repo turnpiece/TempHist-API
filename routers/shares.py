@@ -1,4 +1,5 @@
 """Social share endpoints — POST /v1/shares, GET /v1/shares, GET /v1/shares/{id}."""
+
 import json
 import logging
 from typing import Literal, Optional

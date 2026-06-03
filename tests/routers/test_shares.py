@@ -19,6 +19,7 @@ from main import app as main_app
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def client():
     with TestClient(main_app) as c:
@@ -27,10 +28,13 @@ def client():
 
 @pytest.fixture(autouse=True)
 def mock_env_vars():
-    with patch.dict("os.environ", {
-        "CACHE_ENABLED": "true",
-        "API_ACCESS_TOKEN": "test_api_token",
-    }):
+    with patch.dict(
+        "os.environ",
+        {
+            "CACHE_ENABLED": "true",
+            "API_ACCESS_TOKEN": "test_api_token",
+        },
+    ):
         yield
 
 
@@ -75,6 +79,7 @@ VALID_CREATE_BODY = {
 # ---------------------------------------------------------------------------
 # POST /v1/shares
 # ---------------------------------------------------------------------------
+
 
 class TestCreateShare:
     def test_create_share_success(self, client, mock_redis):
@@ -296,6 +301,7 @@ class TestListShares:
 # GET /v1/shares/{share_id}
 # ---------------------------------------------------------------------------
 
+
 class TestGetShare:
     def test_get_share_from_cache(self, client, mock_redis):
         """Returns share served from Redis cache."""
@@ -371,8 +377,10 @@ class TestOgImage:
 
     def test_og_image_returns_png(self, client, mock_redis):
         mock_redis.get.return_value = json.dumps(VALID_SHARE).encode()
-        with patch("routers.og_image._render_chart", return_value=_STUB_PNG), \
-             patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": 10.0}]):
+        with (
+            patch("routers.og_image._render_chart", return_value=_STUB_PNG),
+            patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": 10.0}]),
+        ):
             response = client.get("/v1/og/aB3xY7qZ.png")
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
@@ -380,16 +388,20 @@ class TestOgImage:
 
     def test_og_image_cache_control_header(self, client, mock_redis):
         mock_redis.get.return_value = json.dumps(VALID_SHARE).encode()
-        with patch("routers.og_image._render_chart", return_value=_STUB_PNG), \
-             patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": 10.0}]):
+        with (
+            patch("routers.og_image._render_chart", return_value=_STUB_PNG),
+            patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": 10.0}]),
+        ):
             response = client.get("/v1/og/aB3xY7qZ.png")
         assert "public" in response.headers.get("cache-control", "")
 
     def test_og_image_placeholder_when_no_records(self, client, mock_redis):
         """Returns a placeholder PNG (not 404) when records are missing."""
         mock_redis.get.return_value = json.dumps(VALID_SHARE).encode()
-        with patch("routers.og_image._render_placeholder", return_value=_STUB_PNG), \
-             patch("routers.og_image._get_bundle_records", return_value=None):
+        with (
+            patch("routers.og_image._render_placeholder", return_value=_STUB_PNG),
+            patch("routers.og_image._get_bundle_records", return_value=None),
+        ):
             response = client.get("/v1/og/aB3xY7qZ.png")
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
@@ -410,8 +422,10 @@ class TestOgImage:
         """Fahrenheit share should render without error."""
         share_f = {**VALID_SHARE, "unit": "fahrenheit"}
         mock_redis.get.return_value = json.dumps(share_f).encode()
-        with patch("routers.og_image._render_chart", return_value=_STUB_PNG), \
-             patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": -12.0}]):
+        with (
+            patch("routers.og_image._render_chart", return_value=_STUB_PNG),
+            patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": -12.0}]),
+        ):
             response = client.get("/v1/og/aB3xY7qZ.png")
         assert response.status_code == 200
         assert response.content[:4] == b"\x89PNG"
@@ -419,8 +433,10 @@ class TestOgImage:
     def test_og_image_no_auth_required(self, client, mock_redis):
         """Public endpoint — crawlers have no credentials."""
         mock_redis.get.return_value = json.dumps(VALID_SHARE).encode()
-        with patch("routers.og_image._render_chart", return_value=_STUB_PNG), \
-             patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": 10.0}]):
+        with (
+            patch("routers.og_image._render_chart", return_value=_STUB_PNG),
+            patch("routers.og_image._get_bundle_records", return_value=[{"year": 2024, "temperature": 10.0}]),
+        ):
             response = client.get("/v1/og/aB3xY7qZ.png")
         assert response.status_code == 200
 
@@ -430,9 +446,10 @@ class TestOgImage:
 # and list_shares dedup logic
 # ---------------------------------------------------------------------------
 
-from utils.share_store import _haversine_km, ShareStore
-from datetime import datetime, timezone
 import asyncio
+from datetime import datetime, timezone
+
+from utils.share_store import ShareStore, _haversine_km
 
 
 class TestHaversine:
@@ -458,8 +475,7 @@ class TestHaversine:
 class TestListSharesProximityDedup:
     """Tests for the Python-side proximity deduplication in ShareStore.list_shares."""
 
-    def _make_row(self, share_id, location, period, identifier, lat, lon,
-                  created_at=None):
+    def _make_row(self, share_id, location, period, identifier, lat, lon, created_at=None):
         """Build a fake asyncpg-like Record dict."""
         return {
             "id": share_id,
@@ -502,12 +518,24 @@ class TestListSharesProximityDedup:
     def test_nearby_shares_deduplicated(self):
         """Two shares within 50 km with same period+identifier → one result."""
         rows = [
-            self._make_row("id000001", "London, England, United Kingdom",
-                           "yearly", "04-11", 51.5074, -0.1278,
-                           datetime(2024, 4, 11, tzinfo=timezone.utc)),
-            self._make_row("id000002", "Greater London, England, United Kingdom",
-                           "yearly", "04-11", 51.5085, -0.0956,
-                           datetime(2024, 4, 10, tzinfo=timezone.utc)),
+            self._make_row(
+                "id000001",
+                "London, England, United Kingdom",
+                "yearly",
+                "04-11",
+                51.5074,
+                -0.1278,
+                datetime(2024, 4, 11, tzinfo=timezone.utc),
+            ),
+            self._make_row(
+                "id000002",
+                "Greater London, England, United Kingdom",
+                "yearly",
+                "04-11",
+                51.5085,
+                -0.0956,
+                datetime(2024, 4, 10, tzinfo=timezone.utc),
+            ),
         ]
         store = self._mock_store_with_rows(rows)
         result = self._run(store.list_shares())
@@ -518,10 +546,8 @@ class TestListSharesProximityDedup:
     def test_distant_shares_both_returned(self):
         """Two shares >50 km apart with same period+identifier → both returned."""
         rows = [
-            self._make_row("id000001", "London, England, United Kingdom",
-                           "yearly", "04-11", 51.5074, -0.1278),
-            self._make_row("id000002", "Brighton, England, United Kingdom",
-                           "yearly", "04-11", 50.8225, -0.1372),
+            self._make_row("id000001", "London, England, United Kingdom", "yearly", "04-11", 51.5074, -0.1278),
+            self._make_row("id000002", "Brighton, England, United Kingdom", "yearly", "04-11", 50.8225, -0.1372),
         ]
         store = self._mock_store_with_rows(rows)
         result = self._run(store.list_shares())
@@ -531,12 +557,24 @@ class TestListSharesProximityDedup:
     def test_null_coordinates_exact_string_fallback(self):
         """Shares with NULL coords fall back to exact string deduplication."""
         rows = [
-            self._make_row("id000001", "London, England, United Kingdom",
-                           "yearly", "04-11", None, None,
-                           datetime(2024, 4, 11, tzinfo=timezone.utc)),
-            self._make_row("id000002", "London, England, United Kingdom",
-                           "yearly", "04-11", None, None,
-                           datetime(2024, 4, 10, tzinfo=timezone.utc)),
+            self._make_row(
+                "id000001",
+                "London, England, United Kingdom",
+                "yearly",
+                "04-11",
+                None,
+                None,
+                datetime(2024, 4, 11, tzinfo=timezone.utc),
+            ),
+            self._make_row(
+                "id000002",
+                "London, England, United Kingdom",
+                "yearly",
+                "04-11",
+                None,
+                None,
+                datetime(2024, 4, 10, tzinfo=timezone.utc),
+            ),
         ]
         store = self._mock_store_with_rows(rows)
         result = self._run(store.list_shares())
@@ -546,10 +584,8 @@ class TestListSharesProximityDedup:
     def test_null_coords_different_strings_not_deduped(self):
         """NULL-coord shares with different strings are not merged."""
         rows = [
-            self._make_row("id000001", "London, England, United Kingdom",
-                           "yearly", "04-11", None, None),
-            self._make_row("id000002", "Greater London, England, United Kingdom",
-                           "yearly", "04-11", None, None),
+            self._make_row("id000001", "London, England, United Kingdom", "yearly", "04-11", None, None),
+            self._make_row("id000002", "Greater London, England, United Kingdom", "yearly", "04-11", None, None),
         ]
         store = self._mock_store_with_rows(rows)
         result = self._run(store.list_shares())
@@ -559,8 +595,7 @@ class TestListSharesProximityDedup:
     def test_private_lat_lon_fields_stripped_from_output(self):
         """The _lat/_lon fields used during dedup must not appear in the response."""
         rows = [
-            self._make_row("id000001", "London, England, United Kingdom",
-                           "yearly", "04-11", 51.5074, -0.1278),
+            self._make_row("id000001", "London, England, United Kingdom", "yearly", "04-11", 51.5074, -0.1278),
         ]
         store = self._mock_store_with_rows(rows)
         result = self._run(store.list_shares())

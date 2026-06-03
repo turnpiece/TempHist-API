@@ -1,4 +1,5 @@
 """CORS middleware for health checks."""
+
 from fastapi import Request
 
 
@@ -13,7 +14,7 @@ async def health_check_cors_middleware(request: Request, call_next):
         response.headers["Access-Control-Allow-Headers"] = "authorization, content-type, accept, x-requested-with"
         response.headers["Access-Control-Max-Age"] = "600"
         return response
-    
+
     # For all other requests, proceed normally
     return await call_next(request)
 
@@ -30,7 +31,7 @@ def get_cors_origins(cors_origins_env: str = None):
             "http://localhost:3000",  # Local development
             "http://localhost:5173",  # Vite default port
             "https://temphist-develop.up.railway.app",  # development site on Railway
-            "https://temphist-api-staging.up.railway.app"  # staging site on Railway
+            "https://temphist-api-staging.up.railway.app",  # staging site on Railway
         ]
         return default_origins
 

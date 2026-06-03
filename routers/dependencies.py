@@ -1,8 +1,11 @@
 """Shared dependencies for routers."""
-import redis
+
 from typing import Optional
-from utils.location_validation import InvalidLocationCache
+
+import redis
+
 from analytics_storage import AnalyticsStorage
+from utils.location_validation import InvalidLocationCache
 
 # Global instances - will be set by main.py during app initialization
 _redis_client: Optional[redis.Redis] = None
@@ -55,12 +58,12 @@ def initialize_dependencies(
     service_token_rate_limiter,
     location_monitor,
     request_monitor,
-    analytics_storage: AnalyticsStorage
+    analytics_storage: AnalyticsStorage,
 ):
     """Initialize shared dependencies. Called from main.py during app startup."""
     global _redis_client, _invalid_location_cache, _service_token_rate_limiter
     global _location_monitor, _request_monitor, _analytics_storage
-    
+
     _redis_client = redis_client
     _invalid_location_cache = invalid_location_cache
     _service_token_rate_limiter = service_token_rate_limiter

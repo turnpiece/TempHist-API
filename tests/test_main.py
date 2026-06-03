@@ -1,27 +1,27 @@
+import os
+import time
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from datetime import datetime
-from unittest.mock import patch, MagicMock, AsyncMock
-import time
-import os
-from main import (
-    app as main_app,
-    LocationDiversityMonitor,
-    RequestRateMonitor,
-    API_ACCESS_TOKEN
-)
-from utils.weather_data import get_temperature_series
+
+from main import API_ACCESS_TOKEN, LocationDiversityMonitor, RequestRateMonitor
+from main import app as main_app
+from utils.ip_utils import get_client_ip
 from utils.temperature import calculate_historical_average, calculate_trend_slope, generate_summary
-from utils.ip_utils import get_client_ip, is_ip_whitelisted, is_ip_blacklisted
+from utils.weather_data import get_temperature_series
 
 # Check if rate limiting is enabled
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
+
 
 @pytest.fixture
 def client():
     """Create a test client using the main app instance."""
     with TestClient(main_app) as test_client:
         yield test_client
+
 
 # Sample temperature data for testing
 SAMPLE_TEMPERATURE_DATA = {
@@ -31,29 +31,30 @@ SAMPLE_TEMPERATURE_DATA = {
         {"x": 1972, "y": 16.0},
         {"x": 1973, "y": 15.8},
         {"x": 1974, "y": 16.2},
-        {"x": datetime.now().year, "y": 17.0}  # Current year
+        {"x": datetime.now().year, "y": 17.0},  # Current year
     ],
-    "metadata": {
-        "total_years": 6,
-        "available_years": 6,
-        "missing_years": [],
-        "completeness": 100.0
-    }
+    "metadata": {"total_years": 6, "available_years": 6, "missing_years": [], "completeness": 100.0},
 }
+
 
 @pytest.fixture(autouse=True)
 def mock_env_vars():
     """Fixture to set up environment variables for testing"""
-    with patch.dict('os.environ', {
-        'CACHE_ENABLED': 'true',
-        'API_ACCESS_TOKEN': 'test_api_token'  # Test API token
-    }):
+    with patch.dict(
+        "os.environ",
+        {
+            "CACHE_ENABLED": "true",
+            "API_ACCESS_TOKEN": "test_api_token",  # Test API token
+        },
+    ):
         yield
+
 
 @pytest.fixture(autouse=True)
 def mock_firebase_verify_id_token():
     with patch("firebase_admin.auth.verify_id_token", return_value={"uid": "testuser"}):
         yield
+
 
 def test_calculate_historical_average():
     """Test the historical average calculation function"""
@@ -62,10 +63,12 @@ def test_calculate_historical_average():
     expected_avg = (15.0 + 15.5 + 16.0 + 15.8 + 16.2) / 5
     assert round(avg, 2) == round(expected_avg, 2)
 
+
 def test_calculate_historical_average_insufficient_data():
     """Test historical average with insufficient data"""
     assert calculate_historical_average([]) == 0.0
     assert calculate_historical_average([{"x": 2024, "y": 17.0}]) == 0.0
+
 
 def test_calculate_trend_slope():
     """Test the trend slope calculation"""
@@ -76,47 +79,41 @@ def test_calculate_trend_slope():
     assert slope_error is not None
     assert slope_error >= 0.0
 
+
 def test_calculate_trend_slope_insufficient_data():
     """Test trend slope with insufficient data"""
     assert calculate_trend_slope([]) == (0.0, None, None)
     assert calculate_trend_slope([{"x": 2024, "y": 17.0}]) == (0.0, None, None)
 
+
 # Legacy endpoint tests removed - endpoints have been removed
+
 
 def test_weather_endpoint(client):
     """Test the weather endpoint"""
-    mock_weather_data = {
-        "temp": 20.0,
-        "tempmax": 22.0,
-        "tempmin": 18.0
-    }
-    with patch('routers.weather.get_weather_for_date', new_callable=AsyncMock, return_value={"days": [mock_weather_data]}):
-        response = client.get(
-            "/weather/London/2024-05-15",
-            headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
-        )
+    mock_weather_data = {"temp": 20.0, "tempmax": 22.0, "tempmin": 18.0}
+    with patch(
+        "routers.weather.get_weather_for_date", new_callable=AsyncMock, return_value={"days": [mock_weather_data]}
+    ):
+        response = client.get("/weather/London/2024-05-15", headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"})
         assert response.status_code == 200
         data = response.json()
         assert "days" in data
         assert len(data["days"]) > 0
         assert "temp" in data["days"][0]
 
+
 # Legacy summary endpoint test removed - endpoint has been removed
+
 
 @pytest.mark.asyncio
 async def test_get_temperature_series_success():
     """Test successful temperature series retrieval"""
-    mock_weather_data = {
-        "days": [{
-            "temp": 15.5,
-            "tempmax": 16.0,
-            "tempmin": 15.0
-        }]
-    }
-    
+    mock_weather_data = {"days": [{"temp": 15.5, "tempmax": 16.0, "tempmin": 15.0}]}
+
     mock_redis = MagicMock()
     mock_redis.get.return_value = None
-    with patch('utils.weather_data.fetch_weather_batch', new_callable=AsyncMock) as mock_fetch:
+    with patch("utils.weather_data.fetch_weather_batch", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = {"2024-06-02": mock_weather_data}
         result = await get_temperature_series("London", 6, 2, mock_redis)
         assert isinstance(result, dict)
@@ -126,17 +123,18 @@ async def test_get_temperature_series_success():
         assert all("x" in item and "y" in item for item in result["data"])
         assert all(isinstance(item["y"], float) for item in result["data"])
 
+
 @pytest.mark.asyncio
 async def test_get_temperature_series_partial_failures():
     """Test temperature series retrieval with partial failures"""
     mock_weather_data = {
         "2024-06-02": {"days": [{"temp": 15.5, "tempmax": 16.0, "tempmin": 15.0}]},
-        "2023-06-02": {"days": [{"temp": 15.0, "tempmax": 15.5, "tempmin": 14.5}]}
+        "2023-06-02": {"days": [{"temp": 15.0, "tempmax": 15.5, "tempmin": 14.5}]},
     }
 
     mock_redis = MagicMock()
     mock_redis.get.return_value = None
-    with patch('utils.weather_data.fetch_weather_batch', new_callable=AsyncMock) as mock_fetch:
+    with patch("utils.weather_data.fetch_weather_batch", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = mock_weather_data
         result = await get_temperature_series("London", 6, 2, mock_redis)
         assert isinstance(result, dict)
@@ -146,17 +144,19 @@ async def test_get_temperature_series_partial_failures():
         assert all("x" in item and "y" in item for item in result["data"])
         assert "missing_years" in result["metadata"]
 
+
 @pytest.mark.asyncio
 async def test_average_vs_current_temperature():
     """Test that average temperature and current temperature comparison is accurate"""
     test_data = SAMPLE_TEMPERATURE_DATA["data"]
-    
+
     # Test average calculation
     avg = calculate_historical_average(test_data)
     expected_avg = (15.0 + 15.5 + 16.0 + 15.8 + 16.2) / 5
     assert round(avg, 2) == round(expected_avg, 2)
 
     # Summary generation tested separately via generate_summary unit tests
+
 
 @pytest.mark.asyncio
 async def test_summary_text_accuracy():
@@ -169,9 +169,9 @@ async def test_summary_text_accuracy():
                 {"x": 1972, "y": 15.0},
                 {"x": 1973, "y": 15.0},
                 {"x": 1974, "y": 15.0},
-                {"x": datetime.now().year, "y": 17.0}  # 2.0°C warmer
+                {"x": datetime.now().year, "y": 17.0},  # 2.0°C warmer
             ],
-            "expected_diff": 2.0
+            "expected_diff": 2.0,
         },
         {
             "data": [
@@ -180,17 +180,18 @@ async def test_summary_text_accuracy():
                 {"x": 1972, "y": 15.0},
                 {"x": 1973, "y": 15.0},
                 {"x": 1974, "y": 15.0},
-                {"x": datetime.now().year, "y": 13.0}  # 2.0°C cooler
+                {"x": datetime.now().year, "y": 13.0},  # 2.0°C cooler
             ],
-            "expected_diff": -2.0
-        }
+            "expected_diff": -2.0,
+        },
     ]
-    
+
     # Summary generation tested separately via generate_summary unit tests
     for case in test_cases:
         avg = calculate_historical_average(case["data"][:-1])
         current = case["data"][-1]["y"]
         assert round(current - avg, 1) == case["expected_diff"]
+
 
 def test_generate_summary_fahrenheit_about_average():
     """Fahrenheit summaries should say 'about average' when the rounded diff is 0°F."""
@@ -212,184 +213,188 @@ def test_generate_summary_fahrenheit_about_average():
 # Rate Limiting Tests
 class TestLocationDiversityMonitor:
     """Test the LocationDiversityMonitor class"""
-    
+
     def test_init(self):
         """Test monitor initialization"""
         monitor = LocationDiversityMonitor(max_locations=5, window_hours=2)
         assert monitor.max_locations == 5
         assert monitor.window_hours == 2
         assert monitor.window_seconds == 7200
-    
+
     def test_check_location_diversity_under_limit(self):
         """Test location diversity check when under limit"""
         monitor = LocationDiversityMonitor(max_locations=3, window_hours=1)
-        
+
         # Add 2 different locations
         allowed, reason = monitor.check_location_diversity("192.168.1.1", "London")
         assert allowed is True
         assert reason == "OK"
-        
+
         allowed, reason = monitor.check_location_diversity("192.168.1.1", "Paris")
         assert allowed is True
         assert reason == "OK"
-        
+
         # Should still be under limit
         assert len(monitor.ip_locations["192.168.1.1"]) == 2
-    
+
     def test_check_location_diversity_over_limit(self):
         """Test location diversity check when over limit"""
         monitor = LocationDiversityMonitor(max_locations=2, window_hours=1)
-        
+
         # Add 3 different locations
         monitor.check_location_diversity("192.168.1.1", "London")
         monitor.check_location_diversity("192.168.1.1", "Paris")
-        
+
         # Third location should trigger limit
         allowed, reason = monitor.check_location_diversity("192.168.1.1", "Berlin")
         assert allowed is False
         assert "Too many different locations" in reason
         assert "3 > 2" in reason
-    
+
     def test_check_location_diversity_same_location_multiple_times(self):
         """Test that same location multiple times doesn't count as different"""
         monitor = LocationDiversityMonitor(max_locations=2, window_hours=1)
-        
+
         # Add same location multiple times
         monitor.check_location_diversity("192.168.1.1", "London")
         monitor.check_location_diversity("192.168.1.1", "London")
         monitor.check_location_diversity("192.168.1.1", "London")
-        
+
         # Should still be allowed (only 1 unique location)
         allowed, reason = monitor.check_location_diversity("192.168.1.1", "Paris")
         assert allowed is True
         assert reason == "OK"
-    
+
     def test_cleanup_old_entries(self):
         """Test cleanup of old entries"""
         monitor = LocationDiversityMonitor(max_locations=10, window_hours=1)
-        
+
         # Add some entries
         monitor.check_location_diversity("192.168.1.1", "London")
-        
+
         # Manually set old timestamp to trigger cleanup
         old_timestamp = str(time.time() - 7200)  # 2 hours ago
         monitor.ip_locations["192.168.1.1"][old_timestamp] = {"OldLocation"}
-        
+
         # Force cleanup by bypassing the interval check
         monitor.last_cleanup = 0  # Reset to force cleanup
         monitor._cleanup_old_entries()
-        
+
         # Old entries should be removed
         assert old_timestamp not in monitor.ip_locations["192.168.1.1"]
-    
+
     def test_cleanup_interval_respect(self):
         """Test that cleanup respects the interval setting"""
         monitor = LocationDiversityMonitor(max_locations=10, window_hours=1)
-        
+
         # Add some entries
         monitor.check_location_diversity("192.168.1.1", "London")
-        
+
         # Manually set old timestamp
         old_timestamp = str(time.time() - 7200)  # 2 hours ago
         monitor.ip_locations["192.168.1.1"][old_timestamp] = {"OldLocation"}
-        
+
         # Try cleanup without resetting interval - should not run
         monitor._cleanup_old_entries()
-        
+
         # Old entries should still be there (cleanup didn't run due to interval)
         assert old_timestamp in monitor.ip_locations["192.168.1.1"]
-        
+
         # Now force cleanup by resetting interval
         monitor.last_cleanup = 0
         monitor._cleanup_old_entries()
-        
+
         # Now old entries should be removed
         assert old_timestamp not in monitor.ip_locations["192.168.1.1"]
-    
+
     def test_is_suspicious(self):
         """Test suspicious IP detection"""
         monitor = LocationDiversityMonitor(max_locations=2, window_hours=1)
-        
+
         # Initially not suspicious
         assert not monitor.is_suspicious("192.168.1.1")
-        
+
         # Trigger limit to mark as suspicious
         monitor.check_location_diversity("192.168.1.1", "London")
         monitor.check_location_diversity("192.168.1.1", "Paris")
         monitor.check_location_diversity("192.168.1.1", "Berlin")  # This will trigger limit
-        
+
         # Should now be suspicious
         assert monitor.is_suspicious("192.168.1.1")
-    
+
     def test_get_stats(self):
         """Test getting statistics for an IP"""
         monitor = LocationDiversityMonitor(max_locations=5, window_hours=1)
-        
+
         # Add some data
         monitor.check_location_diversity("192.168.1.1", "London")
         monitor.check_location_diversity("192.168.1.1", "Paris")
-        
+
         stats = monitor.get_stats("192.168.1.1")
         assert stats["unique_locations"] == 2
         assert stats["max_locations"] == 5
         assert stats["window_hours"] == 1
         assert stats["is_suspicious"] is False
 
+
 class TestRequestRateMonitor:
     """Test the RequestRateMonitor class"""
-    
+
     def test_init(self):
         """Test monitor initialization"""
         monitor = RequestRateMonitor(max_requests=50, window_hours=2)
         assert monitor.max_requests == 50
         assert monitor.window_hours == 2
         assert monitor.window_seconds == 7200
-    
+
     def test_check_request_rate_under_limit(self):
         """Test request rate check when under limit"""
         monitor = RequestRateMonitor(max_requests=3, window_hours=1)
-        
+
         # Add 2 requests
         allowed, reason = monitor.check_request_rate("192.168.1.1")
         assert allowed is True
         assert reason == "OK"
-        
+
         allowed, reason = monitor.check_request_rate("192.168.1.1")
         assert allowed is True
         assert reason == "OK"
-        
+
         # Should still be under limit
         assert len(monitor.ip_requests["192.168.1.1"]) > 0
-    
+
     def test_check_request_rate_over_limit(self):
         """Test request rate check when over limit"""
         monitor = RequestRateMonitor(max_requests=2, window_hours=1)
-        
+
         # Add 2 requests
         monitor.check_request_rate("192.168.1.1")
         monitor.check_request_rate("192.168.1.1")
-        
+
         # Third request should trigger limit
         allowed, reason = monitor.check_request_rate("192.168.1.1")
         assert allowed is False
         assert "Too many requests" in reason
         assert "3 > 2" in reason
-    
+
     def test_get_stats(self):
         """Test getting statistics for an IP"""
         monitor = RequestRateMonitor(max_requests=10, window_hours=1)
-        
+
         # Add some requests
         monitor.check_request_rate("192.168.1.1")
         monitor.check_request_rate("192.168.1.1")
-        
+
         stats = monitor.get_stats("192.168.1.1")
         assert stats["total_requests"] == 2
         assert stats["max_requests"] == 10
         assert stats["window_hours"] == 1
         assert stats["remaining_requests"] == 8
 
-@pytest.mark.skipif(not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)")
+
+@pytest.mark.skipif(
+    not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)"
+)
 class TestRateLimitingIntegration:
     """Test rate limiting integration with FastAPI"""
 
@@ -397,187 +402,197 @@ class TestRateLimitingIntegration:
         """Test the rate limit status endpoint"""
         response = client.get("/rate-limit-status")
         assert response.status_code == 200
-        
+
         data = response.json()
         assert "client_ip" in data
         assert "location_monitor" in data
         assert "request_monitor" in data
         assert "rate_limits" in data
-    
+
     @pytest.mark.skip(reason="TODO: Update assertions to match current endpoint response structure")
     def test_rate_limit_stats_endpoint(self, client):
         """Test the rate limit stats endpoint (requires authentication)"""
         # TODO: Check actual response and update assertions
         pass
-    
+
     @pytest.mark.skip(reason="Weather endpoint structure has changed - test needs rewriting")
     def test_rate_limiting_on_weather_endpoint(self, client):
         """Test that rate limiting is applied to weather endpoints"""
         # TODO: Rewrite this test to match current endpoint structure
         pass
-    
+
     @pytest.mark.skip(reason="Weather endpoint structure has changed - test needs rewriting")
     def test_rate_limit_exceeded_response(self, client):
         """Test response when rate limit is exceeded"""
         # TODO: Rewrite this test to match current endpoint structure
         pass
-    
+
     @pytest.mark.skip(reason="Weather endpoint structure has changed - test needs rewriting")
     def test_location_diversity_limit_exceeded(self, client):
         """Test response when location diversity limit is exceeded"""
         # TODO: Rewrite this test to match current endpoint structure
         pass
 
+
 class TestClientIPDetection:
     """Test client IP address detection"""
-    
+
     def test_get_client_ip_direct(self):
         """Test getting client IP from direct connection"""
         mock_request = MagicMock()
         mock_request.headers = {}
         mock_request.client.host = "192.168.1.100"
-        
+
         ip = get_client_ip(mock_request)
         assert ip == "192.168.1.100"
-    
+
     def test_get_client_ip_x_forwarded_for(self):
         """Test getting client IP from X-Forwarded-For header"""
         mock_request = MagicMock()
         mock_request.headers = {"X-Forwarded-For": "203.0.113.1, 10.0.0.1"}
         mock_request.client.host = "192.168.1.100"
-        
+
         ip = get_client_ip(mock_request)
         assert ip == "203.0.113.1"  # Should take first IP in chain
-    
+
     def test_get_client_ip_x_real_ip(self):
         """Test getting client IP from X-Real-IP header"""
         mock_request = MagicMock()
         mock_request.headers = {"X-Real-IP": "203.0.113.1"}
         mock_request.client.host = "192.168.1.100"
-        
+
         ip = get_client_ip(mock_request)
         assert ip == "203.0.113.1"  # X-Real-IP takes precedence
-    
+
     def test_get_client_ip_unknown(self):
         """Test getting client IP when no client info available"""
         mock_request = MagicMock()
         mock_request.headers = {}
         mock_request.client = None
-        
+
         ip = get_client_ip(mock_request)
         assert ip == "unknown"
 
+
 # Performance and Load Testing
-@pytest.mark.skipif(not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)")
+@pytest.mark.skipif(
+    not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)"
+)
 class TestRateLimitingPerformance:
     """Test rate limiting performance under load"""
-    
+
     def test_rapid_requests_performance(self):
         """Test performance with rapid requests"""
         monitor = RequestRateMonitor(max_requests=1000, window_hours=1)
-        
+
         start_time = time.time()
-        
+
         # Make 1000 rapid requests
         for i in range(1000):
             allowed, _ = monitor.check_request_rate("192.168.1.1")
             assert allowed is True
-        
+
         end_time = time.time()
-        
+
         # Should complete in reasonable time (less than 1 second)
         assert end_time - start_time < 1.0
-        
+
         # Check that 1001st request is blocked
         allowed, _ = monitor.check_request_rate("192.168.1.1")
         assert allowed is False
-    
+
     def test_memory_usage_cleanup(self):
         """Test that memory usage doesn't grow indefinitely"""
         monitor = LocationDiversityMonitor(max_locations=10, window_hours=1)
-        
+
         # Add many IPs and locations
         for i in range(100):
             ip = f"192.168.1.{i}"
             for j in range(5):
                 location = f"City{j}"
                 monitor.check_location_diversity(ip, location)
-        
+
         # Force cleanup by bypassing the interval check
         monitor.last_cleanup = 0  # Reset to force cleanup
         monitor._cleanup_old_entries()
-        
+
         # Memory should be reasonable (not thousands of entries)
         total_entries = sum(len(timestamps) for timestamps in monitor.ip_locations.values())
         assert total_entries < 1000  # Reasonable limit
 
+
 # Edge Cases and Error Handling
-@pytest.mark.skipif(not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)")
+@pytest.mark.skipif(
+    not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)"
+)
 class TestRateLimitingEdgeCases:
     """Test rate limiting edge cases and error handling"""
-    
+
     def test_empty_location_string(self):
         """Test handling of empty location strings"""
         monitor = LocationDiversityMonitor(max_locations=5, window_hours=1)
-        
+
         # Empty string should be treated as a valid location
         allowed, reason = monitor.check_location_diversity("192.168.1.1", "")
         assert allowed is True
         assert reason == "OK"
-    
+
     def test_special_characters_in_location(self):
         """Test handling of special characters in location names"""
         monitor = LocationDiversityMonitor(max_locations=5, window_hours=1)
-        
+
         special_locations = ["New York", "São Paulo", "München", "北京", "México"]
-        
+
         for location in special_locations:
             allowed, reason = monitor.check_location_diversity("192.168.1.1", location)
             assert allowed is True
             assert reason == "OK"
-    
+
     def test_very_long_location_names(self):
         """Test handling of very long location names"""
         monitor = LocationDiversityMonitor(max_locations=5, window_hours=1)
-        
+
         # Very long location name
         long_location = "A" * 1000
         allowed, reason = monitor.check_location_diversity("192.168.1.1", long_location)
         assert allowed is True
         assert reason == "OK"
-    
+
     def test_concurrent_access_safety(self):
         """Test that rate limiting is thread-safe for concurrent access"""
         import threading
-        
+
         monitor = RequestRateMonitor(max_requests=100, window_hours=1)
         results = []
-        
+
         def make_requests(thread_id):
             for i in range(10):
                 allowed, _ = monitor.check_request_rate(f"192.168.1.{thread_id}")
                 results.append(allowed)
-        
+
         # Create multiple threads
         threads = []
         for i in range(5):
             thread = threading.Thread(target=make_requests, args=(i,))
             threads.append(thread)
             thread.start()
-        
+
         # Wait for all threads to complete
         for thread in threads:
             thread.join()
-        
+
         # All requests should be allowed (50 total < 100 limit)
         assert all(results)
         assert len(results) == 50
 
+
 # Manual Testing Helpers (for interactive testing)
-@pytest.mark.skipif(not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)")
+@pytest.mark.skipif(
+    not RATE_LIMIT_ENABLED, reason="Rate limiting is disabled (set RATE_LIMIT_ENABLED=true to run these tests)"
+)
 class TestRateLimitingManual:
     """Helper tests for manual testing scenarios"""
-    
+
     @pytest.mark.skip(reason="Test references non-existent functions - needs rewriting")
     def test_basic_rate_limiting_flow(self, client):
         """Test the basic rate limiting flow manually"""
@@ -597,10 +612,11 @@ class TestRateLimitingManual:
             pytest.skip("Rate limiting is disabled")
 
         # Mock location validation and data fetching
-        with patch('main.get_temperature_data_v1') as mock_get_data, \
-             patch('main.invalid_location_cache.is_invalid_location', return_value=False), \
-             patch('main.is_location_likely_invalid', return_value=False):
-            
+        with (
+            patch("main.get_temperature_data_v1") as mock_get_data,
+            patch("main.invalid_location_cache.is_invalid_location", return_value=False),
+            patch("main.is_location_likely_invalid", return_value=False),
+        ):
             mock_get_data.return_value = {
                 "period": "daily",
                 "location": "London",
@@ -610,26 +626,25 @@ class TestRateLimitingManual:
                 "values": [{"date": "2024-05-15", "temperature": 20.0}],
                 "average": {"mean": 20.0, "tempmax": 22.0, "tempmin": 18.0, "data_points": 1, "unit": "celsius"},
                 "trend": {"slope": 0.1, "data_points": 1, "unit": "°C/decade"},
-                "summary": "Test summary"
+                "summary": "Test summary",
             }
-            
+
             # Make a few requests to see rate limiting in action
             for i in range(3):
                 response = client.get(
-                    "/v1/records/daily/London/05-15",
-                    headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
+                    "/v1/records/daily/London/05-15", headers={"Authorization": f"Bearer {API_ACCESS_TOKEN}"}
                 )
                 # Should succeed initially
                 assert response.status_code in [200, 429]  # Either success or rate limited
-    
+
     def test_rate_limit_configuration(self, client):
         """Test rate limiting configuration"""
         response = client.get("/rate-limit-status")
         assert response.status_code == 200
-        
+
         data = response.json()
         rate_limits = data.get("rate_limits", {})
-        
+
         # Verify configuration is reasonable
         assert rate_limits.get("max_locations_per_hour", 0) > 0
         assert rate_limits.get("max_requests_per_hour", 0) > 0
@@ -642,63 +657,73 @@ class TestIPWhitelistBlacklist:
 
     def test_ip_whitelist_function(self):
         """Test IP whitelist helper function."""
-        with patch.dict('os.environ', {'IP_WHITELIST': '192.168.1.100,10.0.0.5'}):
+        with patch.dict("os.environ", {"IP_WHITELIST": "192.168.1.100,10.0.0.5"}):
             # Reload the module to pick up new environment variables
             import importlib
+
             import utils.ip_utils
+
             importlib.reload(utils.ip_utils)
             from utils.ip_utils import is_ip_whitelisted
 
-            assert is_ip_whitelisted('192.168.1.100') == True
-            assert is_ip_whitelisted('10.0.0.5') == True
-            assert is_ip_whitelisted('192.168.1.101') == False
-            assert is_ip_whitelisted('unknown') == False
-    
+            assert is_ip_whitelisted("192.168.1.100") == True
+            assert is_ip_whitelisted("10.0.0.5") == True
+            assert is_ip_whitelisted("192.168.1.101") == False
+            assert is_ip_whitelisted("unknown") == False
+
     def test_ip_blacklist_function(self):
         """Test IP blacklist helper function."""
-        with patch.dict('os.environ', {'IP_BLACKLIST': '192.168.1.200,10.0.0.99'}):
+        with patch.dict("os.environ", {"IP_BLACKLIST": "192.168.1.200,10.0.0.99"}):
             # Reload the module to pick up new environment variables
             import importlib
+
             import utils.ip_utils
+
             importlib.reload(utils.ip_utils)
             from utils.ip_utils import is_ip_blacklisted
 
-            assert is_ip_blacklisted('192.168.1.200') == True
-            assert is_ip_blacklisted('10.0.0.99') == True
-            assert is_ip_blacklisted('192.168.1.201') == False
-            assert is_ip_blacklisted('unknown') == False
-    
+            assert is_ip_blacklisted("192.168.1.200") == True
+            assert is_ip_blacklisted("10.0.0.99") == True
+            assert is_ip_blacklisted("192.168.1.201") == False
+            assert is_ip_blacklisted("unknown") == False
+
     def test_whitelist_empty_environment(self):
         """Test whitelist with empty environment variable."""
-        with patch.dict('os.environ', {'IP_WHITELIST': ''}):
+        with patch.dict("os.environ", {"IP_WHITELIST": ""}):
             import importlib
+
             import main
+
             importlib.reload(main)
-            
-            assert main.is_ip_whitelisted('192.168.1.100') == False
+
+            assert main.is_ip_whitelisted("192.168.1.100") == False
             assert main.IP_WHITELIST == []
-    
+
     def test_blacklist_empty_environment(self):
         """Test blacklist with empty environment variable."""
-        with patch.dict('os.environ', {'IP_BLACKLIST': ''}):
+        with patch.dict("os.environ", {"IP_BLACKLIST": ""}):
             import importlib
+
             import main
+
             importlib.reload(main)
-            
-            assert main.is_ip_blacklisted('192.168.1.200') == False
+
+            assert main.is_ip_blacklisted("192.168.1.200") == False
             assert main.IP_BLACKLIST == []
-    
+
     def test_whitelist_with_spaces(self):
         """Test whitelist with spaces in environment variable."""
-        with patch.dict('os.environ', {'IP_WHITELIST': ' 192.168.1.100 , 10.0.0.5 '}):
+        with patch.dict("os.environ", {"IP_WHITELIST": " 192.168.1.100 , 10.0.0.5 "}):
             import importlib
-            import utils.ip_utils
-            importlib.reload(utils.ip_utils)
-            from utils.ip_utils import is_ip_whitelisted, IP_WHITELIST
 
-            assert is_ip_whitelisted('192.168.1.100') == True
-            assert is_ip_whitelisted('10.0.0.5') == True
-            assert IP_WHITELIST == ['192.168.1.100', '10.0.0.5']
+            import utils.ip_utils
+
+            importlib.reload(utils.ip_utils)
+            from utils.ip_utils import IP_WHITELIST, is_ip_whitelisted
+
+            assert is_ip_whitelisted("192.168.1.100") == True
+            assert is_ip_whitelisted("10.0.0.5") == True
+            assert IP_WHITELIST == ["192.168.1.100", "10.0.0.5"]
 
 
 @pytest.mark.skip(reason="IP whitelist/blacklist integration tests need rewriting to properly reload config")
@@ -707,11 +732,13 @@ class TestIPWhitelistBlacklistIntegration:
 
     def test_blacklisted_ip_blocked(self):
         """Test that blacklisted IPs are blocked entirely."""
-        with patch.dict('os.environ', {'IP_BLACKLIST': 'testclient'}):
+        with patch.dict("os.environ", {"IP_BLACKLIST": "testclient"}):
             import importlib
+
             import main
+
             importlib.reload(main)
-            
+
             # Create a new test client with the reloaded app
             with TestClient(main.app) as test_client:
                 # Test that blacklisted IP gets 403
@@ -720,82 +747,82 @@ class TestIPWhitelistBlacklistIntegration:
                 data = response.json()
                 assert data["detail"] == "Access denied"
                 assert data["reason"] == "IP address is blacklisted"
-    
+
     def test_whitelisted_ip_bypasses_rate_limits(self):
         """Test that whitelisted IPs bypass rate limiting."""
-        with patch.dict('os.environ', {'IP_WHITELIST': 'testclient'}):
+        with patch.dict("os.environ", {"IP_WHITELIST": "testclient"}):
             import importlib
+
             import main
+
             importlib.reload(main)
-            
+
             # Create a new test client with the reloaded app
             with TestClient(main.app) as test_client:
                 # Test rate limit status endpoint
                 response = test_client.get("/rate-limit-status")
                 assert response.status_code == 200
-                
+
                 data = response.json()
                 ip_status = data.get("ip_status", {})
                 assert ip_status.get("whitelisted") == True
                 assert ip_status.get("rate_limited") == False
-    
+
     def test_service_job_bypasses_rate_limits(self, client):
         """Test that service jobs using API_ACCESS_TOKEN bypass rate limiting."""
         # Mock the environment variable for API_ACCESS_TOKEN
-        with patch.dict('os.environ', {'API_ACCESS_TOKEN': 'test_service_token'}):
+        with patch.dict("os.environ", {"API_ACCESS_TOKEN": "test_service_token"}):
             import importlib
+
             import main
+
             importlib.reload(main)
-            
+
             # Create a new test client with the reloaded app
             with TestClient(main.app) as test_client:
                 # Test rate limit status endpoint with service token
-                response = test_client.get(
-                    "/rate-limit-status",
-                    headers={"Authorization": "Bearer test_service_token"}
-                )
+                response = test_client.get("/rate-limit-status", headers={"Authorization": "Bearer test_service_token"})
                 assert response.status_code == 200
-                
+
                 data = response.json()
                 ip_status = data.get("ip_status", {})
                 assert ip_status.get("service_job") == True
                 # Service jobs are still rate limited (just with higher limits)
                 assert ip_status.get("rate_limited") == True
-                
+
                 # Verify service job can access protected endpoints without rate limiting
-                with patch('utils.weather_data.fetch_weather_batch', return_value={"2024-01-15": {"temp": 20.0}}):
+                with patch("utils.weather_data.fetch_weather_batch", return_value={"2024-01-15": {"temp": 20.0}}):
                     response = test_client.get(
-                        "/weather/London/2024-01-15",
-                        headers={"Authorization": "Bearer test_service_token"}
+                        "/weather/London/2024-01-15", headers={"Authorization": "Bearer test_service_token"}
                     )
                     # Should succeed (not rate limited)
                     assert response.status_code == 200
-    
+
     def test_rate_limit_status_shows_ip_status(self, client):
         """Test that rate limit status endpoint shows IP whitelist/blacklist status."""
         response = client.get("/rate-limit-status")
         assert response.status_code == 200
-        
+
         data = response.json()
         assert "ip_status" in data
         ip_status = data["ip_status"]
-        
+
         # Should have these keys
         assert "whitelisted" in ip_status
         assert "blacklisted" in ip_status
         assert "service_job" in ip_status
         assert "rate_limited" in ip_status
-        
+
         # Should be boolean values
         assert isinstance(ip_status["whitelisted"], bool)
         assert isinstance(ip_status["blacklisted"], bool)
         assert isinstance(ip_status["service_job"], bool)
         assert isinstance(ip_status["rate_limited"], bool)
-    
+
     def test_rate_limit_stats_shows_ip_lists(self, client):
         """Test that rate limit stats endpoint shows whitelist and blacklist (requires auth)."""
         # This endpoint requires authentication
-        with patch('utils.firebase.verify_firebase_token', return_value={"uid": "test_user"}):
+        with patch("utils.firebase.verify_firebase_token", return_value={"uid": "test_user"}):
             response = client.get("/rate-limit-stats")
             assert response.status_code == 200
 
@@ -806,5 +833,3 @@ class TestIPWhitelistBlacklistIntegration:
             # Should be lists
             assert isinstance(data["whitelisted_ips"], list)
             assert isinstance(data["blacklisted_ips"], list)
-
-

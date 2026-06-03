@@ -1,9 +1,10 @@
 """Weather data utility functions."""
-from typing import List, Dict
-from datetime import date as dt_date, timedelta
-from config import (
-    FORECAST_DAY_CACHE_DURATION_SECONDS, FORECAST_NIGHT_CACHE_DURATION_SECONDS
-)
+
+from datetime import date as dt_date
+from datetime import timedelta
+from typing import Dict, List
+
+from config import FORECAST_DAY_CACHE_DURATION_SECONDS, FORECAST_NIGHT_CACHE_DURATION_SECONDS
 
 
 def get_year_range(current_year: int, years_back: int = 50) -> List[int]:
@@ -11,14 +12,15 @@ def get_year_range(current_year: int, years_back: int = 50) -> List[int]:
     return list(range(current_year - years_back, current_year + 1))
 
 
-def create_metadata(total_years: int, available_years: int, missing_years: List[Dict], 
-                   additional_metadata: Dict = None) -> Dict:
+def create_metadata(
+    total_years: int, available_years: int, missing_years: List[Dict], additional_metadata: Dict = None
+) -> Dict:
     """Create standardized metadata for temperature data responses."""
     metadata = {
         "total_years": total_years,
         "available_years": available_years,
         "missing_years": missing_years,
-        "completeness": round(available_years / total_years * 100, 1) if total_years > 0 else 0.0
+        "completeness": round(available_years / total_years * 100, 1) if total_years > 0 else 0.0,
     }
     if additional_metadata:
         metadata.update(additional_metadata)
@@ -45,13 +47,14 @@ def is_today_or_future(year: int, month: int, day: int) -> bool:
 
 def get_forecast_cache_duration() -> timedelta:
     """Get appropriate cache duration for forecast data based on time of day.
-    
+
     Returns:
         timedelta: Short duration during active forecast hours (30 min), longer when stable (2 hours)
     """
     from datetime import datetime
+
     current_hour = datetime.now().hour
-    
+
     # Stable hours (6 PM to Midnight) - forecast is more stable
     if current_hour >= 18:
         return timedelta(seconds=FORECAST_NIGHT_CACHE_DURATION_SECONDS)

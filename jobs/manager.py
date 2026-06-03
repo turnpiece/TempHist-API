@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import logging
@@ -9,8 +8,6 @@ from typing import Any, Dict, Optional
 
 import redis
 
-from config import DEBUG
-
 logger = logging.getLogger(__name__)
 
 MAX_JOB_QUEUE_SIZE = int(os.getenv("MAX_JOB_QUEUE_SIZE", "1000"))
@@ -20,6 +17,7 @@ _CACHE_TTL_JOB = CACHE_TTL_JOB
 
 class JobQueueFullError(Exception):
     """Raised when the job queue exceeds MAX_JOB_QUEUE_SIZE."""
+
     pass
 
 
@@ -91,7 +89,9 @@ class JobManager:
                         logger.info(f"Deduplicated job {existing_job_id}: identical job already completed")
                         return existing_job_id
                     if status == JobStatus.ERROR:
-                        logger.info(f"Deduplicated job {existing_job_id}: identical job recently failed, skipping re-enqueue")
+                        logger.info(
+                            f"Deduplicated job {existing_job_id}: identical job recently failed, skipping re-enqueue"
+                        )
                         return existing_job_id
 
             queue_length = self.redis.llen("job_queue")

@@ -1,7 +1,9 @@
 """Firebase initialization and authentication utilities."""
-import os
+
 import json
 import logging
+import os
+
 import firebase_admin
 from firebase_admin import credentials
 
@@ -23,7 +25,7 @@ def initialize_firebase():
             else:
                 logger.warning("⚠️ No Firebase credentials found - Firebase features will be disabled")
                 cred = None
-        
+
         if cred:
             firebase_admin.initialize_app(cred)
             logger.info("✅ Firebase initialized successfully")
@@ -38,7 +40,8 @@ def initialize_firebase():
 
 def verify_firebase_token(request):
     """Verify Firebase authentication token."""
-    from fastapi import HTTPException, Request
+    from fastapi import HTTPException
+
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
@@ -46,6 +49,7 @@ def verify_firebase_token(request):
     id_token = auth_header.split(" ")[1]
     try:
         from firebase_admin import auth
+
         decoded_token = auth.verify_id_token(id_token)
         return decoded_token
     except Exception:

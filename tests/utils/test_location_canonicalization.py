@@ -1,8 +1,9 @@
 """Tests for location canonicalization radius in DailyTemperatureStore."""
+
 import inspect
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
@@ -29,8 +30,10 @@ class TestCanonicalizationRadius:
         """CANONICALIZATION_RADIUS_KM env var is read by config at import time;
         verify the config module reads it correctly when patched."""
         import importlib
+
         monkeypatch.setenv("CANONICALIZATION_RADIUS_KM", "30")
         import config as cfg_module
+
         importlib.reload(cfg_module)
         assert cfg_module.CANONICALIZATION_RADIUS_KM == 30
         # Restore

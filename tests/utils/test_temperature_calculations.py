@@ -1,5 +1,5 @@
 """Unit tests for temperature calculation functions: mean, std dev, trend slope, slope error."""
-import math
+
 import sys
 from pathlib import Path
 
@@ -7,8 +7,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import pytest
 from datetime import datetime
+
+import pytest
+
 from utils.temperature import calculate_standard_deviation, calculate_trend_slope, generate_summary
 
 
@@ -141,8 +143,9 @@ class TestGenerateSummaryAverageAwareWording:
     def _data(self, historical_temps, current_temp, current_year=2026):
         """Build a data list with historical years + current year."""
         start_year = current_year - len(historical_temps)
-        return [{"x": start_year + i, "y": t} for i, t in enumerate(historical_temps)] + \
-               [{"x": current_year, "y": current_temp}]
+        return [{"x": start_year + i, "y": t} for i, t in enumerate(historical_temps)] + [
+            {"x": current_year, "y": current_temp}
+        ]
 
     def _date(self, year=2026):
         return datetime(year, 5, 15)

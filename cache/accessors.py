@@ -7,28 +7,35 @@ at app startup (lifespan) before calling any get_*() function.
 
 import asyncio
 import logging
-from datetime import datetime, date as dt_date
+from datetime import date as dt_date
 from typing import Optional
 
 import redis
 from fastapi import Request, Response
 
-from config import (
-    DEBUG, USAGE_TRACKING_ENABLED, USAGE_RETENTION_DAYS,
-)
 from cache.core import (
-    EnhancedCache, CacheInvalidator,
-    CACHE_TTL_SHORT, CACHE_CONTROL_PUBLIC, CACHE_CONTROL_DAILY_TODAY,
+    CACHE_CONTROL_DAILY_TODAY,
+    CACHE_CONTROL_PUBLIC,
+    CACHE_TTL_SHORT,
     CacheHeaders,
+    CacheInvalidator,
+    EnhancedCache,
 )
 from cache.warming import (
-    CacheWarmer, CacheStats,
-    CACHE_WARMING_ENABLED, CACHE_WARMING_INTERVAL_HOURS, CACHE_WARMING_MAX_LOCATIONS,
-    CACHE_WARMING_DAYS_BACK, CACHE_WARMING_CONCURRENT_REQUESTS,
     CACHE_STATS_ENABLED,
+    CACHE_WARMING_DAYS_BACK,
+    CACHE_WARMING_ENABLED,
+    CACHE_WARMING_INTERVAL_HOURS,
+    CacheStats,
+    CacheWarmer,
 )
-from tracking.usage import LocationUsageTracker
+from config import (
+    DEBUG,
+    USAGE_RETENTION_DAYS,
+    USAGE_TRACKING_ENABLED,
+)
 from jobs.manager import JobManager
+from tracking.usage import LocationUsageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +43,12 @@ logger = logging.getLogger(__name__)
 # Global singletons (set by initialize_cache)
 # ---------------------------------------------------------------------------
 
-enhanced_cache:   Optional[EnhancedCache]        = None
-job_manager:      Optional[JobManager]           = None
-usage_tracker:    Optional[LocationUsageTracker] = None
-cache_warmer:     Optional[CacheWarmer]          = None
-cache_stats:      Optional[CacheStats]           = None
-cache_invalidator: Optional[CacheInvalidator]    = None
+enhanced_cache: Optional[EnhancedCache] = None
+job_manager: Optional[JobManager] = None
+usage_tracker: Optional[LocationUsageTracker] = None
+cache_warmer: Optional[CacheWarmer] = None
+cache_stats: Optional[CacheStats] = None
+cache_invalidator: Optional[CacheInvalidator] = None
 
 
 def initialize_cache(redis_client: redis.Redis):
@@ -49,7 +56,7 @@ def initialize_cache(redis_client: redis.Redis):
     global enhanced_cache, job_manager, usage_tracker, cache_warmer, cache_stats, cache_invalidator
 
     enhanced_cache = EnhancedCache(redis_client)
-    job_manager    = JobManager(redis_client)
+    job_manager = JobManager(redis_client)
 
     if USAGE_TRACKING_ENABLED:
         usage_tracker = LocationUsageTracker(redis_client, USAGE_RETENTION_DAYS)
@@ -82,7 +89,8 @@ def initialize_cache(redis_client: redis.Redis):
         cache_stats = None
         logger.info("Cache statistics disabled" if not DEBUG else "⚠️  CACHE STATS DISABLED")
 
-    from cache.core import CACHE_INVALIDATION_ENABLED, CACHE_INVALIDATION_BATCH_SIZE
+    from cache.core import CACHE_INVALIDATION_BATCH_SIZE, CACHE_INVALIDATION_ENABLED
+
     if CACHE_INVALIDATION_ENABLED:
         cache_invalidator = CacheInvalidator(redis_client)
         if DEBUG:
@@ -99,6 +107,7 @@ def initialize_cache(redis_client: redis.Redis):
 # ---------------------------------------------------------------------------
 # Accessor functions
 # ---------------------------------------------------------------------------
+
 
 def get_cache() -> EnhancedCache:
     if enhanced_cache is None:
@@ -132,6 +141,7 @@ def get_cache_invalidator() -> Optional[CacheInvalidator]:
 # High-level endpoint helper
 # ---------------------------------------------------------------------------
 
+
 async def cached_endpoint_response(
     request: Request,
     response: Response,
@@ -160,9 +170,7 @@ async def cached_endpoint_response(
             cache_control = CACHE_CONTROL_DAILY_TODAY
 
     try:
-        data, etag, last_modified = await cache.get_or_compute(
-            cache_key, compute_func, ttl, *args, **kwargs
-        )
+        data, etag, last_modified = await cache.get_or_compute(cache_key, compute_func, ttl, *args, **kwargs)
         if CacheHeaders.check_conditional_headers(request, etag, last_modified):
             response.status_code = 304
             return None

@@ -1,12 +1,15 @@
 """Exception handlers for standardized error responses."""
+
 import logging
+
 from fastapi import Request
-from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError, ResponseValidationError
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException
-from models import ErrorResponse
+
 from config import DEBUG
+from models import ErrorResponse
 from utils.ip_utils import get_client_ip
 
 logger = logging.getLogger(__name__)
@@ -26,31 +29,29 @@ ERROR_CODES = {
     502: "BAD_GATEWAY",
     500: "INTERNAL_SERVER_ERROR",
     503: "SERVICE_UNAVAILABLE",
-    504: "GATEWAY_TIMEOUT"
+    504: "GATEWAY_TIMEOUT",
 }
 
 
 def register_exception_handlers(app):
     """Register all exception handlers with the FastAPI app."""
-    
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         """Handle Pydantic validation errors with standardized error format (MED-008)."""
         client_ip = get_client_ip(request)
-        request_id = getattr(request.state, 'request_id', None)
-        
+        request_id = getattr(request.state, "request_id", None)
+
         # Extract detailed error information
         error_details = []
         for error in exc.errors():
-            field = " -> ".join(str(loc) for loc in error['loc'])
-            error_details.append({
-                "field": field,
-                "message": error['msg'],
-                "type": error['type']
-            })
-        
-        logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
-        
+            field = " -> ".join(str(loc) for loc in error["loc"])
+            error_details.append({"field": field, "message": error["msg"], "type": error["type"]})
+
+        logger.error(
+            f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}"
+        )
+
         error_response = ErrorResponse(
             error="VALIDATION_ERROR",
             message="Request data validation failed",
@@ -58,31 +59,26 @@ def register_exception_handlers(app):
             details=error_details,
             path=request.url.path,
             method=request.method,
-            request_id=request_id
+            request_id=request_id,
         )
-        
-        return JSONResponse(
-            status_code=422,
-            content=error_response.model_dump()
-        )
-    
+
+        return JSONResponse(status_code=422, content=error_response.model_dump())
+
     @app.exception_handler(ValidationError)
     async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
         """Handle Pydantic model validation errors with standardized format (MED-008)."""
         client_ip = get_client_ip(request)
-        request_id = getattr(request.state, 'request_id', None)
-        
+        request_id = getattr(request.state, "request_id", None)
+
         error_details = []
         for error in exc.errors():
-            field = " -> ".join(str(loc) for loc in error['loc'])
-            error_details.append({
-                "field": field,
-                "message": error['msg'],
-                "type": error['type']
-            })
-        
-        logger.error(f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}")
-        
+            field = " -> ".join(str(loc) for loc in error["loc"])
+            error_details.append({"field": field, "message": error["msg"], "type": error["type"]})
+
+        logger.error(
+            f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}"
+        )
+
         error_response = ErrorResponse(
             error="MODEL_VALIDATION_ERROR",
             message="Data model validation failed",
@@ -90,27 +86,20 @@ def register_exception_handlers(app):
             details=error_details,
             path=request.url.path,
             method=request.method,
-            request_id=request_id
+            request_id=request_id,
         )
-        
-        return JSONResponse(
-            status_code=422,
-            content=error_response.model_dump()
-        )
+
+        return JSONResponse(status_code=422, content=error_response.model_dump())
 
     @app.exception_handler(ResponseValidationError)
     async def response_validation_exception_handler(request: Request, exc: ResponseValidationError):
         """Handle response model validation errors with standardized format."""
-        request_id = getattr(request.state, 'request_id', None)
+        request_id = getattr(request.state, "request_id", None)
 
         error_details = []
         for error in exc.errors():
-            field = " -> ".join(str(loc) for loc in error['loc'])
-            error_details.append({
-                "field": field,
-                "message": error['msg'],
-                "type": error['type']
-            })
+            field = " -> ".join(str(loc) for loc in error["loc"])
+            error_details.append({"field": field, "message": error["msg"], "type": error["type"]})
 
         logger.error(
             f"❌ RESPONSE VALIDATION ERROR: {exc.errors()} | Path={request.url.path} | Request-ID={request_id}"
@@ -124,19 +113,16 @@ def register_exception_handlers(app):
             details=error_details if DEBUG else None,
             path=request.url.path,
             method=request.method,
-            request_id=request_id
+            request_id=request_id,
         )
 
-        return JSONResponse(
-            status_code=500,
-            content=error_response.model_dump()
-        )
-    
+        return JSONResponse(status_code=500, content=error_response.model_dump())
+
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         """Handle HTTPException with standardized error format (MED-008)."""
-        request_id = getattr(request.state, 'request_id', None)
-        
+        request_id = getattr(request.state, "request_id", None)
+
         # Handle different detail formats
         if isinstance(exc.detail, dict):
             # Already in structured format, use it
@@ -153,7 +139,7 @@ def register_exception_handlers(app):
             error_message = str(exc.detail) if exc.detail else "An error occurred"
             error_code = ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR")
             error_details = None
-        
+
         error_response = ErrorResponse(
             error=error_code,
             message=error_message,
@@ -161,22 +147,22 @@ def register_exception_handlers(app):
             details=error_details,
             path=request.url.path,
             method=request.method,
-            request_id=request_id
+            request_id=request_id,
         )
-        
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=error_response.model_dump()
-        )
-    
+
+        return JSONResponse(status_code=exc.status_code, content=error_response.model_dump())
+
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         """Handle unhandled exceptions with standardized error format (MED-008)."""
-        request_id = getattr(request.state, 'request_id', None)
-        
+        request_id = getattr(request.state, "request_id", None)
+
         # Log full error details server-side
-        logger.error(f"❌ UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)} | Path={request.url.path} | Request-ID={request_id}", exc_info=True)
-        
+        logger.error(
+            f"❌ UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)} | Path={request.url.path} | Request-ID={request_id}",
+            exc_info=True,
+        )
+
         # Return generic error to client (don't expose internal details)
         error_response = ErrorResponse(
             error="INTERNAL_SERVER_ERROR",
@@ -185,10 +171,7 @@ def register_exception_handlers(app):
             details={"type": type(exc).__name__} if DEBUG else None,
             path=request.url.path,
             method=request.method,
-            request_id=request_id
+            request_id=request_id,
         )
-        
-        return JSONResponse(
-            status_code=500,
-            content=error_response.model_dump()
-        )
+
+        return JSONResponse(status_code=500, content=error_response.model_dump())

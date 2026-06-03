@@ -1,7 +1,9 @@
 """Temperature calculation and summary generation utilities."""
+
 import math
-from typing import List, Dict, Optional
-from datetime import datetime, timedelta, date as dt_date
+from datetime import date as dt_date
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 
 def calculate_standard_deviation(values: List[float]) -> Optional[float]:
@@ -10,7 +12,7 @@ def calculate_standard_deviation(values: List[float]) -> Optional[float]:
         return None
     mean = sum(values) / len(values)
     variance = sum((v - mean) ** 2 for v in values) / len(values)
-    return round(variance ** 0.5, 2)
+    return round(variance**0.5, 2)
 
 
 def calculate_historical_average(data: List[Dict[str, float]]) -> float:
@@ -23,10 +25,10 @@ def calculate_historical_average(data: List[Dict[str, float]]) -> float:
     if not data or len(data) < 2:
         return 0.0
     # Filter out None values
-    historical_data = [p for p in data[:-1] if p.get('y') is not None]
+    historical_data = [p for p in data[:-1] if p.get("y") is not None]
     if not historical_data:
         return 0.0
-    avg_temp = sum(p['y'] for p in historical_data) / len(historical_data)
+    avg_temp = sum(p["y"] for p in historical_data) / len(historical_data)
     return round(avg_temp, 2)
 
 
@@ -40,28 +42,28 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional
         Tuple of (slope in °C/decade, R², slope_error in °C/decade), rounded to 2 decimal places.
         R² and slope_error are None when they cannot be computed.
     """
-    data = [d for d in data if d.get('y') is not None]
+    data = [d for d in data if d.get("y") is not None]
     n = len(data)
     if n < 2:
         return 0.0, None, None
 
-    data = sorted(data, key=lambda d: d['x'])
+    data = sorted(data, key=lambda d: d["x"])
 
-    sum_x = sum(p['x'] for p in data)
-    sum_y = sum(p['y'] for p in data)
-    sum_xy = sum(p['x'] * p['y'] for p in data)
-    sum_xx = sum(p['x'] ** 2 for p in data)
+    sum_x = sum(p["x"] for p in data)
+    sum_y = sum(p["y"] for p in data)
+    sum_xy = sum(p["x"] * p["y"] for p in data)
+    sum_xx = sum(p["x"] ** 2 for p in data)
 
-    denominator = n * sum_xx - sum_x ** 2
+    denominator = n * sum_xx - sum_x**2
     if denominator == 0:
         return 0.0, None, None
 
     slope_per_year = (n * sum_xy - sum_x * sum_y) / denominator
     intercept = (sum_y - slope_per_year * sum_x) / n
 
-    ss_res = sum((p['y'] - (slope_per_year * p['x'] + intercept)) ** 2 for p in data)
+    ss_res = sum((p["y"] - (slope_per_year * p["x"] + intercept)) ** 2 for p in data)
     mean_y = sum_y / n
-    ss_tot = sum((p['y'] - mean_y) ** 2 for p in data)
+    ss_tot = sum((p["y"] - mean_y) ** 2 for p in data)
 
     r_squared = round(1 - ss_res / ss_tot, 2) if ss_tot != 0 else None
 
@@ -72,7 +74,7 @@ def calculate_trend_slope(data: List[Dict[str, float]]) -> tuple[float, Optional
         slope_error = (ss_res / ((n - 2) * ss_xx)) ** 0.5 * 10.0
         # Inflate SE for missing years: sparse data over a long span has more
         # uncertainty than OLS on the observed points alone can express.
-        year_span = data[-1]['x'] - data[0]['x'] + 1
+        year_span = data[-1]["x"] - data[0]["x"] + 1
         if year_span > n:
             slope_error *= (year_span / n) ** 0.5
         slope_error = round(slope_error, 2)
@@ -107,7 +109,14 @@ def get_friendly_date(date: datetime) -> str:
     return f"{day}{suffix} {date.strftime('%B')}"
 
 
-def generate_summary(data: List[Dict[str, float]], date: datetime, period: str = "daily", unit_group: str = "celsius", mean: Optional[float] = None, local_today: Optional[dt_date] = None) -> str:
+def generate_summary(
+    data: List[Dict[str, float]],
+    date: datetime,
+    period: str = "daily",
+    unit_group: str = "celsius",
+    mean: Optional[float] = None,
+    local_today: Optional[dt_date] = None,
+) -> str:
     """Generate a summary text for temperature data in the requested unit.
 
     Args:
@@ -130,7 +139,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     unit_symbol = "°F" if unit_group.lower() == "fahrenheit" else "°C"
 
     # Filter out data points with None temperature
-    data = [d for d in data if d.get('y') is not None]
+    data = [d for d in data if d.get("y") is not None]
     if not data or len(data) < 2:
         return "Not enough data to generate summary."
 
@@ -139,23 +148,23 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     latest = data[-1]
 
     # Verify the latest data point is actually for the expected year
-    if latest.get('x') != expected_year:
+    if latest.get("x") != expected_year:
         # Current year data is missing - don't generate a misleading summary
         return f"Temperature data for {date.year} is not yet available."
 
-    if latest.get('y') is None:
+    if latest.get("y") is None:
         return "No valid temperature data for the latest year."
 
     avg_temp = round(mean, 2) if mean is not None else calculate_historical_average(data)
-    diff = latest['y'] - avg_temp
-    is_above_average = latest['y'] > avg_temp
+    diff = latest["y"] - avg_temp
+    is_above_average = latest["y"] > avg_temp
     is_fahrenheit = unit_group.lower() == "fahrenheit"
     rounded_diff = int(round(diff, 0)) if is_fahrenheit else round(diff, 1)
-    latest_temp = int(round(latest['y'], 0)) if is_fahrenheit else round(latest['y'], 1)
+    latest_temp = int(round(latest["y"], 0)) if is_fahrenheit else round(latest["y"], 1)
 
     friendly_date = get_friendly_date(date)
-    warm_summary = ''
-    cold_summary = ''
+    warm_summary = ""
+    cold_summary = ""
     temperature = f"{latest_temp}{unit_symbol}."
 
     # Determine tense based on date and period.
@@ -164,7 +173,7 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
     today = local_today if local_today is not None else datetime.now().date()
     yesterday = today - timedelta(days=1)
     target_date = date.date()
-    
+
     # For non-daily periods, determine if the period includes today or ended recently
     if period == "daily":
         if target_date == today:
@@ -188,25 +197,19 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             # Check if the week ending on target_date includes today
             week_start = target_date - timedelta(days=6)
             period_includes_today = week_start <= today <= target_date
-            period_ended_recently = target_date == yesterday or target_date == today - timedelta(days=2)
         elif period == "monthly":
             # Check if the month containing target_date includes today
             month_start = target_date.replace(day=1)
             next_month = (month_start + timedelta(days=32)).replace(day=1)
             month_end = next_month - timedelta(days=1)
             period_includes_today = month_start <= today <= month_end
-            # Check if the month ended recently
-            period_ended_recently = (target_date.month == yesterday.month and target_date.year == yesterday.year) or \
-                                  (target_date.month == (yesterday - timedelta(days=1)).month and target_date.year == (yesterday - timedelta(days=1)).year)
         elif period == "yearly":
             # Check if the target year is the current year
             period_includes_today = target_date.year == today.year
-            period_ended_recently = target_date.year == yesterday.year
         else:
             # Default for other periods
             period_includes_today = target_date == today
-            period_ended_recently = target_date == yesterday
-        
+
         if period_includes_today:
             # Period includes today - use present perfect for consistency
             tense_context = "has been"
@@ -218,13 +221,13 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
             tense_context_alt = "was"
             tense_warm_cold = "was"
 
-    previous = [p for p in data[:-1] if p.get('y') is not None]
-    is_warmest = bool(previous) and all(latest['y'] > p['y'] for p in previous)
-    is_coldest = bool(previous) and all(latest['y'] < p['y'] for p in previous)
+    previous = [p for p in data[:-1] if p.get("y") is not None]
+    is_warmest = bool(previous) and all(latest["y"] > p["y"] for p in previous)
+    is_coldest = bool(previous) and all(latest["y"] < p["y"] for p in previous)
 
     # Check against last year first for consistency
-    last_year_temp = next((p['y'] for p in reversed(previous) if p['x'] == latest['x'] - 1), None)
-    
+    last_year_temp = next((p["y"] for p in reversed(previous) if p["x"] == latest["x"] - 1), None)
+
     # Generate mutually exclusive summaries to avoid contradictions
     if is_warmest:
         warm_summary = f"This {tense_warm_cold} the warmest {friendly_date} on record."
@@ -232,11 +235,11 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
         cold_summary = f"This {tense_warm_cold} the coldest {friendly_date} on record."
     elif last_year_temp is not None:
         # Compare against last year first
-        if latest['y'] > last_year_temp:
+        if latest["y"] > last_year_temp:
             # Warmer than last year - find last warmer year
-            last_warmer = next((p['x'] for p in reversed(previous) if p['y'] > latest['y']), None)
+            last_warmer = next((p["x"] for p in reversed(previous) if p["y"] > latest["y"]), None)
             if last_warmer:
-                years_since = int(latest['x'] - last_warmer)
+                years_since = int(latest["x"] - last_warmer)
                 if years_since == 2:
                     if is_above_average:
                         warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
@@ -248,14 +251,14 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
                     warm_summary = f"This {tense_warm_cold} the warmest {friendly_date} in {years_since} years."
             else:
                 if is_above_average:
-                    warm_summary = f"It's warmer than last year."
+                    warm_summary = "It's warmer than last year."
                 else:
-                    cold_summary = f"It's not as cold as last year."
-        elif latest['y'] < last_year_temp:
+                    cold_summary = "It's not as cold as last year."
+        elif latest["y"] < last_year_temp:
             # Colder than last year - find last colder year
-            last_colder = next((p['x'] for p in reversed(previous) if p['y'] < latest['y']), None)
+            last_colder = next((p["x"] for p in reversed(previous) if p["y"] < latest["y"]), None)
             if last_colder:
-                years_since = int(latest['x'] - last_colder)
+                years_since = int(latest["x"] - last_colder)
                 if years_since == 2:
                     if is_above_average:
                         warm_summary = f"It's not as warm as last year but warmer than {last_colder}."
@@ -267,9 +270,9 @@ def generate_summary(data: List[Dict[str, float]], date: datetime, period: str =
                     cold_summary = f"This {tense_warm_cold} the coldest {friendly_date} in {years_since} years."
             else:
                 if is_above_average:
-                    warm_summary = f"It's not as warm as last year."
+                    warm_summary = "It's not as warm as last year."
                 else:
-                    cold_summary = f"It's colder than last year."
+                    cold_summary = "It's colder than last year."
 
     # Generate period-appropriate language with correct tense and context
     if period == "daily":

@@ -1,7 +1,7 @@
 """Unit tests for LocationUsageTracker selection methods."""
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,6 +25,7 @@ def _today() -> str:
 # ---------------------------------------------------------------------------
 # record_selection
 # ---------------------------------------------------------------------------
+
 
 class TestRecordSelection:
     def test_increments_daily_key(self, tracker, mock_redis):
@@ -62,6 +63,7 @@ class TestRecordSelection:
 
     def test_sets_expire_on_daily_key(self, tracker, mock_redis):
         from config import POPULARITY_WINDOW_DAYS
+
         mock_redis.exists.return_value = 0
 
         tracker.record_selection("london", "user1")
@@ -73,6 +75,7 @@ class TestRecordSelection:
 # ---------------------------------------------------------------------------
 # get_popular_from_selections
 # ---------------------------------------------------------------------------
+
 
 class TestGetPopularFromSelections:
     def test_returns_empty_when_no_keys(self, tracker, mock_redis):
@@ -119,6 +122,7 @@ class TestGetPopularFromSelections:
 # ---------------------------------------------------------------------------
 # get_total_selections
 # ---------------------------------------------------------------------------
+
 
 class TestGetTotalSelections:
     def test_returns_zero_when_no_keys(self, tracker, mock_redis):

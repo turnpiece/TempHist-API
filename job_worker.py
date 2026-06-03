@@ -9,14 +9,15 @@ import asyncio
 import json
 import logging
 import os
-import redis
 import signal
 import sys
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Any, Dict
+
+import redis
 
 from cache.accessors import get_job_manager
-from jobs.manager import JobStatus, CACHE_TTL_JOB
+from jobs.manager import CACHE_TTL_JOB, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +31,16 @@ WORKER_HEARTBEAT_LOG_INTERVAL_CYCLES = 300  # Log heartbeat every 300 cycles (5 
 MAX_PENDING_AGE_SECONDS = 300  # Jobs pending longer than 5 minutes are expired unprocessed
 MAX_JOB_EXECUTION_SECONDS = int(os.environ.get("MAX_JOB_EXECUTION_SECONDS", "600"))  # Hard wall-clock cap per job
 
+
 class JobWorker:
     """Background worker for processing async jobs."""
-    
+
     def __init__(self, redis_client):
         self.redis = redis_client
         self.running = False
         self.job_queue_key = "job_queue"
         self.processing_key = "processing_jobs"
-        
+
     async def start(self):
         """Start the job worker."""
         self.running = True
@@ -50,7 +52,7 @@ class JobWorker:
             while self.running:
                 await self.process_jobs()
                 poll_count += 1
-                
+
                 # Update heartbeat periodically
                 if poll_count % WORKER_HEARTBEAT_INTERVAL_CYCLES == 0:
                     try:
@@ -70,31 +72,33 @@ class JobWorker:
         except Exception as e:
             logger.error(f"❌ Job worker error: {e}")
             import traceback
+
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
         finally:
             logger.info(f"🛑 Job worker stopped (processed {poll_count} poll cycles)")
-    
+
     def stop(self):
         """Stop the job worker."""
         self.running = False
         logger.info("📴 Job worker stop requested")
-    
+
     def _store_cache_data(self, cache_key: str, data: dict, data_type: str = "data") -> str:
         """Helper function to store data in cache and generate ETag."""
-        from cache.core import set_cache_value, CACHE_TTL_LONG
-        from datetime import timedelta
         import hashlib
-        
+        from datetime import timedelta
+
+        from cache.core import CACHE_TTL_LONG, set_cache_value
+
         try:
             # Convert TTL to timedelta (CACHE_TTL_LONG is in seconds)
             cache_duration = timedelta(seconds=CACHE_TTL_LONG)
-            
+
             # Use the same cache storage function as the main endpoints
             set_cache_value(cache_key, cache_duration, json.dumps(data), self.redis)
-            
+
             # Generate ETag using SHA256 (same as main endpoints)
             etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
-            
+
             logger.info(f"✅ Cached {data_type} for {cache_key}")
             return etag
 
@@ -108,29 +112,30 @@ class JobWorker:
             # Generate a simple ETag even if cache fails
             etag = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:32]
             return etag
-    
+
     async def process_jobs(self):
         """Process pending jobs from the queue."""
         try:
             # Get all pending jobs
             job_manager = get_job_manager()
-            
+
             # Find pending jobs (this is a simple implementation)
             # In production, you might want to use Redis Streams or a proper queue
             pending_jobs = await self.get_pending_jobs()
-            
+
             if pending_jobs:
                 logger.info(f"📋 Found {len(pending_jobs)} pending jobs")
-            
+
             for job_id in pending_jobs:
                 logger.info(f"🔄 Processing job: {job_id}")
                 await self.process_job(job_id, job_manager)
-                
+
         except Exception as e:
             logger.error(f"❌ Error processing jobs: {e}")
             import traceback
+
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
-    
+
     async def get_pending_jobs(self) -> list:
         """Get list of pending job IDs from the job queue.
 
@@ -148,7 +153,7 @@ class JobWorker:
                     job_id = self.redis.lindex(self.job_queue_key, i)
                     if job_id:
                         if isinstance(job_id, bytes):
-                            job_id = job_id.decode('utf-8')
+                            job_id = job_id.decode("utf-8")
 
                         job_key = f"job:{job_id}"
                         job_data = self.redis.get(job_key)
@@ -175,6 +180,7 @@ class JobWorker:
         except Exception as e:
             logger.error(f"❌ Error getting pending jobs: {e}")
             import traceback
+
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return []
 
@@ -196,7 +202,7 @@ class JobWorker:
                 if not job_id:
                     continue
                 if isinstance(job_id, bytes):
-                    job_id = job_id.decode('utf-8')
+                    job_id = job_id.decode("utf-8")
 
                 job_data = self.redis.get(f"job:{job_id}")
                 if not job_data:
@@ -208,13 +214,11 @@ class JobWorker:
                         updated_at_str = job.get("updated_at")
                         if updated_at_str:
                             age_seconds = (
-                                datetime.now(timezone.utc)
-                                - datetime.fromisoformat(updated_at_str)
+                                datetime.now(timezone.utc) - datetime.fromisoformat(updated_at_str)
                             ).total_seconds()
                             if age_seconds > 600:
                                 logger.warning(
-                                    f"⏰ Job {job_id} stuck in PROCESSING for "
-                                    f"{age_seconds:.0f}s, timing out"
+                                    f"⏰ Job {job_id} stuck in PROCESSING for {age_seconds:.0f}s, timing out"
                                 )
                                 job["status"] = JobStatus.ERROR
                                 job["error"] = "Job timed out after 10 minutes in PROCESSING state"
@@ -225,13 +229,10 @@ class JobWorker:
                         created_at_str = job.get("created_at")
                         if created_at_str:
                             age_seconds = (
-                                datetime.now(timezone.utc)
-                                - datetime.fromisoformat(created_at_str)
+                                datetime.now(timezone.utc) - datetime.fromisoformat(created_at_str)
                             ).total_seconds()
                             if age_seconds > MAX_PENDING_AGE_SECONDS:
-                                logger.warning(
-                                    f"⏰ Job {job_id} expired after {age_seconds:.0f}s in PENDING state"
-                                )
+                                logger.warning(f"⏰ Job {job_id} expired after {age_seconds:.0f}s in PENDING state")
                                 job["status"] = JobStatus.ERROR
                                 job["error"] = "Job expired: too long waiting in queue"
                                 job["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -272,7 +273,7 @@ class JobWorker:
             # Update job status to processing
             job_manager.update_job_status(job_id, JobStatus.PROCESSING)
             logger.info(f"🔄 Processing job: {job_id}")
-            
+
             # Get job details
             job_data = job_manager.get_job_status(job_id)
             if not job_data:
@@ -280,40 +281,38 @@ class JobWorker:
                 # Remove from queue if job doesn't exist
                 self.redis.lrem(self.job_queue_key, 1, job_id)
                 return
-            
+
             job_type = job_data.get("type")
             params = job_data.get("params", {})
             logger.info(f"📋 Job type: {job_type}, Params: {params}")
-            
+
             # Process based on job type, with a hard wall-clock cap so a single
             # slow location can never block the queue indefinitely.
             try:
                 if job_type == "record_computation":
-                    logger.info(f"🔢 Starting record computation...")
+                    logger.info("🔢 Starting record computation...")
                     coro = self.process_record_job(params)
                 elif job_type == "cache_warming":
-                    logger.info(f"🔥 Starting cache warming...")
+                    logger.info("🔥 Starting cache warming...")
                     coro = self.process_cache_warming_job(params)
                 else:
                     raise ValueError(f"Unknown job type: {job_type}")
                 result = await asyncio.wait_for(coro, timeout=MAX_JOB_EXECUTION_SECONDS)
             except asyncio.TimeoutError:
-                logger.error(
-                    f"⏰ Job {job_id} ({job_type}) timed out after {MAX_JOB_EXECUTION_SECONDS}s"
-                )
-                raise TimeoutError(
-                    f"Job exceeded {MAX_JOB_EXECUTION_SECONDS}s execution limit"
-                )
+                logger.error(f"⏰ Job {job_id} ({job_type}) timed out after {MAX_JOB_EXECUTION_SECONDS}s")
+                raise TimeoutError(f"Job exceeded {MAX_JOB_EXECUTION_SECONDS}s execution limit")
             except (ValueError, KeyError, TypeError) as data_error:
                 logger.error(f"❌ Data error for job {job_id}: {type(data_error).__name__}")
                 logger.error(f"❌ Error message: {str(data_error)}")
                 import traceback
+
                 logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
                 raise
             except (redis.RedisError, json.JSONDecodeError) as cache_error:
                 logger.error(f"❌ Cache error for job {job_id}: {type(cache_error).__name__}")
                 logger.error(f"❌ Error message: {str(cache_error)}")
                 import traceback
+
                 logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
                 raise
             except Exception as unexpected_error:
@@ -322,23 +321,25 @@ class JobWorker:
                 logger.error(f"❌ Error message: {str(unexpected_error)}")
                 logger.error(f"❌ Error repr: {repr(unexpected_error)}")
                 import traceback
+
                 logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
                 raise
-            
+
             # Calculate processing time
             end_time = datetime.now(timezone.utc)
             duration = (end_time - start_time).total_seconds()
-            
+
             # Store result and mark job as ready
             job_manager.update_job_status(job_id, JobStatus.READY, result)
             logger.info(f"✅ Job completed: {job_id} (took {duration:.2f}s)")
-            
+
             # Remove job from queue after successful completion
             self.redis.lrem(self.job_queue_key, 1, job_id)
-            
+
         except redis.RedisError as redis_error:
             # Redis errors - don't update job status if Redis is down
             import traceback
+
             error_traceback = traceback.format_exc()
             logger.error(f"❌ Redis error processing job {job_id}: {type(redis_error).__name__}: {str(redis_error)}")
             logger.error(f"❌ Full traceback:\n{error_traceback}")
@@ -347,58 +348,56 @@ class JobWorker:
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as data_error:
             # Data/validation errors - store in job status
             import traceback
+
             error_traceback = traceback.format_exc()
             error_details = {
                 "error_type": type(data_error).__name__,
                 "error_message": str(data_error),
                 "traceback": error_traceback,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
             logger.error(f"❌ Data error processing job {job_id}: {type(data_error).__name__}: {str(data_error)}")
             logger.error(f"❌ Full traceback:\n{error_traceback}")
 
             # Store detailed error in job status
-            job_manager.update_job_status(
-                job_id,
-                JobStatus.ERROR,
-                error=str(data_error),
-                error_details=error_details
-            )
+            job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(data_error), error_details=error_details)
             # Remove failed job from queue
             self.redis.lrem(self.job_queue_key, 1, job_id)
 
         except Exception as e:
             # Unexpected errors - log and store
             import traceback
+
             error_traceback = traceback.format_exc()
             error_details = {
                 "error_type": type(e).__name__,
                 "error_message": str(e),
                 "traceback": error_traceback,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
             logger.error(f"❌ Unexpected error processing job {job_id}: {type(e).__name__}: {str(e)}")
             logger.error(f"❌ Full traceback:\n{error_traceback}")
 
             # Store detailed error in job status
-            job_manager.update_job_status(
-                job_id,
-                JobStatus.ERROR,
-                error=str(e),
-                error_details=error_details
-            )
+            job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(e), error_details=error_details)
             # Remove failed job from queue
             self.redis.lrem(self.job_queue_key, 1, job_id)
-    
+
     async def process_record_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record computation job with per-year granularity."""
-        from routers.v1_records import get_temperature_data_v1, _extract_per_year_records, _get_ttl_for_current_year, _rebuild_full_response_from_values
-        from cache.keys import normalize_location_for_cache, rec_key, rec_etag_key
-        from cache.core import get_ttl_for_year, ETagGenerator
-        from utils.weather import get_year_range
         from fastapi import HTTPException
+
+        from cache.core import ETagGenerator, get_ttl_for_year
+        from cache.keys import normalize_location_for_cache, rec_etag_key, rec_key
+        from routers.v1_records import (
+            _extract_per_year_records,
+            _get_ttl_for_current_year,
+            _rebuild_full_response_from_values,
+            get_temperature_data_v1,
+        )
+        from utils.weather import get_year_range
 
         logger.info(f"🔍 Processing record job with params: {params}")
         scope = params.get("scope") or params.get("period")  # Support both for backward compatibility
@@ -408,7 +407,9 @@ class JobWorker:
         unit_group = params.get("unit_group", "celsius")
 
         if not all([scope, location, identifier]):
-            raise ValueError(f"Missing required params - scope: {scope}, location: {location}, identifier: {identifier}")
+            raise ValueError(
+                f"Missing required params - scope: {scope}, location: {location}, identifier: {identifier}"
+            )
 
         # Normalize location to slug
         slug = normalize_location_for_cache(location)
@@ -421,10 +422,7 @@ class JobWorker:
             # This happens naturally each January: the previous year's oldest
             # backfill jobs (e.g. year=1975 queued in 2025) become stale in 2026.
             if year < oldest_year or year > current_year:
-                logger.warning(
-                    f"⏭️ Skipping out-of-window year {year} "
-                    f"(valid range {oldest_year}–{current_year})"
-                )
+                logger.warning(f"⏭️ Skipping out-of-window year {year} (valid range {oldest_year}–{current_year})")
                 return {"skipped": True, "reason": f"year {year} outside window {oldest_year}–{current_year}"}
 
             logger.info(f"📅 Fetching data for year {year} only")
@@ -434,9 +432,12 @@ class JobWorker:
             # which also triggers inline VC API calls for every other missing year.
             # Current year is exempt — it may have sparse data still being collected.
             if year < current_year:
-                from routers.v1_records import parse_identifier as _parse_id, _resolve_anchor_date, WINDOW_DAYS
-                from utils.daily_temperature_store import get_daily_temperature_store
                 from datetime import timedelta as _td
+
+                from routers.v1_records import WINDOW_DAYS, _resolve_anchor_date
+                from routers.v1_records import parse_identifier as _parse_id
+                from utils.daily_temperature_store import get_daily_temperature_store
+
                 try:
                     _month, _day, _ = _parse_id(scope, identifier)
                     _anchor = _resolve_anchor_date(year, _month, _day)
@@ -461,10 +462,10 @@ class JobWorker:
                 full_data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
             except HTTPException as http_err:
                 raise ValueError(f"{http_err.detail}") from http_err
-            
+
             # Extract per-year records
             per_year_records = _extract_per_year_records(full_data)
-            
+
             if year not in per_year_records:
                 logger.warning(f"⏭️ No data available for year {year} at {location}, skipping")
                 # VC confirmed no data for this year. Persist a skip key so
@@ -479,23 +480,23 @@ class JobWorker:
                 except Exception:
                     pass
                 return {"skipped": True, "reason": f"no data available for year {year}"}
-            
+
             # Get the specific year's record
             year_record = per_year_records[year]
-            
+
             # Determine TTL based on data age
             if year < current_year:
                 ttl = get_ttl_for_year(year)
             else:
                 ttl = _get_ttl_for_current_year(scope)
-            
+
             # Generate cache keys
             year_key = rec_key(scope, slug, identifier, year)
             etag_key = rec_etag_key(scope, slug, identifier, year)
-            
+
             # Generate ETag
             etag = ETagGenerator.generate_etag(year_record)
-            
+
             # Skip caching current-year results when coverage is below 80% to avoid poisoning
             # the cache with a warm-biased average computed before cold months are backfilled.
             skip_cache = False
@@ -505,14 +506,13 @@ class JobWorker:
                 if year_detail and year_detail.get("coverage_ratio", 1.0) < 0.8:
                     skip_cache = True
                     logger.info(
-                        f"⏭️ Skipping cache for current year {year}: "
-                        f"coverage {year_detail['coverage_ratio']:.1%} < 80%"
+                        f"⏭️ Skipping cache for current year {year}: coverage {year_detail['coverage_ratio']:.1%} < 80%"
                     )
 
             # Store per-year record
             if not skip_cache:
                 try:
-                    json_data = json.dumps(year_record, sort_keys=True, separators=(',', ':'))
+                    json_data = json.dumps(year_record, sort_keys=True, separators=(",", ":"))
                     self.redis.setex(year_key, ttl, json_data)
                     self.redis.setex(etag_key, ttl, etag)
                     logger.info(f"✅ Cached per-year record: {year_key} (TTL: {ttl}s)")
@@ -522,7 +522,7 @@ class JobWorker:
                 except (json.JSONEncodeError, TypeError) as serialize_error:
                     logger.warning(f"Serialization error caching per-year record {year_key}: {serialize_error}")
                     raise
-            
+
             # Rebuild single-year result in the requested unit for the response
             month, day = int(identifier.split("-")[0]), int(identifier.split("-")[1])
             years = get_year_range(current_year)
@@ -534,7 +534,7 @@ class JobWorker:
                 "etag": etag,
                 "year": year,
                 "data": result_data,
-                "computed_at": datetime.now(timezone.utc).isoformat()
+                "computed_at": datetime.now(timezone.utc).isoformat(),
             }
         else:
             # Default behavior: if no year specified, fetch all available years for the identifier
@@ -551,19 +551,14 @@ class JobWorker:
                 # Use pipeline to batch all cache operations
                 pipeline = self.redis.pipeline()
 
-                coverage_by_year = {
-                    d["year"]: d for d in data.get("coverage", {}).get("per_year", [])
-                }
+                coverage_by_year = {d["year"]: d for d in data.get("coverage", {}).get("per_year", [])}
 
                 for y, record_data in per_year_records.items():
                     if y == current_year:
                         detail = coverage_by_year.get(y, {})
                         ratio = detail.get("coverage_ratio", 1.0)
                         if ratio < 0.8:
-                            logger.info(
-                                f"⏭️ Skipping cache for current year {y}: "
-                                f"coverage {ratio:.1%} < 80%"
-                            )
+                            logger.info(f"⏭️ Skipping cache for current year {y}: coverage {ratio:.1%} < 80%")
                             continue
 
                     year_key = rec_key(scope, slug, identifier, y)
@@ -575,7 +570,7 @@ class JobWorker:
                         ttl = _get_ttl_for_current_year(scope)
 
                     etag = ETagGenerator.generate_etag(record_data)
-                    json_data = json.dumps(record_data, sort_keys=True, separators=(',', ':'))
+                    json_data = json.dumps(record_data, sort_keys=True, separators=(",", ":"))
 
                     # Add to pipeline instead of executing immediately
                     pipeline.setex(year_key, ttl, json_data)
@@ -603,39 +598,39 @@ class JobWorker:
                 "cache_keys": [rec_key(scope, slug, identifier, y) for y in per_year_records.keys()],
                 "years_cached": list(per_year_records.keys()),
                 "data": result_data,
-                "computed_at": datetime.now(timezone.utc).isoformat()
+                "computed_at": datetime.now(timezone.utc).isoformat(),
             }
-    
+
     async def process_cache_warming_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a cache warming job."""
         from cache.accessors import get_cache_warmer
-        
+
         logger.info(f"🔥 Processing cache warming job with params: {params}")
-        
+
         # Get cache warmer instance
         cache_warmer = get_cache_warmer()
         if not cache_warmer:
             raise ValueError("Cache warmer not available")
-        
+
         # Determine warming scope
         locations = params.get("locations", [])
         warming_type = params.get("type", "all")  # "all", "popular", "specific"
-        
+
         results = {
             "job_type": "cache_warming",
             "warming_type": warming_type,
             "locations_requested": locations,
             "started_at": datetime.now(timezone.utc).isoformat(),
-            "results": {}
+            "results": {},
         }
-        
+
         try:
             if warming_type == "all":
                 # Warm all popular locations
                 logger.info("🔥 Warming all popular locations...")
                 warming_result = await cache_warmer.warm_all_locations()
                 results["results"]["all_locations"] = warming_result
-                
+
             elif warming_type == "popular":
                 # Warm only popular locations (from usage tracking)
                 logger.info("🔥 Warming popular locations...")
@@ -643,27 +638,27 @@ class JobWorker:
                 for location in popular_locations:
                     location_result = await cache_warmer.warm_location_data(location)
                     results["results"][location] = location_result
-                    
+
             elif warming_type == "specific":
                 # Warm specific locations
                 if not locations:
                     raise ValueError("No locations specified for specific warming")
-                
+
                 logger.info(f"🔥 Warming specific locations: {locations}")
                 for location in locations:
                     location_result = await cache_warmer.warm_location_data(location)
                     results["results"][location] = location_result
             else:
                 raise ValueError(f"Unknown warming type: {warming_type}")
-            
+
             results["status"] = "completed"
             results["completed_at"] = datetime.now(timezone.utc).isoformat()
-            
+
             # Calculate summary statistics
             total_endpoints = 0
             total_errors = 0
             successful_locations = 0
-            
+
             for location, result in results["results"].items():
                 if isinstance(result, dict):
                     if "warmed_endpoints" in result:
@@ -671,14 +666,14 @@ class JobWorker:
                         total_errors += len(result.get("errors", []))
                         if result.get("warmed_endpoints"):
                             successful_locations += 1
-            
+
             results["summary"] = {
                 "total_locations": len(results["results"]),
                 "successful_locations": successful_locations,
                 "total_endpoints_warmed": total_endpoints,
-                "total_errors": total_errors
+                "total_errors": total_errors,
             }
-            
+
             logger.info(f"✅ Cache warming completed: {successful_locations} locations, {total_endpoints} endpoints")
 
         except (ValueError, KeyError, TypeError) as data_error:
@@ -700,11 +695,13 @@ class JobWorker:
             results["error"] = f"Unexpected error: {str(e)}"
             results["failed_at"] = datetime.now(timezone.utc).isoformat()
             raise
-        
+
         return results
+
 
 # Global worker instance
 worker: JobWorker = None
+
 
 def initialize_worker(redis_client):
     """Initialize the job worker."""
@@ -712,11 +709,13 @@ def initialize_worker(redis_client):
     worker = JobWorker(redis_client)
     logger.info("Job worker initialized")
 
+
 def get_worker() -> JobWorker:
     """Get the global worker instance."""
     if worker is None:
         raise RuntimeError("Worker not initialized. Call initialize_worker() first.")
     return worker
+
 
 async def start_background_worker():
     """Start the background job worker."""
@@ -726,38 +725,39 @@ async def start_background_worker():
     except Exception as e:
         logger.error(f"Background worker error: {e}")
 
+
 def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown."""
+
     def signal_handler(signum, frame):
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         if worker:
             worker.stop()
         sys.exit(0)
-    
+
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+
 async def main():
     """Main function to run the job worker."""
-    import redis
     import os
-    
+
+    import redis
+
     # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
     # Reduce verbosity of noisy third-party loggers
-    logging.getLogger('httpcore').setLevel(logging.WARNING)
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
-    
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+
     # Connect to Redis
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     redis_client = redis.from_url(redis_url, decode_responses=True)
-    
+
     # Test Redis connection
     try:
         redis_client.ping()
@@ -765,21 +765,23 @@ async def main():
     except Exception as e:
         logger.error(f"❌ Failed to connect to Redis: {e}")
         return
-    
+
     # Initialize cache system first (required for job manager)
     from cache.accessors import initialize_cache
+
     initialize_cache(redis_client)
     logger.info("✅ Cache system initialized")
-    
+
     # Initialize worker
     initialize_worker(redis_client)
-    
+
     # Setup signal handlers
     setup_signal_handlers()
-    
+
     # Start worker
     logger.info("🚀 Starting job worker...")
     await start_background_worker()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

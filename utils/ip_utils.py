@@ -1,6 +1,8 @@
 """IP address utility functions."""
+
 from fastapi import Request
-from config import IP_WHITELIST, IP_BLACKLIST
+
+from config import IP_BLACKLIST, IP_WHITELIST
 
 
 def get_client_ip(request: Request) -> str:
@@ -10,12 +12,12 @@ def get_client_ip(request: Request) -> str:
     if forwarded_for:
         # Take the first IP in the chain
         return forwarded_for.split(",")[0].strip()
-    
+
     # Check for real IP header
     real_ip = request.headers.get("X-Real-IP")
     if real_ip:
         return real_ip
-    
+
     # Fallback to direct connection
     return request.client.host if request.client else "unknown"
 

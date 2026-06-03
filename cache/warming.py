@@ -11,17 +11,21 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta, date as dt_date
-from typing import Dict, List, Optional
+from datetime import date as dt_date
+from datetime import datetime, timedelta
+from typing import Dict, List
 
 import aiohttp
 import redis
 
-from config import (
-    DEBUG, BASE_URL, API_ACCESS_TOKEN, USAGE_TRACKING_ENABLED,
-    POPULARITY_WINDOW_DAYS,
-)
 from cache.keys import normalize_location_for_cache
+from config import (
+    API_ACCESS_TOKEN,
+    BASE_URL,
+    DEBUG,
+    POPULARITY_WINDOW_DAYS,
+    USAGE_TRACKING_ENABLED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,24 +33,25 @@ logger = logging.getLogger(__name__)
 # Cache warming configuration
 # ---------------------------------------------------------------------------
 
-CACHE_WARMING_ENABLED              = os.getenv("CACHE_WARMING_ENABLED", "true").lower() == "true"
-CACHE_WARMING_INTERVAL_HOURS       = int(os.getenv("CACHE_WARMING_INTERVAL_HOURS", "4"))
-CACHE_WARMING_DAYS_BACK            = int(os.getenv("CACHE_WARMING_DAYS_BACK", "7"))
-CACHE_WARMING_CONCURRENT_REQUESTS  = int(os.getenv("CACHE_WARMING_CONCURRENT_REQUESTS", "3"))
-CACHE_WARMING_MAX_LOCATIONS        = int(os.getenv("CACHE_WARMING_MAX_LOCATIONS", "200"))
+CACHE_WARMING_ENABLED = os.getenv("CACHE_WARMING_ENABLED", "true").lower() == "true"
+CACHE_WARMING_INTERVAL_HOURS = int(os.getenv("CACHE_WARMING_INTERVAL_HOURS", "4"))
+CACHE_WARMING_DAYS_BACK = int(os.getenv("CACHE_WARMING_DAYS_BACK", "7"))
+CACHE_WARMING_CONCURRENT_REQUESTS = int(os.getenv("CACHE_WARMING_CONCURRENT_REQUESTS", "3"))
+CACHE_WARMING_MAX_LOCATIONS = int(os.getenv("CACHE_WARMING_MAX_LOCATIONS", "200"))
 
 # ---------------------------------------------------------------------------
 # Cache statistics configuration
 # ---------------------------------------------------------------------------
 
-CACHE_STATS_ENABLED         = os.getenv("CACHE_STATS_ENABLED", "true").lower() == "true"
+CACHE_STATS_ENABLED = os.getenv("CACHE_STATS_ENABLED", "true").lower() == "true"
 CACHE_STATS_RETENTION_HOURS = int(os.getenv("CACHE_STATS_RETENTION_HOURS", "24"))
-CACHE_HEALTH_THRESHOLD      = float(os.getenv("CACHE_HEALTH_THRESHOLD", "0.7"))
+CACHE_HEALTH_THRESHOLD = float(os.getenv("CACHE_HEALTH_THRESHOLD", "0.7"))
 
 
 # ---------------------------------------------------------------------------
 # CacheWarmer
 # ---------------------------------------------------------------------------
+
 
 class CacheWarmer:
     """Proactive cache warming for popular locations and recent dates."""
@@ -87,9 +92,7 @@ class CacheWarmer:
             for loc in strings:
                 add_location(loc)
             if DEBUG and strings:
-                logger.info(
-                    f"🔥 CACHE WARMING: {len(locations)} locations from selections signal"
-                )
+                logger.info(f"🔥 CACHE WARMING: {len(locations)} locations from selections signal")
 
         # Pad with preapproved list when signal is absent or insufficient.
         if len(locations) < CACHE_WARMING_MAX_LOCATIONS:
@@ -97,9 +100,7 @@ class CacheWarmer:
             for loc in preapproved:
                 add_location(loc)
             if DEBUG:
-                logger.info(
-                    f"🔥 CACHE WARMING: padded to {len(locations)} with preapproved list"
-                )
+                logger.info(f"🔥 CACHE WARMING: padded to {len(locations)} with preapproved list")
 
         final_locations = locations[:CACHE_WARMING_MAX_LOCATIONS]
         if DEBUG:
@@ -116,13 +117,13 @@ class CacheWarmer:
                 project_root = os.path.dirname(project_root)
 
             data_file = os.path.join(project_root, "data", "preapproved_locations.json")
-            with open(data_file, 'r', encoding='utf-8') as f:
+            with open(data_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             locations = []
             seen: set = set()
             for item in data:
-                if 'name' in item and 'admin1' in item and 'country_name' in item:
+                if "name" in item and "admin1" in item and "country_name" in item:
                     full_name = f"{item['name']}, {item['admin1']}, {item['country_name']}"
                     normalized = normalize_location_for_cache(full_name)
                     if normalized in seen:
@@ -152,7 +153,7 @@ class CacheWarmer:
         for days_back in range(CACHE_WARMING_DAYS_BACK):
             d = today - timedelta(days=days_back)
             dates.append(d.strftime("%Y-%m-%d"))
-        current_year  = today.year
+        current_year = today.year
         current_month = today.month
         for day in range(1, 32):
             try:
@@ -286,7 +287,11 @@ class CacheWarmer:
                             headers={"Authorization": f"Bearer {auth_token}"},
                         ) as resp:
                             if DEBUG:
-                                msg = "✅ PREAPPROVED ENDPOINT: Warmed successfully" if resp.status == 200 else f"⚠️  PREAPPROVED ENDPOINT: HTTP {resp.status}"
+                                msg = (
+                                    "✅ PREAPPROVED ENDPOINT: Warmed successfully"
+                                    if resp.status == 200
+                                    else f"⚠️  PREAPPROVED ENDPOINT: HTTP {resp.status}"
+                                )
                                 logger.info(msg)
                 else:
                     logger.warning("⚠️  PREAPPROVED ENDPOINT: No authentication token available")
@@ -319,18 +324,25 @@ class CacheWarmer:
                     total_errors += 1
 
             duration = time.time() - start_time
-            self.warming_stats.update({
-                "total_warmed": len(locations),
-                "successful_warmed": successful_locations,
-                "failed_warmed": len(locations) - successful_locations,
-                "last_warming_duration": duration,
-            })
+            self.warming_stats.update(
+                {
+                    "total_warmed": len(locations),
+                    "successful_warmed": successful_locations,
+                    "failed_warmed": len(locations) - successful_locations,
+                    "last_warming_duration": duration,
+                }
+            )
             self.last_warming_time = datetime.now()
             try:
-                self.redis_client.set("cache_warming:stats", json.dumps({
-                    "last_warming_time": self.last_warming_time.isoformat(),
-                    **self.warming_stats,
-                }))
+                self.redis_client.set(
+                    "cache_warming:stats",
+                    json.dumps(
+                        {
+                            "last_warming_time": self.last_warming_time.isoformat(),
+                            **self.warming_stats,
+                        }
+                    ),
+                )
             except Exception:
                 pass
 
@@ -398,6 +410,7 @@ class CacheWarmer:
 # ---------------------------------------------------------------------------
 # CacheStats
 # ---------------------------------------------------------------------------
+
 
 class CacheStats:
     """Track and analyze cache performance statistics."""
@@ -549,25 +562,33 @@ class CacheStats:
             stats = self.stats["hourly_stats"].get(hour_key)
             if stats:
                 total = stats["hits"] + stats["misses"]
-                hourly_data.append({
-                    "hour": hour_key,
-                    "timestamp": hour_key * 3600,
-                    "total_requests": stats["total"],
-                    "cache_hits": stats["hits"],
-                    "cache_misses": stats["misses"],
-                    "cache_errors": stats["errors"],
-                    "hit_rate": stats["hits"] / total if total > 0 else 0.0,
-                })
+                hourly_data.append(
+                    {
+                        "hour": hour_key,
+                        "timestamp": hour_key * 3600,
+                        "total_requests": stats["total"],
+                        "cache_hits": stats["hits"],
+                        "cache_misses": stats["misses"],
+                        "cache_errors": stats["errors"],
+                        "hit_rate": stats["hits"] / total if total > 0 else 0.0,
+                    }
+                )
             else:
-                hourly_data.append({
-                    "hour": hour_key, "timestamp": hour_key * 3600,
-                    "total_requests": 0, "cache_hits": 0, "cache_misses": 0,
-                    "cache_errors": 0, "hit_rate": 0.0,
-                })
+                hourly_data.append(
+                    {
+                        "hour": hour_key,
+                        "timestamp": hour_key * 3600,
+                        "total_requests": 0,
+                        "cache_hits": 0,
+                        "cache_misses": 0,
+                        "cache_errors": 0,
+                        "hit_rate": 0.0,
+                    }
+                )
         return list(reversed(hourly_data))
 
     def get_cache_health(self) -> Dict:
-        hit_rate   = self.get_hit_rate()
+        hit_rate = self.get_hit_rate()
         error_rate = self.get_error_rate()
         if error_rate > 0.1:
             health_status = "unhealthy"
@@ -625,6 +646,7 @@ class CacheStats:
 # Background warming loop
 # ---------------------------------------------------------------------------
 
+
 async def scheduled_cache_warming(cache_warmer: CacheWarmer):
     """Background task that schedules cache warming jobs periodically."""
     if not CACHE_WARMING_ENABLED or not cache_warmer:
@@ -638,16 +660,20 @@ async def scheduled_cache_warming(cache_warmer: CacheWarmer):
                 if DEBUG:
                     logger.info("🕐 SCHEDULED CACHE WARMING: Creating cache warming job")
                 from cache.accessors import get_job_manager  # lazy to avoid circular
+
                 job_manager = get_job_manager()
                 if job_manager:
-                    job_id = job_manager.create_job("cache_warming", {
-                        "type": "all",
-                        "locations": [],
-                        "scheduled": True,
-                        "scheduled_at": __import__("datetime").datetime.now(
-                            __import__("datetime").timezone.utc
-                        ).isoformat(),
-                    })
+                    job_id = job_manager.create_job(
+                        "cache_warming",
+                        {
+                            "type": "all",
+                            "locations": [],
+                            "scheduled": True,
+                            "scheduled_at": __import__("datetime")
+                            .datetime.now(__import__("datetime").timezone.utc)
+                            .isoformat(),
+                        },
+                    )
                     logger.info(f"✅ Cache warming job created: {job_id}")
                 else:
                     logger.warning("⚠️  Job manager not available, falling back to direct warming")

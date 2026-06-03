@@ -3,9 +3,11 @@
 Admin script to clear the job queue.
 Can be run directly or imported as a module.
 """
-import redis
+
 import os
 import sys
+
+import redis
 
 
 def clear_job_queue(redis_url: str = None) -> dict:
@@ -30,11 +32,7 @@ def clear_job_queue(redis_url: str = None) -> dict:
         queue_length = r.llen("job_queue")
 
         if queue_length == 0:
-            return {
-                "status": "success",
-                "message": "Queue was already empty",
-                "jobs_cleared": 0
-            }
+            return {"status": "success", "message": "Queue was already empty", "jobs_cleared": 0}
 
         # Clear the queue
         r.delete("job_queue")
@@ -46,19 +44,13 @@ def clear_job_queue(redis_url: str = None) -> dict:
             "status": "success",
             "message": f"Cleared {queue_length} jobs from queue",
             "jobs_cleared": queue_length,
-            "remaining_jobs": new_length
+            "remaining_jobs": new_length,
         }
 
     except redis.ConnectionError as e:
-        return {
-            "status": "error",
-            "message": f"Redis connection error: {str(e)}"
-        }
+        return {"status": "error", "message": f"Redis connection error: {str(e)}"}
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error: {str(e)}"
-        }
+        return {"status": "error", "message": f"Error: {str(e)}"}
 
 
 if __name__ == "__main__":
@@ -78,10 +70,10 @@ if __name__ == "__main__":
     if "remaining_jobs" in result:
         remaining = result["remaining_jobs"]
         if remaining == 0:
-            print(f"Verification: ✓ Queue is empty")
+            print("Verification: ✓ Queue is empty")
         else:
             print(f"Verification: ✗ {remaining} jobs still remain — manual inspection required")
             sys.exit(1)
 
-    if result['status'] == 'error':
+    if result["status"] == "error":
         sys.exit(1)

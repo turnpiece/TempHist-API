@@ -11,34 +11,33 @@ Tests cover:
 """
 
 import json
-import pytest
-import redis
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi.testclient import TestClient
+import pytest
+import redis
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from main import app as main_app
 
 # Import the router and models
 from routers.locations import (
-    router,
+    EU_MEMBER_CODES,
     LocationItem,
-    initialize_locations_data,
-    get_cache_key,
-    get_popular_cache_key,
-    validate_country_code,
-    resolve_country_code,
-    validate_limit,
-    generate_etag,
-    filter_locations,
-    convert_image_urls,
+    SelectionRequest,
     _find_preapproved_id,
     _resolve_canonical_id,
-    SelectionRequest,
-    EU_MEMBER_CODES,
-    COUNTRY_CODE_ALIASES,
+    convert_image_urls,
+    filter_locations,
+    generate_etag,
+    get_cache_key,
+    get_popular_cache_key,
+    initialize_locations_data,
+    resolve_country_code,
+    router,
+    validate_country_code,
+    validate_limit,
 )
 
 # Test data
@@ -56,9 +55,9 @@ SAMPLE_LOCATIONS = [
         "tier": "global",
         "imageUrl": {
             "webp": "http://localhost:8000/data/locations/processed/london.webp",
-            "jpeg": "http://localhost:8000/data/locations/processed/london.jpg"
+            "jpeg": "http://localhost:8000/data/locations/processed/london.jpg",
         },
-        "imageAlt": "London Eye and Thames river"
+        "imageAlt": "London Eye and Thames river",
     },
     {
         "id": "new_york",
@@ -73,9 +72,9 @@ SAMPLE_LOCATIONS = [
         "tier": "global",
         "imageUrl": {
             "webp": "http://localhost:8000/data/locations/processed/new-york.webp",
-            "jpeg": "http://localhost:8000/data/locations/processed/new-york.jpg"
+            "jpeg": "http://localhost:8000/data/locations/processed/new-york.jpg",
         },
-        "imageAlt": "New York skyline"
+        "imageAlt": "New York skyline",
     },
     {
         "id": "paris",
@@ -90,11 +89,12 @@ SAMPLE_LOCATIONS = [
         "tier": "global",
         "imageUrl": {
             "webp": "http://localhost:8000/data/locations/processed/paris.webp",
-            "jpeg": "http://localhost:8000/data/locations/processed/paris.jpg"
+            "jpeg": "http://localhost:8000/data/locations/processed/paris.jpg",
         },
-        "imageAlt": "Paris cityscape"
-    }
+        "imageAlt": "Paris cityscape",
+    },
 ]
+
 
 @pytest.fixture
 def app():
@@ -103,10 +103,12 @@ def app():
     app.include_router(router)
     return app
 
+
 @pytest.fixture
 def client(app):
     """Create test client."""
     return TestClient(app)
+
 
 @pytest.fixture
 def mock_redis():
@@ -116,29 +118,34 @@ def mock_redis():
     mock_redis.setex.return_value = True
     return mock_redis
 
+
 @pytest.fixture
 def sample_locations():
     """Sample location data for testing."""
     return [LocationItem(**loc) for loc in SAMPLE_LOCATIONS]
 
+
 @pytest.fixture
 def mock_locations_data(sample_locations, mock_redis):
     """Mock the global locations data."""
-    with patch('routers.locations.locations_data', sample_locations), \
-         patch('routers.locations.locations_etag', '"test-etag"'), \
-         patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-         patch('routers.locations.redis_client', mock_redis):
+    with (
+        patch("routers.locations.locations_data", sample_locations),
+        patch("routers.locations.locations_etag", '"test-etag"'),
+        patch("routers.locations.locations_last_modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
+        patch("routers.locations.redis_client", mock_redis),
+    ):
         yield
+
 
 class TestLocationItem:
     """Test LocationItem model validation."""
-    
+
     def test_valid_location_item(self):
         """Test valid location item creation."""
         location = LocationItem(**SAMPLE_LOCATIONS[0])
         assert location.id == "london"
         assert location.country_code == "GB"
-    
+
     def test_invalid_country_code(self):
         """Test invalid country code validation."""
         with pytest.raises(ValueError, match="Country code must be a 2-letter ISO 3166-1 alpha-2 code"):
@@ -153,11 +160,8 @@ class TestLocationItem:
                 longitude=0.0,
                 timezone="UTC",
                 tier="test",
-                imageUrl={
-                    "webp": "http://localhost:8000/test.webp",
-                    "jpeg": "http://localhost:8000/test.jpg"
-                },
-                imageAlt="Test image"
+                imageUrl={"webp": "http://localhost:8000/test.webp", "jpeg": "http://localhost:8000/test.jpg"},
+                imageAlt="Test image",
             )
 
     def test_location_with_images(self):
@@ -167,21 +171,22 @@ class TestLocationItem:
         assert location.imageUrl.jpeg == "http://localhost:8000/data/locations/processed/london.jpg"
         assert location.imageAlt == "London Eye and Thames river"
 
+
 class TestUtilityFunctions:
     """Test utility functions."""
-    
+
     def test_validate_country_code(self):
         """Test country code validation."""
         assert validate_country_code("US") == (True, None)
         assert validate_country_code("GB") == (True, None)
-        assert validate_country_code("EU") == (True, None)   # special grouping
-        assert validate_country_code("UK") == (True, None)   # alias for GB
+        assert validate_country_code("EU") == (True, None)  # special grouping
+        assert validate_country_code("UK") == (True, None)  # alias for GB
 
         valid, msg = validate_country_code("INVALID")
         assert valid is False
         assert msg is not None
 
-        valid, msg = validate_country_code("XX")             # format ok, not a real code
+        valid, msg = validate_country_code("XX")  # format ok, not a real code
         assert valid is False
         assert "Unknown country code" in msg
 
@@ -191,31 +196,31 @@ class TestUtilityFunctions:
         assert resolve_country_code("UK") == "GB"
         assert resolve_country_code("EU") == EU_MEMBER_CODES
         assert isinstance(resolve_country_code("EU"), frozenset)
-    
+
     def test_validate_limit(self):
         """Test limit validation."""
         assert validate_limit(1) == True
         assert validate_limit(500) == True
         assert validate_limit(0) == False
         assert validate_limit(501) == False
-    
+
     def test_generate_etag(self):
         """Test ETag generation."""
         etag1 = generate_etag("test data")
         etag2 = generate_etag("test data")
         etag3 = generate_etag("different data")
-        
+
         assert etag1 == etag2  # Same data should produce same ETag
         assert etag1 != etag3  # Different data should produce different ETag
         assert etag1.startswith('"') and etag1.endswith('"')  # Should be quoted
-    
+
     def test_get_cache_key(self):
         """Test cache key generation."""
         assert get_cache_key() == "preapproved:v1:all"
         assert get_cache_key("US") == "preapproved:v1:country:US"
         assert get_cache_key(tier="global") == "preapproved:v1:tier:global"
         assert get_cache_key("US", "global") == "preapproved:v1:country:US:tier:global"
-    
+
     def test_filter_locations(self, sample_locations):
         """Test location filtering."""
         # No filters
@@ -248,26 +253,21 @@ class TestUtilityFunctions:
     def test_convert_image_urls(self):
         """Test image URL conversion from relative to full URLs."""
         # Test relative URLs
-        relative_urls = {
-            "webp": "/data/locations/processed/test.webp",
-            "jpeg": "/data/locations/processed/test.jpg"
-        }
+        relative_urls = {"webp": "/data/locations/processed/test.webp", "jpeg": "/data/locations/processed/test.jpg"}
         converted = convert_image_urls(relative_urls)
         assert converted["webp"] == "http://localhost:8000/data/locations/processed/test.webp"
         assert converted["jpeg"] == "http://localhost:8000/data/locations/processed/test.jpg"
 
         # Test already full URLs
-        full_urls = {
-            "webp": "https://example.com/test.webp",
-            "jpeg": "https://example.com/test.jpg"
-        }
+        full_urls = {"webp": "https://example.com/test.webp", "jpeg": "https://example.com/test.jpg"}
         converted = convert_image_urls(full_urls)
         assert converted["webp"] == "https://example.com/test.webp"
         assert converted["jpeg"] == "https://example.com/test.jpg"
 
+
 class TestPreapprovedLocationsEndpoint:
     """Test the main preapproved locations endpoint."""
-    
+
     def test_get_all_locations(self, client, mock_locations_data):
         """Test getting all locations."""
         response = client.get("/v1/locations/preapproved")
@@ -291,49 +291,49 @@ class TestPreapprovedLocationsEndpoint:
         assert "Cache-Control" in response.headers
         assert "ETag" in response.headers
         assert "Last-Modified" in response.headers
-    
+
     def test_filter_by_country_code(self, client, mock_locations_data):
         """Test filtering by country code."""
         response = client.get("/v1/locations/preapproved?country_code=US")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["count"] == 1
         assert data["locations"][0]["country_code"] == "US"
-    
+
     def test_filter_by_tier(self, client, mock_locations_data):
         """Test filtering by tier."""
         response = client.get("/v1/locations/preapproved?tier=global")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["count"] == 3
         for location in data["locations"]:
             assert location["tier"] == "global"
-    
+
     def test_combined_filters(self, client, mock_locations_data):
         """Test combined filters."""
         response = client.get("/v1/locations/preapproved?country_code=GB&tier=global")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["count"] == 1
         assert data["locations"][0]["country_code"] == "GB"
         assert data["locations"][0]["tier"] == "global"
-    
+
     def test_limit_parameter(self, client, mock_locations_data):
         """Test limit parameter."""
         response = client.get("/v1/locations/preapproved?limit=2")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["count"] == 2
         assert len(data["locations"]) == 2
-    
+
     def test_invalid_country_code(self, client, mock_locations_data):
         response = client.get("/v1/locations/preapproved?country_code=INVALID")
         assert response.status_code == 400
@@ -371,95 +371,93 @@ class TestPreapprovedLocationsEndpoint:
         response = client.get("/v1/locations/preapproved?limit=501")
         assert response.status_code == 422
 
+
 class TestCaching:
     """Test caching behavior."""
-    
+
     def test_etag_not_modified(self, client, mock_locations_data):
         """Test ETag not modified response."""
         # First request to get ETag
         response1 = client.get("/v1/locations/preapproved")
         assert response1.status_code == 200
         etag = response1.headers["ETag"]
-        
+
         # Second request with If-None-Match
-        response2 = client.get(
-            "/v1/locations/preapproved",
-            headers={"If-None-Match": etag}
-        )
+        response2 = client.get("/v1/locations/preapproved", headers={"If-None-Match": etag})
         assert response2.status_code == 304
-    
+
     def test_last_modified_not_modified(self, client, mock_locations_data):
         """Test Last-Modified not modified response."""
         # First request to get Last-Modified
         response1 = client.get("/v1/locations/preapproved")
         assert response1.status_code == 200
         last_modified = response1.headers["Last-Modified"]
-        
+
         # Second request with If-Modified-Since
-        response2 = client.get(
-            "/v1/locations/preapproved",
-            headers={"If-Modified-Since": last_modified}
-        )
+        response2 = client.get("/v1/locations/preapproved", headers={"If-Modified-Since": last_modified})
         assert response2.status_code == 304
-    
+
     def test_redis_cache_miss(self, client, mock_redis, sample_locations):
         """Test Redis cache miss behavior."""
-        with patch('routers.locations.locations_data', sample_locations), \
-             patch('routers.locations.locations_etag', '"test-etag"'), \
-             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations.redis_client', mock_redis):
-            
+        with (
+            patch("routers.locations.locations_data", sample_locations),
+            patch("routers.locations.locations_etag", '"test-etag"'),
+            patch("routers.locations.locations_last_modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
+            patch("routers.locations.redis_client", mock_redis),
+        ):
             mock_redis.get.return_value = None  # Cache miss
-            
+
             response = client.get("/v1/locations/preapproved")
-            
+
             assert response.status_code == 200
             # Should have called setex to cache the result
             mock_redis.setex.assert_called_once()
-    
+
     def test_redis_cache_hit(self, client, mock_redis, sample_locations):
         """Test Redis cache hit behavior."""
         cached_data = {
             "version": 1,
             "count": 3,
             "generated_at": datetime.now().isoformat(),
-            "locations": [loc.model_dump() for loc in sample_locations]
+            "locations": [loc.model_dump() for loc in sample_locations],
         }
-        
-        with patch('routers.locations.locations_data', sample_locations), \
-             patch('routers.locations.locations_etag', '"test-etag"'), \
-             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations.redis_client', mock_redis):
-            
+
+        with (
+            patch("routers.locations.locations_data", sample_locations),
+            patch("routers.locations.locations_etag", '"test-etag"'),
+            patch("routers.locations.locations_last_modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
+            patch("routers.locations.redis_client", mock_redis),
+        ):
             mock_redis.get.return_value = json.dumps(cached_data, default=str)
-            
+
             response = client.get("/v1/locations/preapproved")
-            
+
             assert response.status_code == 200
             # Should not have called setex since we got from cache
             mock_redis.setex.assert_not_called()
 
+
 class TestRateLimiting:
     """Test rate limiting behavior."""
-    
+
     @pytest.mark.asyncio
     async def test_rate_limit_exceeded(self):
         """Test rate limit exceeded scenario."""
         from routers.locations import check_rate_limit
-        
+
         # Simulate exceeding rate limit
         ip = "192.168.1.1"
-        
+
         # Make requests up to the limit
         for _ in range(60):  # RATE_LIMIT_REQUESTS = 60
             allowed, reason = await check_rate_limit(ip)
             assert allowed == True
-        
+
         # Next request should be rate limited
         allowed, reason = await check_rate_limit(ip)
         assert allowed == False
         assert "Rate limit exceeded" in reason
-    
+
     def test_rate_limit_integration(self, client, mock_locations_data):
         """Test rate limiting integration with the endpoint."""
         # This is a simplified test - in a real scenario, we'd need to mock
@@ -467,82 +465,88 @@ class TestRateLimiting:
         response = client.get("/v1/locations/preapproved")
         assert response.status_code == 200
 
+
 class TestDataLoading:
     """Test data loading functionality."""
-    
+
     @pytest.mark.asyncio
     async def test_initialize_locations_data(self, mock_redis, tmp_path):
         """Test locations data initialization."""
         # Create temporary data file
         data_file = tmp_path / "preapproved_locations.json"
         data_file.write_text(json.dumps(SAMPLE_LOCATIONS))
-        
-        with patch('routers.locations.os.path.join', return_value=str(data_file)):
+
+        with patch("routers.locations.os.path.join", return_value=str(data_file)):
             await initialize_locations_data(mock_redis)
-        
+
         # Verify cache was warmed (preapproved:v1:all and popular:v1:all)
         assert mock_redis.setex.call_count == 2
-    
+
     @pytest.mark.asyncio
     async def test_initialize_locations_data_file_not_found(self, mock_redis):
         """Test initialization with missing data file."""
-        with patch('routers.locations.os.path.join', return_value="/nonexistent/file.json"):
+        with patch("routers.locations.os.path.join", return_value="/nonexistent/file.json"):
             with pytest.raises(Exception):  # Should raise HTTPException
                 await initialize_locations_data(mock_redis)
-    
+
     @pytest.mark.asyncio
     async def test_initialize_locations_data_invalid_json(self, mock_redis, tmp_path):
         """Test initialization with invalid JSON."""
         data_file = tmp_path / "preapproved_locations.json"
         data_file.write_text("invalid json")
-        
-        with patch('routers.locations.os.path.join', return_value=str(data_file)):
+
+        with patch("routers.locations.os.path.join", return_value=str(data_file)):
             with pytest.raises(Exception):  # Should raise HTTPException
                 await initialize_locations_data(mock_redis)
 
+
 class TestStatusEndpoint:
     """Test the status endpoint."""
-    
+
     def test_get_status(self, client, mock_locations_data):
         """Test status endpoint."""
         response = client.get("/v1/locations/preapproved/status")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["status"] == "healthy"
         assert data["locations_loaded"] == 3
         assert data["etag"] == '"test-etag"'
-        assert data["last_modified"] == 'Mon, 01 Jan 2024 00:00:00 GMT'
+        assert data["last_modified"] == "Mon, 01 Jan 2024 00:00:00 GMT"
         assert "cache_enabled" in data
         assert "rate_limit" in data
 
+
 class TestErrorHandling:
     """Test error handling scenarios."""
-    
+
     def test_redis_unavailable(self, client, sample_locations):
         """Test behavior when Redis is unavailable."""
-        with patch('routers.locations.locations_data', sample_locations), \
-             patch('routers.locations.locations_etag', '"test-etag"'), \
-             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations.redis_client', None):
-            
+        with (
+            patch("routers.locations.locations_data", sample_locations),
+            patch("routers.locations.locations_etag", '"test-etag"'),
+            patch("routers.locations.locations_last_modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
+            patch("routers.locations.redis_client", None),
+        ):
             # Should still work without Redis, just without caching
             response = client.get("/v1/locations/preapproved")
             assert response.status_code == 200
-    
+
     def test_malformed_json_in_cache(self, client, mock_redis, sample_locations):
         """Test handling of malformed JSON in cache."""
-        with patch('routers.locations.locations_data', sample_locations), \
-             patch('routers.locations.locations_etag', '"test-etag"'), \
-             patch('routers.locations.locations_last_modified', 'Mon, 01 Jan 2024 00:00:00 GMT'), \
-             patch('routers.locations.redis_client', mock_redis):
-            
+        with (
+            patch("routers.locations.locations_data", sample_locations),
+            patch("routers.locations.locations_etag", '"test-etag"'),
+            patch("routers.locations.locations_last_modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
+            patch("routers.locations.redis_client", mock_redis),
+        ):
             mock_redis.get.return_value = "invalid json"
-            
+
             # Should fall back to generating response from data
             response = client.get("/v1/locations/preapproved")
             assert response.status_code == 200
+
 
 class TestPopularCacheKey:
     """Test popular cache key generation."""
@@ -702,7 +706,7 @@ class TestSearchEndpoint:
         """Helper returns canonical id for exact name+country match."""
         with patch("routers.locations.locations_data", sample_locations):
             assert _find_preapproved_id("London", "GB") == "london"
-            assert _find_preapproved_id("london", "GB") == "london"   # case-insensitive
+            assert _find_preapproved_id("london", "GB") == "london"  # case-insensitive
             assert _find_preapproved_id("Paris", "FR") == "paris"
             assert _find_preapproved_id("New York", "US") == "new_york"
 
@@ -729,7 +733,7 @@ class TestSearchEndpoint:
         """Helper returns None when no preapproved location matches."""
         with patch("routers.locations.locations_data", sample_locations):
             assert _find_preapproved_id("Shoreditch", "GB") is None
-            assert _find_preapproved_id("London", "US") is None   # wrong country
+            assert _find_preapproved_id("London", "US") is None  # wrong country
 
     def test_mapbox_path_enriches_location_id(self, client, mock_locations_data):
         """Mapbox path attaches location_id when result matches a preapproved location."""
@@ -737,8 +741,10 @@ class TestSearchEndpoint:
             {"name": "London", "admin1": "England", "country_name": "United Kingdom", "country_code": "GB"},
             {"name": "Shoreditch", "admin1": "England", "country_name": "United Kingdom", "country_code": "GB"},
         ]
-        with patch("routers.locations.MAPBOX_TOKEN", "fake-token"), \
-             patch("routers.locations._geocode_mapbox", new=AsyncMock(return_value=mapbox_results)):
+        with (
+            patch("routers.locations.MAPBOX_TOKEN", "fake-token"),
+            patch("routers.locations._geocode_mapbox", new=AsyncMock(return_value=mapbox_results)),
+        ):
             response = client.get("/v1/locations/search?q=London")
         assert response.status_code == 200
         locs = {l["name"]: l for l in response.json()["locations"]}
@@ -820,10 +826,13 @@ class TestSelectionEndpoint:
 
     @pytest.fixture(autouse=True)
     def _mock_env(self):
-        with patch.dict("os.environ", {
-            "CACHE_ENABLED": "true",
-            "API_ACCESS_TOKEN": "test_api_token",
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "CACHE_ENABLED": "true",
+                "API_ACCESS_TOKEN": "test_api_token",
+            },
+        ):
             yield
 
     @pytest.fixture(autouse=True)

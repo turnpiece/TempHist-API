@@ -1,21 +1,29 @@
 """Weather data fetching functions — backed by Open-Meteo."""
+
+import asyncio
 import json
 import logging
-import asyncio
-from typing import Dict
 from datetime import datetime, timedelta
-from config import (
-    CACHE_ENABLED, FILTER_WEATHER_DATA, SHORT_CACHE_DURATION_SECONDS,
-    LONG_CACHE_DURATION_SECONDS, SHORT_CACHE_DURATION, LONG_CACHE_DURATION,
-    DEBUG, MAX_CONCURRENT_REQUESTS,
-)
-from cache.core import get_cache_value, set_cache_value
-from cache.keys import get_weather_cache_key, generate_cache_key, store_location_timezone
+from typing import Dict
+
+import redis
+
 from cache.accessors import get_cache_stats
-from utils.open_meteo_client import fetch_single_date, fetch_days, geocode_location
+from cache.core import get_cache_value, set_cache_value
+from cache.keys import generate_cache_key, get_weather_cache_key
+from config import (
+    CACHE_ENABLED,
+    DEBUG,
+    FILTER_WEATHER_DATA,
+    LONG_CACHE_DURATION,
+    LONG_CACHE_DURATION_SECONDS,
+    MAX_CONCURRENT_REQUESTS,
+    SHORT_CACHE_DURATION,
+    SHORT_CACHE_DURATION_SECONDS,
+)
+from utils.open_meteo_client import fetch_single_date
 from utils.sanitization import sanitize_for_logging
 from utils.weather import is_today
-import redis
 
 logger = logging.getLogger(__name__)
 
@@ -35,26 +43,20 @@ async def get_weather_for_date(
     redis_client: redis.Redis,
 ) -> dict:
     """Fetch and cache weather data for a specific date via Open-Meteo."""
-    logger.debug(
-        "get_weather_for_date for %s on %s", sanitize_for_logging(location), date_str
-    )
+    logger.debug("get_weather_for_date for %s on %s", sanitize_for_logging(location), date_str)
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
-        cached_data = get_cache_value(
-            cache_key, redis_client, "weather", location, get_cache_stats()
-        )
+        cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
         if cached_data:
             if DEBUG:
                 logger.debug(
                     "✅ SERVING CACHED WEATHER: %s | Location: %s | Date: %s",
-                    cache_key, location, date_str,
+                    cache_key,
+                    location,
+                    date_str,
                 )
             try:
-                data_str = (
-                    cached_data.decode("utf-8")
-                    if isinstance(cached_data, bytes)
-                    else cached_data
-                )
+                data_str = cached_data.decode("utf-8") if isinstance(cached_data, bytes) else cached_data
                 return json.loads(data_str)
             except Exception as e:
                 logger.error("Error decoding cached data for %s: %s", cache_key, e)
@@ -114,9 +116,7 @@ async def get_weather_for_date(
     return to_cache
 
 
-async def get_forecast_data(
-    location: str, date, redis_client: redis.Redis = None, unit_group: str = "celsius"
-) -> Dict:
+async def get_forecast_data(location: str, date, redis_client: redis.Redis = None, unit_group: str = "celsius") -> Dict:
     """Get forecast data for a location and date via Open-Meteo."""
     if hasattr(date, "strftime"):
         date_str = date.strftime("%Y-%m-%d")
@@ -165,9 +165,7 @@ async def fetch_weather_batch(
     """
     logger.debug("fetch_weather_batch for %s", location)
 
-    semaphore = semaphore_override or asyncio.Semaphore(
-        max_concurrent or MAX_CONCURRENT_REQUESTS
-    )
+    semaphore = semaphore_override or asyncio.Semaphore(max_concurrent or MAX_CONCURRENT_REQUESTS)
 
     results = {}
 
@@ -189,26 +187,18 @@ async def get_temperature_series(
     redis_client: redis.Redis,
 ) -> Dict:
     """Get temperature series data for a location and date over multiple years."""
-    from utils.weather import get_year_range, track_missing_year, create_metadata
+    from utils.weather import create_metadata, get_year_range, track_missing_year
 
     series_cache_key = generate_cache_key("series", location, f"{month:02d}_{day:02d}")
     if CACHE_ENABLED:
-        cached_series = get_cache_value(
-            series_cache_key, redis_client, "series", location, get_cache_stats()
-        )
+        cached_series = get_cache_value(series_cache_key, redis_client, "series", location, get_cache_stats())
         if cached_series:
             logger.debug("Cache hit: %s", series_cache_key)
             try:
-                data_str = (
-                    cached_series.decode("utf-8")
-                    if isinstance(cached_series, bytes)
-                    else cached_series
-                )
+                data_str = cached_series.decode("utf-8") if isinstance(cached_series, bytes) else cached_series
                 return json.loads(data_str)
             except Exception as e:
-                logger.error(
-                    "Error decoding cached series for %s: %s", series_cache_key, e
-                )
+                logger.error("Error decoding cached series for %s: %s", series_cache_key, e)
 
     logger.debug("get_temperature_series for %s on %d/%d", location, day, month)
     today = datetime.now()
@@ -227,20 +217,16 @@ async def get_temperature_series(
         year_to_date_str[year] = date_str
 
         if CACHE_ENABLED:
-            cached_data = get_cache_value(
-                cache_key, redis_client, "weather", location, get_cache_stats()
-            )
+            cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
             if cached_data:
                 if DEBUG:
                     logger.debug(
                         "✅ SERVING CACHED TEMPERATURE: %s | Location: %s | Year: %d",
-                        cache_key, location, year,
+                        cache_key,
+                        location,
+                        year,
                     )
-                data_str = (
-                    cached_data.decode("utf-8")
-                    if isinstance(cached_data, bytes)
-                    else cached_data
-                )
+                data_str = cached_data.decode("utf-8") if isinstance(cached_data, bytes) else cached_data
                 weather = json.loads(data_str)
                 try:
                     temp = weather["days"][0]["temp"]
@@ -261,9 +247,7 @@ async def get_temperature_series(
             uncached_date_strs.append(date_str)
 
     if uncached_date_strs:
-        batch_results = await fetch_weather_batch(
-            location, uncached_date_strs, redis_client
-        )
+        batch_results = await fetch_weather_batch(location, uncached_date_strs, redis_client)
         for year, date_str in zip(uncached_years, uncached_date_strs):
             weather = batch_results.get(date_str)
             if weather and "error" not in weather:
@@ -277,9 +261,7 @@ async def get_temperature_series(
                             target_date = datetime(year, month, day).date()
                             days_diff = (target_date - today.date()).days
                             cache_duration = SHORT_CACHE_DURATION if -7 <= days_diff <= 365 else LONG_CACHE_DURATION
-                            set_cache_value(
-                                cache_key, cache_duration, json.dumps(weather), redis_client
-                            )
+                            set_cache_value(cache_key, cache_duration, json.dumps(weather), redis_client)
                     else:
                         logger.debug("Temperature is None for %d, marking as missing.", year)
                         track_missing_year(missing_years, year, "no_temperature_data")
@@ -312,9 +294,7 @@ async def get_temperature_series(
         logger.warning("No valid temperature data found for %s on %d-%d", location, month, day)
         return {
             "data": [],
-            "metadata": create_metadata(
-                len(years), 0, [{"year": y, "reason": "no_data"} for y in years]
-            ),
+            "metadata": create_metadata(len(years), 0, [{"year": y, "reason": "no_data"} for y in years]),
             "error": f"Invalid location: {location}",
         }
 
@@ -322,10 +302,12 @@ async def get_temperature_series(
         set_cache_value(
             series_cache_key,
             SHORT_CACHE_DURATION,
-            json.dumps({
-                "data": data_list,
-                "metadata": create_metadata(len(years), len(data), missing_years),
-            }),
+            json.dumps(
+                {
+                    "data": data_list,
+                    "metadata": create_metadata(len(years), len(data), missing_years),
+                }
+            ),
             redis_client,
         )
 

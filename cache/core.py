@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone, date as dt_date
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # TTL validation
 # ---------------------------------------------------------------------------
+
 
 def validate_ttl(ttl: int, name: str, default: int) -> int:
     """Validate cache TTL value with min/max bounds."""
@@ -47,16 +48,16 @@ def validate_ttl(ttl: int, name: str, default: int) -> int:
 # ---------------------------------------------------------------------------
 
 CACHE_TTL_DEFAULT = validate_ttl(int(os.getenv("CACHE_TTL_DEFAULT", "86400")), "CACHE_TTL_DEFAULT", 86400)
-CACHE_TTL_SHORT   = validate_ttl(int(os.getenv("CACHE_TTL_SHORT",   "3600")),  "CACHE_TTL_SHORT",   3600)
-CACHE_TTL_LONG    = validate_ttl(int(os.getenv("CACHE_TTL_LONG",    "604800")), "CACHE_TTL_LONG",   604800)
+CACHE_TTL_SHORT = validate_ttl(int(os.getenv("CACHE_TTL_SHORT", "3600")), "CACHE_TTL_SHORT", 3600)
+CACHE_TTL_LONG = validate_ttl(int(os.getenv("CACHE_TTL_LONG", "604800")), "CACHE_TTL_LONG", 604800)
 
-TTL_STABLE        = validate_ttl(int(os.getenv("TTL_STABLE",         "7776000")),  "TTL_STABLE",        7776000)
-TTL_HISTORICAL    = validate_ttl(int(os.getenv("TTL_HISTORICAL",     "31536000")), "TTL_HISTORICAL",    31536000)
-TTL_CURRENT_DAILY   = validate_ttl(int(os.getenv("TTL_CURRENT_DAILY",   "7200")),  "TTL_CURRENT_DAILY",   7200)
-TTL_CURRENT_WEEKLY  = validate_ttl(int(os.getenv("TTL_CURRENT_WEEKLY",  "14400")), "TTL_CURRENT_WEEKLY",  14400)
+TTL_STABLE = validate_ttl(int(os.getenv("TTL_STABLE", "7776000")), "TTL_STABLE", 7776000)
+TTL_HISTORICAL = validate_ttl(int(os.getenv("TTL_HISTORICAL", "31536000")), "TTL_HISTORICAL", 31536000)
+TTL_CURRENT_DAILY = validate_ttl(int(os.getenv("TTL_CURRENT_DAILY", "7200")), "TTL_CURRENT_DAILY", 7200)
+TTL_CURRENT_WEEKLY = validate_ttl(int(os.getenv("TTL_CURRENT_WEEKLY", "14400")), "TTL_CURRENT_WEEKLY", 14400)
 TTL_CURRENT_MONTHLY = validate_ttl(int(os.getenv("TTL_CURRENT_MONTHLY", "43200")), "TTL_CURRENT_MONTHLY", 43200)
-TTL_CURRENT_YEARLY  = validate_ttl(int(os.getenv("TTL_CURRENT_YEARLY",  "86400")), "TTL_CURRENT_YEARLY",  86400)
-TTL_BUNDLE          = validate_ttl(int(os.getenv("TTL_BUNDLE",           "900")),   "TTL_BUNDLE",          900)
+TTL_CURRENT_YEARLY = validate_ttl(int(os.getenv("TTL_CURRENT_YEARLY", "86400")), "TTL_CURRENT_YEARLY", 86400)
+TTL_BUNDLE = validate_ttl(int(os.getenv("TTL_BUNDLE", "900")), "TTL_BUNDLE", 900)
 
 # ---------------------------------------------------------------------------
 # Cache header constants
@@ -64,21 +65,22 @@ TTL_BUNDLE          = validate_ttl(int(os.getenv("TTL_BUNDLE",           "900"))
 
 COORD_PRECISION = 4  # 4 decimal places (~11m precision)
 
-CACHE_CONTROL_PUBLIC      = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
-CACHE_CONTROL_PRIVATE     = "private, max-age=300, stale-while-revalidate=3600"
+CACHE_CONTROL_PUBLIC = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
+CACHE_CONTROL_PRIVATE = "private, max-age=300, stale-while-revalidate=3600"
 CACHE_CONTROL_DAILY_TODAY = "public, max-age=1800, s-maxage=3600, stale-while-revalidate=7200"
 
 # ---------------------------------------------------------------------------
 # Cache invalidation config
 # ---------------------------------------------------------------------------
 
-CACHE_INVALIDATION_ENABLED    = os.getenv("CACHE_INVALIDATION_ENABLED", "true").lower() == "true"
-CACHE_INVALIDATION_DRY_RUN    = os.getenv("CACHE_INVALIDATION_DRY_RUN", "false").lower() == "true"
+CACHE_INVALIDATION_ENABLED = os.getenv("CACHE_INVALIDATION_ENABLED", "true").lower() == "true"
+CACHE_INVALIDATION_DRY_RUN = os.getenv("CACHE_INVALIDATION_DRY_RUN", "false").lower() == "true"
 CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "100"))
 
 # ---------------------------------------------------------------------------
 # Year-based TTL helper
 # ---------------------------------------------------------------------------
+
 
 def get_ttl_for_year(year: int) -> int:
     """Return appropriate cache TTL based on how old the data is."""
@@ -97,25 +99,26 @@ def get_ttl_for_year(year: int) -> int:
 # ETag helpers
 # ---------------------------------------------------------------------------
 
+
 class ETagGenerator:
     """Generate and validate ETags for responses."""
 
     @staticmethod
     def generate_etag(data: Any) -> str:
-        json_str = json.dumps(data, sort_keys=True, separators=(',', ':'))
+        json_str = json.dumps(data, sort_keys=True, separators=(",", ":"))
         return f'"{hashlib.sha256(json_str.encode()).hexdigest()[:32]}"'
 
     @staticmethod
     def parse_etag(etag: str) -> Optional[str]:
         if not etag:
             return None
-        return etag.strip('"\'')
+        return etag.strip("\"'")
 
     @staticmethod
     def matches_etag(response_etag: str, request_etag: str) -> bool:
         if not response_etag or not request_etag:
             return False
-        return response_etag.strip('"\'') == request_etag.strip('"\'')
+        return response_etag.strip("\"'") == request_etag.strip("\"'")
 
 
 class CacheHeaders:
@@ -157,11 +160,13 @@ class CacheHeaders:
 # EnhancedCache
 # ---------------------------------------------------------------------------
 
+
 class EnhancedCache:
     """Enhanced Redis cache with single-flight protection and metrics."""
 
     def __init__(self, redis_client: redis.Redis):
         from jobs.manager import SingleFlightLock  # avoid top-level circular risk
+
         self.redis = redis_client
         self.lock_manager = SingleFlightLock(redis_client)
         self.cache_prefix = "cache:"
@@ -182,11 +187,11 @@ class EnhancedCache:
 
     async def get(self, key: str) -> Optional[Tuple[Any, str, datetime]]:
         cache_key = self._get_cache_key(key)
-        etag_key  = self._get_etag_key(key)
+        etag_key = self._get_etag_key(key)
 
         try:
-            cached_data      = self.redis.get(cache_key)
-            cached_etag      = self.redis.get(etag_key)
+            cached_data = self.redis.get(cache_key)
+            cached_etag = self.redis.get(etag_key)
             cached_timestamp = self.redis.hget(cache_key, "timestamp")
 
             if cached_data and cached_etag and cached_timestamp:
@@ -235,7 +240,7 @@ class EnhancedCache:
         last_modified: Optional[datetime] = None,
     ) -> str:
         cache_key = self._get_cache_key(key)
-        etag_key  = self._get_etag_key(key)
+        etag_key = self._get_etag_key(key)
 
         if etag is None:
             etag = ETagGenerator.generate_etag(data)
@@ -243,14 +248,17 @@ class EnhancedCache:
             last_modified = datetime.now(timezone.utc)
 
         try:
-            json_data = json.dumps(data, sort_keys=True, separators=(',', ':'))
+            json_data = json.dumps(data, sort_keys=True, separators=(",", ":"))
             self.redis.setex(cache_key, ttl, json_data)
             self.redis.setex(etag_key, ttl, etag)
-            self.redis.hset(cache_key, mapping={
-                "timestamp": last_modified.isoformat(),
-                "ttl": ttl,
-                "size": len(json_data),
-            })
+            self.redis.hset(
+                cache_key,
+                mapping={
+                    "timestamp": last_modified.isoformat(),
+                    "ttl": ttl,
+                    "size": len(json_data),
+                },
+            )
             self.redis.expire(cache_key, ttl)
             return etag
 
@@ -274,19 +282,22 @@ class EnhancedCache:
 
             for key, data, ttl, etag in items:
                 cache_key = self._get_cache_key(key)
-                etag_key  = self._get_etag_key(key)
+                etag_key = self._get_etag_key(key)
                 if etag is None:
                     etag = ETagGenerator.generate_etag(data)
                 etags.append(etag)
 
-                json_data = json.dumps(data, sort_keys=True, separators=(',', ':'))
+                json_data = json.dumps(data, sort_keys=True, separators=(",", ":"))
                 pipeline.setex(cache_key, ttl, json_data)
                 pipeline.setex(etag_key, ttl, etag)
-                pipeline.hset(cache_key, mapping={
-                    "timestamp": last_modified.isoformat(),
-                    "ttl": ttl,
-                    "size": len(json_data),
-                })
+                pipeline.hset(
+                    cache_key,
+                    mapping={
+                        "timestamp": last_modified.isoformat(),
+                        "ttl": ttl,
+                        "size": len(json_data),
+                    },
+                )
                 pipeline.expire(cache_key, ttl)
 
             pipeline.execute()
@@ -317,8 +328,8 @@ class EnhancedCache:
 
             for i, key in enumerate(keys):
                 idx = i * 3
-                cached_data      = results[idx]
-                cached_etag      = results[idx + 1]
+                cached_data = results[idx]
+                cached_etag = results[idx + 1]
                 cached_timestamp = results[idx + 2]
 
                 if cached_data and cached_etag and cached_timestamp:
@@ -402,6 +413,7 @@ class EnhancedCache:
 # CacheInvalidator
 # ---------------------------------------------------------------------------
 
+
 class CacheInvalidator:
     """Manage cache invalidation with various strategies and patterns."""
 
@@ -416,12 +428,20 @@ class CacheInvalidator:
         try:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
                 exists = self.redis_client.exists(cache_key)
-                return {"status": "dry_run", "cache_key": cache_key, "exists": bool(exists),
-                        "action": "would_delete" if exists else "no_action"}
+                return {
+                    "status": "dry_run",
+                    "cache_key": cache_key,
+                    "exists": bool(exists),
+                    "action": "would_delete" if exists else "no_action",
+                }
             else:
                 deleted = self.redis_client.delete(cache_key)
-                return {"status": "success", "cache_key": cache_key, "deleted": bool(deleted),
-                        "action": "deleted" if deleted else "not_found"}
+                return {
+                    "status": "success",
+                    "cache_key": cache_key,
+                    "deleted": bool(deleted),
+                    "action": "deleted" if deleted else "not_found",
+                }
         except Exception as e:
             return {"status": "error", "cache_key": cache_key, "error": str(e)}
 
@@ -441,30 +461,44 @@ class CacheInvalidator:
                     matching_keys.extend(keys)
                     if len(matching_keys) > max_keys:
                         logger.warning(f"Pattern matches >{max_keys} keys, stopping scan")
-                        return {"status": "error", "pattern": pattern,
-                                "error": f"Pattern matches too many keys (>{max_keys}). Use a more specific pattern."}
+                        return {
+                            "status": "error",
+                            "pattern": pattern,
+                            "error": f"Pattern matches too many keys (>{max_keys}). Use a more specific pattern.",
+                        }
                     if cursor == 0:
                         break
             except Exception as e:
                 if "permissions" in str(e).lower() or "scan" in str(e).lower():
-                    return {"status": "error", "pattern": pattern,
-                            "error": "Redis SCAN command not permitted on this instance",
-                            "message": "Cache invalidation by pattern is not available on managed Redis services"}
+                    return {
+                        "status": "error",
+                        "pattern": pattern,
+                        "error": "Redis SCAN command not permitted on this instance",
+                        "message": "Cache invalidation by pattern is not available on managed Redis services",
+                    }
                 raise e
 
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
-                return {"status": "dry_run", "pattern": pattern,
-                        "matching_keys": [k.decode() if isinstance(k, bytes) else k for k in matching_keys],
-                        "count": len(matching_keys), "action": "would_delete"}
+                return {
+                    "status": "dry_run",
+                    "pattern": pattern,
+                    "matching_keys": [k.decode() if isinstance(k, bytes) else k for k in matching_keys],
+                    "count": len(matching_keys),
+                    "action": "would_delete",
+                }
             else:
                 deleted_count = 0
                 for i in range(0, len(matching_keys), self.batch_size):
-                    batch = matching_keys[i:i + self.batch_size]
+                    batch = matching_keys[i : i + self.batch_size]
                     if batch:
                         deleted_count += self.redis_client.delete(*batch)
-                return {"status": "success", "pattern": pattern,
-                        "matching_keys": [k.decode() if isinstance(k, bytes) else k for k in matching_keys],
-                        "deleted_count": deleted_count, "total_found": len(matching_keys)}
+                return {
+                    "status": "success",
+                    "pattern": pattern,
+                    "matching_keys": [k.decode() if isinstance(k, bytes) else k for k in matching_keys],
+                    "deleted_count": deleted_count,
+                    "total_found": len(matching_keys),
+                }
         except Exception as e:
             return {"status": "error", "pattern": pattern, "error": str(e)}
 
@@ -500,8 +534,10 @@ class CacheInvalidator:
                 total_found += result.get("count", 0)
         return {
             "status": "success" if not dry_run and not CACHE_INVALIDATION_DRY_RUN else "dry_run",
-            "date": date, "patterns_checked": len(date_patterns),
-            "total_deleted": total_deleted, "total_found": total_found,
+            "date": date,
+            "patterns_checked": len(date_patterns),
+            "total_deleted": total_deleted,
+            "total_found": total_found,
             "pattern_results": results,
         }
 
@@ -519,7 +555,8 @@ class CacheInvalidator:
         results = [self.invalidate_by_date(fmt, dry_run) for fmt in [today_str, today_pattern]]
         return {
             "status": "success" if not dry_run and not CACHE_INVALIDATION_DRY_RUN else "dry_run",
-            "date": today_str, "results": results,
+            "date": today_str,
+            "results": results,
         }
 
     def invalidate_expired_keys(self, dry_run: bool = False) -> Dict:
@@ -540,21 +577,29 @@ class CacheInvalidator:
                         break
             except Exception as e:
                 if "permissions" in str(e).lower() or "scan" in str(e).lower():
-                    return {"status": "error",
-                            "error": "Redis SCAN command not permitted on this instance",
-                            "message": "Expired key invalidation is not available on managed Redis services"}
+                    return {
+                        "status": "error",
+                        "error": "Redis SCAN command not permitted on this instance",
+                        "message": "Expired key invalidation is not available on managed Redis services",
+                    }
                 raise e
 
             expired_keys = [k for k in all_keys if self.redis_client.ttl(k) == 0]
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
-                return {"status": "dry_run",
-                        "expired_keys": [k.decode() if isinstance(k, bytes) else k for k in expired_keys],
-                        "count": len(expired_keys), "action": "would_delete"}
+                return {
+                    "status": "dry_run",
+                    "expired_keys": [k.decode() if isinstance(k, bytes) else k for k in expired_keys],
+                    "count": len(expired_keys),
+                    "action": "would_delete",
+                }
             else:
                 deleted_count = self.redis_client.delete(*expired_keys) if expired_keys else 0
-                return {"status": "success",
-                        "expired_keys": [k.decode() if isinstance(k, bytes) else k for k in expired_keys],
-                        "deleted_count": deleted_count, "total_found": len(expired_keys)}
+                return {
+                    "status": "success",
+                    "expired_keys": [k.decode() if isinstance(k, bytes) else k for k in expired_keys],
+                    "deleted_count": deleted_count,
+                    "total_found": len(expired_keys),
+                }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -562,11 +607,19 @@ class CacheInvalidator:
         try:
             info = self.redis_client.info()
             patterns = {
-                "weather": "weather_*", "data": "data_*", "trend": "trend_*",
-                "average": "average_*", "summary": "summary_*", "forecast": "forecast_*",
-                "series": "series_*", "usage": "usage_*", "cache_stats": "cache_stats_*",
-                "v1_records": "records:*", "v1_records_average": "records:*:average",
-                "v1_records_trend": "records:*:trend", "v1_records_summary": "records:*:summary",
+                "weather": "weather_*",
+                "data": "data_*",
+                "trend": "trend_*",
+                "average": "average_*",
+                "summary": "summary_*",
+                "forecast": "forecast_*",
+                "series": "series_*",
+                "usage": "usage_*",
+                "cache_stats": "cache_stats_*",
+                "v1_records": "records:*",
+                "v1_records_average": "records:*:average",
+                "v1_records_trend": "records:*:trend",
+                "v1_records_summary": "records:*:summary",
             }
             pattern_counts = {}
             for name, pattern in patterns.items():
@@ -581,7 +634,8 @@ class CacheInvalidator:
                     pattern_counts[name] = len(matching_keys)
                 except Exception as e:
                     pattern_counts[name] = (
-                        "N/A (permissions required)" if "permissions" in str(e).lower() or "scan" in str(e).lower()
+                        "N/A (permissions required)"
+                        if "permissions" in str(e).lower() or "scan" in str(e).lower()
                         else f"N/A (error: {str(e)[:50]})"
                     )
             return {
@@ -614,14 +668,19 @@ class CacheInvalidator:
                     return {"status": "dry_run", "total_keys": len(all_keys), "action": "would_delete_all"}
                 except Exception as e:
                     if "permissions" in str(e).lower() or "scan" in str(e).lower():
-                        return {"status": "error",
-                                "error": "Redis SCAN command not permitted on this instance",
-                                "message": "Cannot count keys on managed Redis service for dry run"}
+                        return {
+                            "status": "error",
+                            "error": "Redis SCAN command not permitted on this instance",
+                            "message": "Cannot count keys on managed Redis service for dry run",
+                        }
                     raise e
             else:
                 self.redis_client.flushdb()
-                return {"status": "success", "action": "cleared_all_cache",
-                        "message": "All cache data has been cleared"}
+                return {
+                    "status": "success",
+                    "action": "cleared_all_cache",
+                    "message": "All cache data has been cleared",
+                }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -629,6 +688,7 @@ class CacheInvalidator:
 # ---------------------------------------------------------------------------
 # Simple cache utility functions
 # ---------------------------------------------------------------------------
+
 
 def get_cache_value(
     cache_key,
@@ -672,7 +732,7 @@ async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis)
             return None
         try:
             key_type = redis_client.type(cache_key)
-            if key_type == 'hash':
+            if key_type == "hash":
                 timestamp_data = redis_client.hget(cache_key, "timestamp")
                 if timestamp_data:
                     return datetime.fromisoformat(

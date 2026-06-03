@@ -8,16 +8,16 @@ Verifies that:
 
 import hashlib
 import json
-import time
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, call
 
 from jobs.manager import JobManager, JobStatus
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_manager() -> JobManager:
     """Create a JobManager backed by a mock Redis client."""
@@ -48,15 +48,14 @@ TEST_DEDUP_KEY = f"job:dedup:{TEST_JOB_TYPE}:{TEST_HASH}"
 # Dedup: PENDING / PROCESSING (existing behaviour, kept as regression test)
 # ---------------------------------------------------------------------------
 
-class TestDedupPendingProcessing:
 
+class TestDedupPendingProcessing:
     @pytest.mark.parametrize("status", [JobStatus.PENDING, JobStatus.PROCESSING])
     def test_returns_existing_job_id(self, status):
         mgr = _make_manager()
         existing_id = "record_computation_111_abcd1234"
         mgr.redis.get.side_effect = lambda key: (
-            existing_id.encode() if key == TEST_DEDUP_KEY
-            else json.dumps({"status": status}).encode()
+            existing_id.encode() if key == TEST_DEDUP_KEY else json.dumps({"status": status}).encode()
         )
 
         result = mgr.create_job(TEST_JOB_TYPE, TEST_PARAMS)
@@ -70,15 +69,14 @@ class TestDedupPendingProcessing:
 # Dedup: READY (completed jobs should block re-enqueue)
 # ---------------------------------------------------------------------------
 
-class TestDedupReady:
 
+class TestDedupReady:
     def test_completed_job_blocks_reenqueue(self):
         """A recently completed job should prevent creating a duplicate."""
         mgr = _make_manager()
         existing_id = "record_computation_222_abcd1234"
         mgr.redis.get.side_effect = lambda key: (
-            existing_id.encode() if key == TEST_DEDUP_KEY
-            else json.dumps({"status": JobStatus.READY}).encode()
+            existing_id.encode() if key == TEST_DEDUP_KEY else json.dumps({"status": JobStatus.READY}).encode()
         )
 
         result = mgr.create_job(TEST_JOB_TYPE, TEST_PARAMS)
@@ -91,14 +89,15 @@ class TestDedupReady:
 # Dedup: ERROR (failed jobs should block re-enqueue during cooldown)
 # ---------------------------------------------------------------------------
 
-class TestDedupError:
 
+class TestDedupError:
     def test_failed_job_blocks_reenqueue(self):
         """A recently failed job should prevent creating a duplicate."""
         mgr = _make_manager()
         existing_id = "record_computation_333_abcd1234"
         mgr.redis.get.side_effect = lambda key: (
-            existing_id.encode() if key == TEST_DEDUP_KEY
+            existing_id.encode()
+            if key == TEST_DEDUP_KEY
             else json.dumps({"status": JobStatus.ERROR, "error": "No data found for year 1982"}).encode()
         )
 
@@ -112,8 +111,8 @@ class TestDedupError:
 # Dedup key NOT deleted on completion — kept alive with TTL
 # ---------------------------------------------------------------------------
 
-class TestDedupKeyRetainedOnCompletion:
 
+class TestDedupKeyRetainedOnCompletion:
     def test_ready_status_refreshes_dedup_key(self):
         """update_job_status(READY) should refresh dedup key, not delete it."""
         mgr = _make_manager()
@@ -157,8 +156,8 @@ class TestDedupKeyRetainedOnCompletion:
 # New job is created when no dedup key exists
 # ---------------------------------------------------------------------------
 
-class TestNewJobCreation:
 
+class TestNewJobCreation:
     def test_creates_job_when_no_dedup_key(self):
         """Without a dedup key, a new job should be created and pushed to queue."""
         mgr = _make_manager()
@@ -177,8 +176,8 @@ class TestNewJobCreation:
 # Backfill cooldown in _enqueue_backfill_job
 # ---------------------------------------------------------------------------
 
-class TestBackfillCooldown:
 
+class TestBackfillCooldown:
     @patch("routers.v1_records.get_job_manager")
     def test_first_call_enqueues(self, mock_get_jm):
         """First backfill request should set cooldown and create job."""
@@ -276,8 +275,8 @@ class TestBackfillCooldown:
 # Dedup key refreshed on PROCESSING transition
 # ---------------------------------------------------------------------------
 
-class TestDedupKeyOnProcessing:
 
+class TestDedupKeyOnProcessing:
     def test_processing_status_refreshes_dedup_key_with_job_ttl(self):
         """update_job_status(PROCESSING) should extend the dedup key to the full job TTL."""
         mgr = _make_manager()
@@ -294,10 +293,7 @@ class TestDedupKeyOnProcessing:
 
         dedup_key = f"job:dedup:{TEST_JOB_TYPE}:{TEST_HASH}"
         # The dedup key should be refreshed with the full job TTL (not 300s)
-        matching = [
-            c for c in mgr.redis.setex.call_args_list
-            if c[0][0] == dedup_key
-        ]
+        matching = [c for c in mgr.redis.setex.call_args_list if c[0][0] == dedup_key]
         assert len(matching) == 1
         _key, ttl, _val = matching[0][0]
         assert ttl == mgr.job_ttl, f"Expected TTL={mgr.job_ttl}, got {ttl}"
