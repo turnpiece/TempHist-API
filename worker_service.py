@@ -10,7 +10,6 @@ Usage:
 
 Environment Variables:
     REDIS_URL: Redis connection URL
-    VISUAL_CROSSING_API_KEY: API key for Visual Crossing
     DEBUG: Set to 'true' for debug logging
 """
 
@@ -45,20 +44,13 @@ def validate_environment():
     """Validate required environment variables are set."""
     required_vars = {
         "REDIS_URL": os.getenv("REDIS_URL", "").strip(),
-        "VISUAL_CROSSING_API_KEY": os.getenv("VISUAL_CROSSING_API_KEY", "").strip(),
     }
-    
-    # Log API key status (without exposing the actual key)
-    if required_vars["VISUAL_CROSSING_API_KEY"]:
-        logger.info(f"✅ VISUAL_CROSSING_API_KEY loaded: {required_vars['VISUAL_CROSSING_API_KEY'][:10]}... (length: {len(required_vars['VISUAL_CROSSING_API_KEY'])})")
-    else:
-        logger.error("❌ VISUAL_CROSSING_API_KEY is NOT loaded or is empty!")
-    
+
     missing = [k for k, v in required_vars.items() if not v]
     if missing:
         logger.error(f"❌ Missing required environment variables: {', '.join(missing)}")
         sys.exit(1)
-    
+
     logger.info("✅ Environment variables validated")
     return required_vars
 

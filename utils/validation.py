@@ -1,15 +1,7 @@
 """Input validation utilities for security."""
 import re
 from datetime import datetime
-from urllib.parse import quote
 import logging
-from config import (
-    VISUAL_CROSSING_BASE_URL,
-    VISUAL_CROSSING_UNIT_GROUP,
-    VISUAL_CROSSING_INCLUDE_PARAMS,
-    VISUAL_CROSSING_REMOTE_DATA,
-    API_KEY,
-)
 
 
 def clean_location_string(location: str) -> str:
@@ -152,50 +144,3 @@ def validate_date_format(date: str) -> str:
     return date
 
 
-def build_visual_crossing_url(location: str, date: str, remote: bool = True, unit_group: str = None) -> str:
-    """Build Visual Crossing API URL with consistent parameters and SSRF protection.
-
-    Args:
-        location: The location to get weather data for (will be validated)
-        date: The date in YYYY-MM-DD format (will be validated)
-        remote: Whether to include remote data parameters (default: True)
-        unit_group: Override the configured unit group (e.g. "metric" for fallback)
-
-    Returns:
-        URL string for Visual Crossing API
-
-    Raises:
-        ValueError: If location or date validation fails
-    """
-    logger = logging.getLogger(__name__)
-    
-    # Validate inputs to prevent SSRF and injection attacks
-    try:
-        validated_location = validate_location_for_ssrf(location)
-        validated_date = validate_date_format(date)
-    except ValueError as e:
-        # Log the error but don't expose the exact validation failure to prevent information disclosure
-        logger.error(f"Location or date validation failed: {str(e)}")
-        raise ValueError("Invalid location or date format") from e
-    
-    # Clean and URL-encode the validated location
-    cleaned_location = clean_location_string(validated_location)
-    encoded_location = quote(cleaned_location, safe='')
-    
-    # Final validation: ensure encoded location doesn't reintroduce dangerous patterns
-    encoded_lower = encoded_location.lower()
-    dangerous_encoded = ['%2f', '%5c', '%40', '%3a%3a%2f', 'localhost', '127.0.0.1']
-    for pattern in dangerous_encoded:
-        if pattern in encoded_lower:
-            logger.error(f"Encoded location contains dangerous pattern after encoding: {pattern}")
-            raise ValueError("Invalid location format")
-    
-    base_params = [
-        f"unitGroup={unit_group or VISUAL_CROSSING_UNIT_GROUP}",
-        f"include={VISUAL_CROSSING_INCLUDE_PARAMS}",
-        f"key={API_KEY}"
-    ]
-    if remote and VISUAL_CROSSING_REMOTE_DATA:
-        base_params.append(VISUAL_CROSSING_REMOTE_DATA)
-    query_string = "&".join(base_params)
-    return f"{VISUAL_CROSSING_BASE_URL}/{encoded_location}/{validated_date}?{query_string}"

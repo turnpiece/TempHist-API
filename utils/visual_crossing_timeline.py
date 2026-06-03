@@ -1,144 +1,32 @@
-import asyncio
-import logging
-import os
+"""Thin compatibility shim — delegates to open_meteo_client.
+
+Preserves the public surface (`fetch_timeline_days`, `close_client_session`,
+`LocationNotFoundError`) so callers need no changes.
+"""
 from datetime import date
 from typing import Any, Dict, List, Tuple
-from urllib.parse import quote
 
-import aiohttp
-
-from constants import VC_BASE_URL
-from utils.validation import validate_location_for_ssrf
-
-logger = logging.getLogger(__name__)
-
-from typing import Optional
+# Re-export LocationNotFoundError so importers still work unchanged.
+from utils.open_meteo_client import (  # noqa: F401
+    LocationNotFoundError,
+    close_client as _close_client,
+    fetch_timeline_for_location,
+)
 
 
-class LocationNotFoundError(RuntimeError):
-    """Raised when Visual Crossing rejects a location as unresolvable (HTTP 400).
-    Not retried — the location string itself is the problem."""
-    pass
+async def fetch_timeline_days(
+    location: str, start: date, end: date
+) -> Tuple[List[Dict], Dict[str, Any]]:
+    """Fetch temperature data for a contiguous date range (inclusive).
 
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
+    Returns (days, metadata) where days is a list of
+    {datetime, temp, tempmax, tempmin} dicts with temperatures in °C.
 
-# Visual Crossing API timeout configuration
-VC_TIMEOUT = float(os.getenv("HTTP_TIMEOUT_VISUAL_CROSSING", "30.0"))
-
-_client: Optional[aiohttp.ClientSession] = None
-_client_lock = asyncio.Lock()
-_sem = asyncio.Semaphore(2)
-_RETRY_ATTEMPTS = int(os.getenv("VC_TIMELINE_RETRIES", "3"))
-_RETRY_BASE_DELAY = float(os.getenv("VC_TIMELINE_RETRY_DELAY", "1.0"))
-
-
-async def _get_client() -> aiohttp.ClientSession:
-    global _client
-    if _client is not None and not _client.closed:
-        return _client
-    async with _client_lock:
-        if _client is None or _client.closed:
-            # Use configurable timeout for Visual Crossing API
-            timeout = aiohttp.ClientTimeout(
-                total=VC_TIMEOUT,
-                connect=min(10, VC_TIMEOUT / 3),  # Connect timeout is 1/3 of total, max 10s
-                sock_read=min(VC_TIMEOUT - 5, VC_TIMEOUT * 0.8)  # Read timeout slightly less than total
-            )
-            _client = aiohttp.ClientSession(timeout=timeout)
-        return _client
+    Raises LocationNotFoundError if the location cannot be geocoded.
+    """
+    return await fetch_timeline_for_location(location, start, end)
 
 
 async def close_client_session() -> None:
-    global _client
-    if _client and not _client.closed:
-        await _client.close()
-    _client = None
-
-
-def _build_timeline_url(location: str, start: date, end: date) -> str:
-    if not API_KEY:
-        raise RuntimeError("VISUAL_CROSSING_API_KEY is not configured")
-    validated_location = validate_location_for_ssrf(location)
-    encoded_location = quote(validated_location, safe="")
-    return (
-        f"{VC_BASE_URL}/timeline/{encoded_location}/{start.isoformat()}/{end.isoformat()}"
-        f"?unitGroup=us&include=days&elements=datetime,temp,tempmax,tempmin&contentType=json&key={API_KEY}"
-    )
-
-
-def _f_to_c(value) -> float | None:
-    if value is None:
-        return None
-    return round((float(value) - 32) * 5 / 9, 2)
-
-
-def _convert_days_to_celsius(days: list) -> list:
-    converted = []
-    for day in days:
-        d = dict(day)
-        for field in ("temp", "tempmin", "tempmax"):
-            if field in d:
-                d[field] = _f_to_c(d[field])
-        converted.append(d)
-    return converted
-
-
-async def fetch_timeline_days(location: str, start: date, end: date) -> Tuple[List[Dict], Dict[str, Any]]:
-    """Fetch timeline data for a contiguous date range (inclusive)."""
-    if start > end:
-        raise ValueError("start date must be before end date")
-
-    url = _build_timeline_url(location, start, end)
-    redacted_url = url.replace(API_KEY, "[redacted]") if API_KEY else url
-    session = await _get_client()
-    logger.debug("🌡️ timeline GET %s", redacted_url)
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            async with _sem:
-                async with session.get(url, headers={"Accept-Encoding": "gzip"}) as response:
-                    if response.status >= 400:
-                        text = await response.text()
-                        logger.error(
-                            "Visual Crossing timeline error: status=%s url=%s body=%s",
-                            response.status,
-                            redacted_url,
-                            text[:200],
-                        )
-                        if response.status == 400:
-                            # 400 means the location string itself is invalid — retrying
-                            # won't help and would waste time cycling through all years.
-                            raise LocationNotFoundError(
-                                f"Location not found: {text[:200]}"
-                            )
-                        raise RuntimeError(f"Visual Crossing timeline error: {response.status}")
-                    payload = await response.json()
-                    days = payload.get("days") or []
-                    if not isinstance(days, list):
-                        raise RuntimeError("Unexpected timeline response payload")
-                    metadata = {
-                        "resolvedAddress": payload.get("resolvedAddress"),
-                        "address": payload.get("address"),
-                        "timezone": payload.get("timezone"),
-                        "tz": payload.get("tz"),
-                        "latitude": payload.get("latitude"),
-                        "longitude": payload.get("longitude"),
-                    }
-                    return _convert_days_to_celsius(days), metadata
-        except LocationNotFoundError:
-            raise  # never retry — the location string itself is wrong
-        except (asyncio.TimeoutError, aiohttp.ClientError, RuntimeError) as exc:
-            if attempt >= _RETRY_ATTEMPTS:
-                logger.error("Timeline fetch failed after %s attempts: %s (%s)", attempt, exc, redacted_url)
-                raise
-            delay = _RETRY_BASE_DELAY * attempt
-            logger.warning(
-                "Timeline fetch attempt %s failed for %s – retrying in %.1fs (%s)",
-                attempt,
-                redacted_url,
-                delay,
-                exc,
-            )
-            await asyncio.sleep(delay)
-
+    """Close the shared HTTP session used by the Open-Meteo client."""
+    await _close_client()

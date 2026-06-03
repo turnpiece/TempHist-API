@@ -210,6 +210,52 @@ class DailyTemperatureStore:
             self._pool = pool
             return self._pool
 
+    async def get_coordinates(
+        self, location: str
+    ) -> "Optional[Tuple[float, float, Optional[str]]]":
+        """Return (lat, lon, timezone) for a known location, or None.
+
+        Checks the Postgres locations table first (alias + direct match), then
+        falls back to the in-memory preapproved_locations.json mapping.
+        """
+        from typing import Tuple as _Tuple
+        normalized = normalize_location_for_cache(location)
+
+        pool = await self._ensure_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT l.latitude, l.longitude, l.timezone
+                        FROM locations l
+                        LEFT JOIN location_aliases a ON a.location_id = l.id
+                        WHERE a.alias_normalized_name = $1 OR l.normalized_name = $1
+                        LIMIT 1
+                        """,
+                        normalized,
+                    )
+                    if row and row["latitude"] is not None:
+                        return (
+                            float(row["latitude"]),
+                            float(row["longitude"]),
+                            row.get("timezone"),
+                        )
+            except Exception as exc:
+                logger.debug(
+                    "DB coordinate lookup failed for %r: %s", location, exc
+                )
+
+        info = _get_preapproved_location_info(normalized)
+        if info and info.get("latitude") is not None:
+            return (
+                float(info["latitude"]),
+                float(info["longitude"]),
+                info.get("timezone"),
+            )
+
+        return None
+
     async def ping(self) -> dict:
         """Check database connectivity. Returns a status dict suitable for health endpoints."""
         import time

@@ -50,8 +50,8 @@ def get_weather(
 ):
     """Get weather data for a specific location and date.
     
-    Note: Location is validated by validate_location_for_ssrf() in build_visual_crossing_url() 
-    which enforces max_length=200 and prevents SSRF attacks.
+    Note: Location is validated by validate_location_for_ssrf() which enforces
+    max_length=200 and prevents SSRF attacks.
     """
     logger.info(f"[DEBUG] Weather endpoint called with location={sanitize_for_logging(location)}, date={date}")
     

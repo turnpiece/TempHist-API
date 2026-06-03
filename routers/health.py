@@ -1,11 +1,11 @@
 """Health check and status endpoints."""
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import httpx
 import redis
-from config import API_KEY
+from config import OPEN_METEO_ARCHIVE_URL
 from version import __version__
 from cache.accessors import get_cache_stats
 from routers.dependencies import get_redis_client
@@ -86,34 +86,34 @@ async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_cl
             if overall_healthy:
                 health_status["status"] = "degraded"
     
-    # Check external API (Visual Crossing) availability (LOW-007)
+    # Check Open-Meteo API availability
     try:
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         async with httpx.AsyncClient(timeout=5.0) as client:
-            # Just check if the base URL is reachable (don't use API key in health check)
             resp = await client.get(
-                "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/",
-                timeout=5.0
+                f"{OPEN_METEO_ARCHIVE_URL}?latitude=51.5&longitude=-0.1"
+                f"&start_date={yesterday}&end_date={yesterday}"
+                f"&daily=temperature_2m_mean&timezone=UTC",
+                timeout=5.0,
             )
             if resp.status_code < 500:
-                health_status["checks"]["visual_crossing_api"] = {
+                health_status["checks"]["open_meteo_api"] = {
                     "status": "healthy",
                     "status_code": resp.status_code,
-                    "message": "API reachable" if API_KEY else "API reachable but key not configured"
+                    "message": "API reachable",
                 }
-                if not API_KEY:
-                    health_status["status"] = "degraded" if overall_healthy else health_status["status"]
             else:
-                health_status["checks"]["visual_crossing_api"] = {
+                health_status["checks"]["open_meteo_api"] = {
                     "status": "degraded",
                     "status_code": resp.status_code,
-                    "message": f"API returned status {resp.status_code}"
+                    "message": f"API returned status {resp.status_code}",
                 }
                 if overall_healthy:
                     health_status["status"] = "degraded"
     except Exception as e:
-        health_status["checks"]["visual_crossing_api"] = {
+        health_status["checks"]["open_meteo_api"] = {
             "status": "unhealthy",
-            "error": str(e)
+            "error": str(e),
         }
         if overall_healthy:
             health_status["status"] = "degraded"

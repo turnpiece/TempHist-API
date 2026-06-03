@@ -1,6 +1,6 @@
 """Utility functions for the application."""
 from .sanitization import sanitize_url, sanitize_for_logging
-from .validation import validate_location_for_ssrf, validate_date_format, clean_location_string, build_visual_crossing_url
+from .validation import validate_location_for_ssrf, validate_date_format, clean_location_string
 from .weather import (
     get_year_range, create_metadata, track_missing_year,
     is_today, is_today_or_future, get_forecast_cache_duration
@@ -22,7 +22,6 @@ __all__ = [
     "validate_location_for_ssrf",
     "validate_date_format",
     "clean_location_string",
-    "build_visual_crossing_url",
     "get_year_range",
     "create_metadata",
     "track_missing_year",

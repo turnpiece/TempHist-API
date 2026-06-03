@@ -9,8 +9,6 @@ from dotenv import load_dotenv
 DOTENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=DOTENV_PATH)
 
-# Environment variables - strip whitespace/newlines from API keys
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY", "").strip()
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 
 # Mapbox Geocoding API — used for location search autocomplete.
@@ -68,15 +66,13 @@ CANONICALIZATION_RADIUS_KM = int(os.getenv("CANONICALIZATION_RADIUS_KM", "45"))
 HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
 HTTP_TIMEOUT_SHORT = 5.0     # Short timeout for health checks
 HTTP_TIMEOUT_LONG = 120.0    # Long timeout for large data requests
-HTTP_TIMEOUT_VISUAL_CROSSING = float(os.getenv("HTTP_TIMEOUT_VISUAL_CROSSING", "30.0"))  # Visual Crossing API timeout
 HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection
 
-# Visual Crossing API configuration
-VISUAL_CROSSING_BASE_URL = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline"
-VISUAL_CROSSING_UNIT_GROUP = "us"
-VISUAL_CROSSING_INCLUDE_PARAMS = "days"
-VISUAL_CROSSING_REMOTE_DATA = "options=useremote&forecastDataset=era5core"
+# Open-Meteo API configuration
+OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_FORECAST_PAST_DAYS = int(os.getenv("OPEN_METEO_FORECAST_PAST_DAYS", "7"))
 
 # Cache durations
 SHORT_CACHE_DURATION_SECONDS = 3600  # 1 hour for today's data

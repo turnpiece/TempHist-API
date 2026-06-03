@@ -12,7 +12,7 @@ from models import (
     TemperatureValue, DateRange, AverageData, TrendData
 )
 from config import (
-    CACHE_ENABLED, DEBUG, API_KEY,
+    CACHE_ENABLED, DEBUG,
 )
 from cache.keys import (
     normalize_location_for_cache, _get_location_timezone, get_local_today,
@@ -43,7 +43,6 @@ from utils.daily_temperature_store import (
     get_daily_temperature_store,
 )
 from utils.visual_crossing_timeline import fetch_timeline_days, LocationNotFoundError
-from utils.vc_budget import check_and_consume as _vc_budget_check
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -61,27 +60,6 @@ def parse_identifier(period: str, identifier: str) -> tuple:
         return month, day, period
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Identifier must be in MM-DD format: {str(e)}")
-
-
-def _convert_unit_group_for_vc(unit_group: str) -> str:
-    """Convert API unit_group format (celsius/fahrenheit) to Visual Crossing format (metric/us).
-    
-    Args:
-        unit_group: Unit group in API format ('celsius' or 'fahrenheit')
-        
-    Returns:
-        Visual Crossing unit group ('metric' for celsius, 'us' for fahrenheit)
-    """
-    if unit_group.lower() == "celsius":
-        return "metric"
-    elif unit_group.lower() == "fahrenheit":
-        return "us"
-    elif unit_group.lower() in ("metric", "us", "uk"):
-        # Already in VC format, return as-is
-        return unit_group.lower()
-    else:
-        # Default to metric if unknown
-        return "metric"
 
 
 def _coerce_float(value) -> float | None:
@@ -342,18 +320,6 @@ async def _collect_rolling_window_values(
             if not coverage_ok:
                 for range_start, range_end in _collapse_consecutive_dates(missing_dates):
                     timeline_metadata = None
-                    # Guard: check daily VC record budget before each fetch
-                    records_needed = (range_end - range_start).days + 1
-                    _jm = get_job_manager()
-                    if _jm and not _vc_budget_check(_jm.redis, records_needed):
-                        logger.warning(
-                            "VC daily budget exhausted; skipping inline fetch for "
-                            "%s %s–%s (year %s). Backfill job already enqueued.",
-                            location, range_start, range_end, year,
-                        )
-                        track_missing_year(missing_years, year, "vc_budget_exhausted")
-                        timeline_failed = True
-                        break
                     try:
                         timeline_days, timeline_metadata = await fetch_timeline_days(
                             location, range_start, range_end

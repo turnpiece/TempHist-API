@@ -1,8 +1,0 @@
-$kind: http-request
-url: https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/London/2026-05-27?unitGroup=metric&include=days&key={{api_key}}
-method: GET
-queryParams:
-  unitGroup: metric
-  include: days
-  key: "{{api_key}}"
-order: 1000

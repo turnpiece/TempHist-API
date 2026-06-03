@@ -35,7 +35,7 @@ async def add_security_headers(request: Request, call_next):
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: https:; "
         "font-src 'self'; "
-        "connect-src 'self' https://weather.visualcrossing.com; "
+        "connect-src 'self' https://archive-api.open-meteo.com https://api.open-meteo.com; "
         "frame-ancestors 'none';"
     )
     response.headers["Content-Security-Policy"] = csp_policy

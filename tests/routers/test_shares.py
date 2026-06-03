@@ -28,7 +28,6 @@ def client():
 @pytest.fixture(autouse=True)
 def mock_env_vars():
     with patch.dict("os.environ", {
-        "VISUAL_CROSSING_API_KEY": "test_key",
         "CACHE_ENABLED": "true",
         "API_ACCESS_TOKEN": "test_api_token",
     }):
