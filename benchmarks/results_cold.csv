@@ -1,0 +1,11 @@
+variant,period,location_name,location_set,runs_ok,total_time_s,geocode_ms,fetch_time_s,process_ms,request_count,avg_req_ms,data_kb,data_points,error
+OM-cold,daily,"Berlin, Germany",fresh,2,16.182,9.7,16.171,0.03,201,80.5,26.9,26,
+OM-cold,daily,"Mumbai, India",fresh,2,11.114,9.4,11.104,0.05,201,74.9,22.6,26,
+OM-cold,daily,"Paris, France",fresh,2,4.436,27.1,4.408,0.06,51,86.4,21.1,51,
+OM-cold,daily,"Rio de Janeiro, Brazil",fresh,2,4.352,25.5,4.325,0.15,51,84.8,21.5,51,
+OM-cold,daily,"Tokyo, Japan",fresh,2,7.524,9.4,7.514,0.07,140,67.9,25.1,51,
+OM-cold,yearly,"Berlin, Germany",fresh,2,11.216,20.3,11.193,2.0,52,128.9,359.5,12962,
+OM-cold,yearly,"Mumbai, India",fresh,2,8.2,8.0,8.189,2.31,52,77.0,394.2,13692,
+OM-cold,yearly,"Paris, France",fresh,2,10.703,7.5,10.693,1.54,52,114.2,326.2,11684,
+OM-cold,yearly,"Rio de Janeiro, Brazil",fresh,2,13.687,7.9,13.677,1.21,127,87.3,149.5,4753,
+OM-cold,yearly,"Tokyo, Japan",fresh,2,11.425,10.5,11.41,3.9,52,117.2,518.7,18615,
