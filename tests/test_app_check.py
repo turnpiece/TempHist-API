@@ -49,7 +49,7 @@ def test_monitor_mode_invalid_token(client):
                 with _mock_weather():
                     response = client.get(
                         "/weather/London/2024-05-15",
-                        headers=_firebase_headers(app_check_token="invalid-token"),
+                        headers=_firebase_headers(app_check_token="invalid-token"),  # noqa: S106
                     )
     assert response.status_code == 200
 
@@ -74,6 +74,6 @@ def test_enforce_mode_valid_token(client):
                 with _mock_weather():
                     response = client.get(
                         "/weather/London/2024-05-15",
-                        headers=_firebase_headers(app_check_token="valid-token"),
+                        headers=_firebase_headers(app_check_token="valid-token"),  # noqa: S106
                     )
     assert response.status_code == 200

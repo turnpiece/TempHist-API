@@ -97,7 +97,7 @@ def diagnose_job_system():
                         job_id = job.get("id", job_key.replace("job:", ""))
                         job_type = job.get("type", "unknown")
                         created = job.get("created_at", "unknown")
-                        updated = job.get("updated_at", "unknown")
+                        job.get("updated_at", "unknown")
                         params = job.get("params", {})
                         error = job.get("error")
 

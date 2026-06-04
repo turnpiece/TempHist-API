@@ -161,7 +161,7 @@ def main():
 
     # Check if API is running
     try:
-        response = requests.get("http://localhost:8000/health")
+        response = requests.get("http://localhost:8000/health", timeout=5)
         if response.status_code != 200:
             print("❌ API server is not running. Please start with: uvicorn main:app --reload")
             return

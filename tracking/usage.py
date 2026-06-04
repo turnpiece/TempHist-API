@@ -169,8 +169,8 @@ class LocationUsageTracker:
                 display_string,
                 ex=95 * 86400,
             )
-        except Exception:
-            pass  # best-effort
+        except Exception as _e:
+            logger.debug("Could not cache display string for %s: %s", location_id, _e)
 
     def get_popular_display_strings(self, limit: int = 20, days: int = 30) -> List[str]:
         """Return display strings for the top-ranked locations.

@@ -267,8 +267,8 @@ class CacheWarmer:
         self.warming_in_progress = True
         try:
             self.redis_client.setex("cache_warming:in_progress", 3600, "1")
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("Could not set cache_warming:in_progress flag: %s", _e)
         start_time = time.time()
 
         try:
@@ -343,8 +343,8 @@ class CacheWarmer:
                         }
                     ),
                 )
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("Could not persist warming stats to Redis: %s", _e)
 
             if DEBUG:
                 logger.info(
@@ -370,8 +370,8 @@ class CacheWarmer:
             self.warming_in_progress = False
             try:
                 self.redis_client.delete("cache_warming:in_progress")
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("Could not clear cache_warming:in_progress flag: %s", _e)
 
     def get_warming_stats(self) -> Dict:
         stats = dict(self.warming_stats)
@@ -390,8 +390,8 @@ class CacheWarmer:
                     "last_warming_duration": persisted.get("last_warming_duration", 0),
                 }
             in_progress = bool(self.redis_client.exists("cache_warming:in_progress"))
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("Could not read warming stats from Redis: %s", _e)
 
         return {
             "enabled": CACHE_WARMING_ENABLED,

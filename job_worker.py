@@ -260,8 +260,8 @@ class JobWorker:
         """Write a fresh heartbeat to Redis. Called at startup and before each job."""
         try:
             self.redis.setex("worker:heartbeat", 180, datetime.now(timezone.utc).isoformat())
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("Could not update worker heartbeat: %s", _e)
 
     async def process_job(self, job_id: str, job_manager):
         """Process a single job."""
@@ -451,8 +451,8 @@ class JobWorker:
                             try:
                                 skip_key = f"backfill:skip:{scope}:{normalize_location_for_cache(location)}:{year}"
                                 self.redis.setex(skip_key, 86400, "1")
-                            except Exception:
-                                pass
+                            except Exception as _e:
+                                logger.debug("Could not set backfill skip key: %s", _e)
                             return {"skipped": True, "reason": f"no data available for year {year}"}
                 except Exception as _pre_err:
                     logger.debug(f"DB pre-check skipped for {location} year {year}: {_pre_err}")
@@ -477,8 +477,8 @@ class JobWorker:
                 try:
                     skip_key = f"backfill:skip:{scope}:{slug}:{year}"
                     self.redis.setex(skip_key, 86400, "1")
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug("Could not set backfill skip key: %s", _e)
                 return {"skipped": True, "reason": f"no data available for year {year}"}
 
             # Get the specific year's record

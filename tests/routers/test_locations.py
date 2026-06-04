@@ -199,10 +199,10 @@ class TestUtilityFunctions:
 
     def test_validate_limit(self):
         """Test limit validation."""
-        assert validate_limit(1) == True
-        assert validate_limit(500) == True
-        assert validate_limit(0) == False
-        assert validate_limit(501) == False
+        assert validate_limit(1)
+        assert validate_limit(500)
+        assert not validate_limit(0)
+        assert not validate_limit(501)
 
     def test_generate_etag(self):
         """Test ETag generation."""
@@ -451,11 +451,11 @@ class TestRateLimiting:
         # Make requests up to the limit
         for _ in range(60):  # RATE_LIMIT_REQUESTS = 60
             allowed, reason = await check_rate_limit(ip)
-            assert allowed == True
+            assert allowed
 
         # Next request should be rate limited
         allowed, reason = await check_rate_limit(ip)
-        assert allowed == False
+        assert not allowed
         assert "Rate limit exceeded" in reason
 
     def test_rate_limit_integration(self, client, mock_locations_data):
@@ -470,13 +470,14 @@ class TestDataLoading:
     """Test data loading functionality."""
 
     @pytest.mark.asyncio
-    async def test_initialize_locations_data(self, mock_redis, tmp_path):
-        """Test locations data initialization."""
-        # Create temporary data file
-        data_file = tmp_path / "preapproved_locations.json"
-        data_file.write_text(json.dumps(SAMPLE_LOCATIONS))
-
-        with patch("routers.locations.os.path.join", return_value=str(data_file)):
+    async def test_initialize_locations_data(self, mock_redis):
+        """Test locations data initialization stores data and warms cache."""
+        sample_items = [LocationItem(**item) for item in SAMPLE_LOCATIONS]
+        with patch(
+            "routers.locations.load_locations_data",
+            new_callable=AsyncMock,
+            return_value=(sample_items, "etag-test", "Wed, 01 Jan 2025 00:00:00 GMT"),
+        ):
             await initialize_locations_data(mock_redis)
 
         # Verify cache was warmed (preapproved:v1:all and popular:v1:all)
@@ -484,18 +485,27 @@ class TestDataLoading:
 
     @pytest.mark.asyncio
     async def test_initialize_locations_data_file_not_found(self, mock_redis):
-        """Test initialization with missing data file."""
-        with patch("routers.locations.os.path.join", return_value="/nonexistent/file.json"):
+        """Test initialization propagates HTTPException when file not found."""
+        from fastapi import HTTPException
+
+        with patch(
+            "routers.locations.load_locations_data",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(status_code=500, detail="Locations data not available"),
+        ):
             with pytest.raises(Exception):  # Should raise HTTPException
                 await initialize_locations_data(mock_redis)
 
     @pytest.mark.asyncio
-    async def test_initialize_locations_data_invalid_json(self, mock_redis, tmp_path):
-        """Test initialization with invalid JSON."""
-        data_file = tmp_path / "preapproved_locations.json"
-        data_file.write_text("invalid json")
+    async def test_initialize_locations_data_invalid_json(self, mock_redis):
+        """Test initialization propagates HTTPException for invalid JSON."""
+        from fastapi import HTTPException
 
-        with patch("routers.locations.os.path.join", return_value=str(data_file)):
+        with patch(
+            "routers.locations.load_locations_data",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(status_code=500, detail="Invalid locations data format"),
+        ):
             with pytest.raises(Exception):  # Should raise HTTPException
                 await initialize_locations_data(mock_redis)
 
@@ -692,7 +702,7 @@ class TestSearchEndpoint:
         assert len(locs) > 0
         for loc in locs:
             assert "location_id" in loc
-        london = next(l for l in locs if l["name"] == "London")
+        london = next(loc for loc in locs if loc["name"] == "London")
         assert london["location_id"] == "london"
 
     def test_fallback_no_match_still_has_location_id(self, client, mock_locations_data):
@@ -747,7 +757,7 @@ class TestSearchEndpoint:
         ):
             response = client.get("/v1/locations/search?q=London")
         assert response.status_code == 200
-        locs = {l["name"]: l for l in response.json()["locations"]}
+        locs = {loc["name"]: loc for loc in response.json()["locations"]}
         assert locs["London"]["location_id"] == "london"
         assert locs["Shoreditch"]["location_id"] is None
 

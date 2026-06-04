@@ -9,10 +9,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import pytest
+import pytest  # noqa: E402
 
-import config
-from utils.daily_temperature_store import DailyTemperatureStore
+import config  # noqa: E402
+from utils.daily_temperature_store import DailyTemperatureStore  # noqa: E402
 
 
 class TestCanonicalizationRadius:

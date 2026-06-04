@@ -108,11 +108,11 @@ def load_locations_to_prewarm(
     if api_token:
         try:
             url = f"{base_url.rstrip('/')}/v1/locations/popular/display-strings?limit={limit}"
-            req = _urllib_request.Request(
+            req = _urllib_request.Request(  # noqa: S310
                 url,
                 headers={"Authorization": f"Bearer {api_token}", "Accept": "application/json"},
             )
-            with _urllib_request.urlopen(req, timeout=10) as resp:
+            with _urllib_request.urlopen(req, timeout=10) as resp:  # noqa: S310
                 data = json.loads(resp.read())
             strings = data.get("locations", [])
             if len(strings) >= 2:
@@ -374,7 +374,7 @@ async def main():
             locations = locs[: args.locations] if locs else []
         else:
             # Simple text file with one location per line
-            with open(args.locations_file, "r") as f:
+            with open(args.locations_file, "r") as f:  # noqa: ASYNC230
                 locations = [line.strip() for line in f if line.strip()][: args.locations]
     else:
         # Query /v1/locations/popular first; fall back to preapproved list
@@ -394,7 +394,7 @@ async def main():
 
         # Save results to file
         results_file = f"prewarm_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(results_file, "w") as f:
+        with open(results_file, "w") as f:  # noqa: ASYNC230
             json.dump(results, f, indent=2)
 
         logger.info(f"📄 Results saved to: {results_file}")

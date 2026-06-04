@@ -73,8 +73,8 @@ if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 
 # Debug: Log the REDIS_URL value to diagnose connection issues (sanitized)
-import logging as _logging
-from urllib.parse import urlparse, urlunparse
+import logging as _logging  # noqa: E402
+from urllib.parse import urlparse, urlunparse  # noqa: E402
 
 
 def sanitize_url(url: str) -> str:
@@ -343,7 +343,7 @@ def validate_location_for_ssrf(location: str) -> str:
         "@",  # URL auth separator
         "localhost",
         "127.0.0.1",
-        "0.0.0.0",
+        "0.0.0.0",  # noqa: S104
         "169.254",  # Link-local
         "10.",  # Private IP range start
         "172.16",  # Private IP range start
@@ -637,7 +637,7 @@ class AnalyticsStorage:
 
 
 # Lifespan event handler for startup and shutdown
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager  # noqa: E402
 
 
 @asynccontextmanager
@@ -840,7 +840,6 @@ else:
 # Initialize Redis with security validation
 def create_redis_client(url: str):
     """Create Redis client with security validation."""
-    import ssl
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
@@ -1500,4 +1499,4 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port)  # noqa: S104

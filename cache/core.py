@@ -738,8 +738,8 @@ async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis)
                     return datetime.fromisoformat(
                         timestamp_data.decode() if isinstance(timestamp_data, bytes) else timestamp_data
                     )
-        except Exception:
-            pass
+        except Exception as _ts_err:
+            logger.debug("Could not read timestamp for cache key %s: %s", cache_key, _ts_err)
         cached_data = redis_client.get(cache_key)
         if cached_data:
             try:

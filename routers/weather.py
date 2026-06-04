@@ -40,7 +40,7 @@ def _apply_unit_group_to_weather(result: dict, unit_group: str) -> dict:
     return {**result, "days": converted_days}
 
 
-from routers.dependencies import get_redis_client
+from routers.dependencies import get_redis_client  # noqa: E402
 
 
 @router.get("/weather/{location:path}/{date}")

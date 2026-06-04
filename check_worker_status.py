@@ -52,7 +52,7 @@ def check_worker_status():
                         created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
                         age = (datetime.now(timezone.utc) - created_dt).total_seconds()
                         age_str = f"{age:.0f}s ago"
-                    except:
+                    except Exception:
                         age_str = "unknown age"
 
                     print(f"  - {job_id}")
@@ -74,7 +74,7 @@ def check_worker_status():
                 print("⚠️  Worker appears to be down (no recent heartbeat)")
             else:
                 print("✅ Worker appears to be running")
-        except:
+        except Exception:
             print(f"\n💓 Worker heartbeat: {heartbeat} (could not parse)")
     else:
         print("\n💓 Worker heartbeat: NOT FOUND")

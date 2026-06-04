@@ -9,6 +9,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import asyncpg  # type: ignore[import-untyped]
 
+from cache.keys import normalize_location_for_cache
+from config import CANONICALIZATION_RADIUS_KM
+
 
 def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[bool, bool, bool]:
     """Determine which temperature columns are present to build a typed insert."""
@@ -17,9 +20,6 @@ def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[b
     has_min = any(record.temp_min_c is not None for record in records)
     return has_temp, has_max, has_min
 
-
-from cache.keys import normalize_location_for_cache
-from config import CANONICALIZATION_RADIUS_KM
 
 logger = logging.getLogger(__name__)
 

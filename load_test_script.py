@@ -157,7 +157,7 @@ class LoadTester:
             # Select random endpoint
             import random
 
-            endpoint = random.choice(self.endpoints)
+            endpoint = random.choice(self.endpoints)  # noqa: S311
             url = f"{self.base_url}{endpoint}"
 
             task = self.make_request(session, url)
@@ -264,7 +264,7 @@ async def main():
 
         # Save results if requested
         if args.output:
-            with open(args.output, "w") as f:
+            with open(args.output, "w") as f:  # noqa: ASYNC230
                 json.dump(summary, f, indent=2)
             logger.info(f"📄 Results saved to: {args.output}")
 

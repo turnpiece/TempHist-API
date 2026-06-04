@@ -7,10 +7,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import pytest
+import pytest  # noqa: E402
 
-from routers.v1_records import _collect_rolling_window_values
-from utils.daily_temperature_store import DailyTemperatureRecord
+from routers.v1_records import _collect_rolling_window_values  # noqa: E402
+from utils.daily_temperature_store import DailyTemperatureRecord  # noqa: E402
 
 
 def _normalize_location(text: str) -> str:

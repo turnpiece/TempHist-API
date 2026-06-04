@@ -182,8 +182,8 @@ def cache_get(
             logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {vkey}")
             try:
                 r.delete(vkey)
-            except Exception:
-                pass
+            except Exception as _del_err:
+                logger.debug("Failed to delete legacy cache key %s: %s", vkey, _del_err)
             stored = None
         if stored:
             # Handle both base64-encoded string (new) and raw bytes (legacy)
@@ -225,8 +225,8 @@ def cache_get(
             logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {_approx_key}")
             try:
                 r.delete(_approx_key)
-            except Exception:
-                pass
+            except Exception as _del_err:
+                logger.debug("Failed to delete legacy cache key %s: %s", _approx_key, _del_err)
             stored2 = None
 
         if not stored2:

@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -81,9 +82,6 @@ SHORT_CACHE_DURATION_SECONDS = 3600  # 1 hour for today's data
 LONG_CACHE_DURATION_SECONDS = 604800  # 1 week for historical data (168 hours * 3600)
 FORECAST_DAY_CACHE_DURATION_SECONDS = 1800  # 30 minutes
 FORECAST_NIGHT_CACHE_DURATION_SECONDS = 7200  # 2 hours
-
-# Import timedelta for compatibility
-from datetime import timedelta
 
 SHORT_CACHE_DURATION = timedelta(seconds=SHORT_CACHE_DURATION_SECONDS)
 LONG_CACHE_DURATION = timedelta(seconds=LONG_CACHE_DURATION_SECONDS)

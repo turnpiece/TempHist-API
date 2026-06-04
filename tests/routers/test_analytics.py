@@ -58,9 +58,9 @@ def clear_rate_limit_keys():
                 key = f"analytics_limit:{ip}"
                 try:
                     redis_client.delete(key)
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
-    except Exception:
+    except Exception:  # noqa: S110
         # If Redis is not available or not configured for tests, skip
         pass
     yield
@@ -74,9 +74,9 @@ def clear_rate_limit_keys():
                 key = f"analytics_limit:{ip}"
                 try:
                     redis_client.delete(key)
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
 

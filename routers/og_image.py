@@ -179,8 +179,8 @@ def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optional[list
             if value:
                 try:
                     records.append(json.loads(value.decode() if isinstance(value, bytes) else value))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug("Could not decode OG per-year record: %s", _e)
         if records:
             logger.info("OG per-year fallback: share=%s found %d records", share.get("id"), len(records))
             return records

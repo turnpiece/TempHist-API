@@ -96,14 +96,14 @@ def git_commit_and_tag(new_version):
     """Commit changes and create git tag"""
     try:
         # Add changed files
-        subprocess.run(["git", "add", "version.py", "pyproject.toml"], check=True)
+        subprocess.run(["git", "add", "version.py", "pyproject.toml"], check=True)  # noqa: S603, S607
 
         # Commit
-        subprocess.run(["git", "commit", "-m", f"Bump version to {new_version}"], check=True)
+        subprocess.run(["git", "commit", "-m", f"Bump version to {new_version}"], check=True)  # noqa: S603, S607
         print(f"✅ Committed version {new_version}")
 
         # Create tag
-        subprocess.run(["git", "tag", f"v{new_version}"], check=True)
+        subprocess.run(["git", "tag", f"v{new_version}"], check=True)  # noqa: S603, S607
         print(f"✅ Created tag v{new_version}")
 
     except subprocess.CalledProcessError as e:

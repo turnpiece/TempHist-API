@@ -106,7 +106,7 @@ def is_location_likely_invalid(location: str) -> bool:
         "@",  # URL auth
         "localhost",
         "127.0.0.1",
-        "0.0.0.0",
+        "0.0.0.0",  # noqa: S104
         "..",  # Path traversal
         "/",  # Path separator
         "\\",  # Windows path separator

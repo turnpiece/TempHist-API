@@ -1,10 +1,10 @@
 # AGENTS.md
 
-## Cursor / AI agent instructions
+## AI agent instructions
 
 ### Overview
 
-TempHist API is a Python/FastAPI backend serving historical temperature data (50 years) via Open-Meteo (free, no API key). It uses Redis for caching/rate-limiting/queuing and optionally PostgreSQL for persistent cache with location aliasing.
+TempHist API is a Python/FastAPI backend serving historical temperature data (50 years) via Open-Meteo (free, with no API key, or paid and with an API key). It can also use Visual Crossing with an API key. It uses Redis for caching/rate-limiting/queuing and optionally PostgreSQL for persistent cache with location aliasing.
 
 ### Services
 

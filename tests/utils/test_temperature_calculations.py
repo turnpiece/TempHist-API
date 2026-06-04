@@ -7,11 +7,11 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from datetime import datetime
+from datetime import datetime  # noqa: E402
 
-import pytest
+import pytest  # noqa: E402
 
-from utils.temperature import calculate_standard_deviation, calculate_trend_slope, generate_summary
+from utils.temperature import calculate_standard_deviation, calculate_trend_slope, generate_summary  # noqa: E402
 
 
 class TestCalculateStandardDeviation:

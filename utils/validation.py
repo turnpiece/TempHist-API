@@ -59,7 +59,7 @@ def validate_location_for_ssrf(location: str) -> str:
         "@",  # URL auth separator
         "localhost",
         "127.0.0.1",
-        "0.0.0.0",
+        "0.0.0.0",  # noqa: S104
         "169.254",  # Link-local
         "10.",  # Private IP range start
         "172.16",  # Private IP range start

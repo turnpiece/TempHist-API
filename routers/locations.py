@@ -9,7 +9,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 from collections import defaultdict
@@ -18,6 +17,7 @@ from typing import Dict, FrozenSet, List, Optional, Tuple, Union
 from urllib.parse import quote
 
 import aiohttp
+import anyio
 import pycountry
 import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -369,18 +369,16 @@ def convert_image_urls(image_urls: Dict[str, str]) -> Dict[str, str]:
 async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
     """Load and validate locations data from JSON file."""
     # Find project root by looking for pyproject.toml
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = current_dir
-    while project_root != os.path.dirname(project_root):  # Stop at filesystem root
-        if os.path.exists(os.path.join(project_root, "pyproject.toml")):
+    project_root = anyio.Path(__file__).parent
+    while project_root != project_root.parent:  # Stop at filesystem root
+        if await (project_root / "pyproject.toml").exists():
             break
-        project_root = os.path.dirname(project_root)
+        project_root = project_root.parent
 
-    data_file = os.path.join(project_root, "data", "preapproved_locations.json")
+    data_file = project_root / "data" / "preapproved_locations.json"
 
     try:
-        with open(data_file, "r", encoding="utf-8") as f:
-            raw_data = f.read()
+        raw_data = await data_file.read_text(encoding="utf-8")
 
         # Parse JSON
         json_data = json.loads(raw_data)
@@ -395,7 +393,7 @@ async def load_locations_data() -> Tuple[List[LocationItem], str, str]:
 
         # Generate ETag and Last-Modified
         etag = generate_etag(raw_data)
-        file_stat = os.stat(data_file)
+        file_stat = await data_file.stat()
         last_modified = datetime.fromtimestamp(file_stat.st_mtime).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
         logger.info(f"Loaded {len(locations)} preapproved locations from {data_file}")

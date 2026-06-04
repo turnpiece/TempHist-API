@@ -64,9 +64,9 @@ from utils.temperature import (
     get_friendly_date,
 )
 from utils.validation import validate_location_for_ssrf
-from utils.weather_provider import LocationNotFoundError, fetch_timeline_days
 from utils.weather import create_metadata, get_year_range, track_missing_year
 from utils.weather_data import get_temperature_series
+from utils.weather_provider import LocationNotFoundError, fetch_timeline_days
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -876,8 +876,8 @@ async def _get_record_data_internal(
                     return _rebuild_full_response_from_values(
                         values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
                     )
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("Could not read bundle cache: %s", _e)
 
         # MGET all year keys
         year_data, missing_past, missing_current = await get_records(redis_client, period, slug, identifier, years)

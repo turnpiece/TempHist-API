@@ -666,10 +666,10 @@ class TestIPWhitelistBlacklist:
             importlib.reload(utils.ip_utils)
             from utils.ip_utils import is_ip_whitelisted
 
-            assert is_ip_whitelisted("192.168.1.100") == True
-            assert is_ip_whitelisted("10.0.0.5") == True
-            assert is_ip_whitelisted("192.168.1.101") == False
-            assert is_ip_whitelisted("unknown") == False
+            assert is_ip_whitelisted("192.168.1.100")
+            assert is_ip_whitelisted("10.0.0.5")
+            assert not is_ip_whitelisted("192.168.1.101")
+            assert not is_ip_whitelisted("unknown")
 
     def test_ip_blacklist_function(self):
         """Test IP blacklist helper function."""
@@ -682,10 +682,10 @@ class TestIPWhitelistBlacklist:
             importlib.reload(utils.ip_utils)
             from utils.ip_utils import is_ip_blacklisted
 
-            assert is_ip_blacklisted("192.168.1.200") == True
-            assert is_ip_blacklisted("10.0.0.99") == True
-            assert is_ip_blacklisted("192.168.1.201") == False
-            assert is_ip_blacklisted("unknown") == False
+            assert is_ip_blacklisted("192.168.1.200")
+            assert is_ip_blacklisted("10.0.0.99")
+            assert not is_ip_blacklisted("192.168.1.201")
+            assert not is_ip_blacklisted("unknown")
 
     def test_whitelist_empty_environment(self):
         """Test whitelist with empty environment variable."""
@@ -696,7 +696,7 @@ class TestIPWhitelistBlacklist:
 
             importlib.reload(main)
 
-            assert main.is_ip_whitelisted("192.168.1.100") == False
+            assert not main.is_ip_whitelisted("192.168.1.100")
             assert main.IP_WHITELIST == []
 
     def test_blacklist_empty_environment(self):
@@ -708,7 +708,7 @@ class TestIPWhitelistBlacklist:
 
             importlib.reload(main)
 
-            assert main.is_ip_blacklisted("192.168.1.200") == False
+            assert not main.is_ip_blacklisted("192.168.1.200")
             assert main.IP_BLACKLIST == []
 
     def test_whitelist_with_spaces(self):
@@ -721,8 +721,8 @@ class TestIPWhitelistBlacklist:
             importlib.reload(utils.ip_utils)
             from utils.ip_utils import IP_WHITELIST, is_ip_whitelisted
 
-            assert is_ip_whitelisted("192.168.1.100") == True
-            assert is_ip_whitelisted("10.0.0.5") == True
+            assert is_ip_whitelisted("192.168.1.100")
+            assert is_ip_whitelisted("10.0.0.5")
             assert IP_WHITELIST == ["192.168.1.100", "10.0.0.5"]
 
 
@@ -765,8 +765,8 @@ class TestIPWhitelistBlacklistIntegration:
 
                 data = response.json()
                 ip_status = data.get("ip_status", {})
-                assert ip_status.get("whitelisted") == True
-                assert ip_status.get("rate_limited") == False
+                assert ip_status.get("whitelisted")
+                assert not ip_status.get("rate_limited")
 
     def test_service_job_bypasses_rate_limits(self, client):
         """Test that service jobs using API_ACCESS_TOKEN bypass rate limiting."""
@@ -786,9 +786,9 @@ class TestIPWhitelistBlacklistIntegration:
 
                 data = response.json()
                 ip_status = data.get("ip_status", {})
-                assert ip_status.get("service_job") == True
+                assert ip_status.get("service_job")
                 # Service jobs are still rate limited (just with higher limits)
-                assert ip_status.get("rate_limited") == True
+                assert ip_status.get("rate_limited")
 
                 # Verify service job can access protected endpoints without rate limiting
                 with patch("utils.weather_data.fetch_weather_batch", return_value={"2024-01-15": {"temp": 20.0}}):

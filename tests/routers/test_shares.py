@@ -446,10 +446,10 @@ class TestOgImage:
 # and list_shares dedup logic
 # ---------------------------------------------------------------------------
 
-import asyncio
-from datetime import datetime, timezone
+import asyncio  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
-from utils.share_store import ShareStore, _haversine_km
+from utils.share_store import ShareStore, _haversine_km  # noqa: E402
 
 
 class TestHaversine:
