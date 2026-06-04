@@ -1177,10 +1177,10 @@ async def get_record(
                     except Exception as e:
                         logger.warning(f"Failed to enqueue refresh job: {e}")
 
-                # Fetch missing past years inline (sync fallback path).
-                # We already have full_data (all years) so also handle
-                # missing_current here rather than leaving 2026 out of the response.
-                if missing_past:
+                # Fetch missing years inline. When only the current year is missing
+                # and there is no stale bundle to serve, we still need to fetch it
+                # inline — otherwise it gets left out of the assembled bundle.
+                if missing_past or missing_current:
                     full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
                     per_year_records = _extract_per_year_records(full_data)
                     from cache.core import ETagGenerator
