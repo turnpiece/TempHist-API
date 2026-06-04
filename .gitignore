@@ -24,8 +24,8 @@ profile_*.py
 # Log files
 *.log
 
-# Node modules
-mode_modules/
+# Benchmarks
+benchmarks/
 
 # Graphify - keep outputs, ignore temp/cache files
 graphify-out/.graphify_python

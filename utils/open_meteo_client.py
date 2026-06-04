@@ -14,15 +14,9 @@ from urllib.parse import quote
 
 import aiohttp
 
+from utils.weather_types import LocationNotFoundError  # noqa: F401
+
 logger = logging.getLogger(__name__)
-
-# ── Exception ─────────────────────────────────────────────────────────────────
-
-
-class LocationNotFoundError(RuntimeError):
-    """Raised when a location string cannot be resolved to coordinates."""
-
-    pass
 
 
 # ── Constants (imported lazily to avoid circular import at module load) ────────

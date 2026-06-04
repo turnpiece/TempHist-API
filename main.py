@@ -761,9 +761,9 @@ async def lifespan(app: FastAPI):
 
     # Clean up HTTP client sessions
     try:
-        from utils.open_meteo_client import close_client as close_timeline_client
+        from utils.weather_provider import close_client_session
 
-        await close_timeline_client()
+        await close_client_session()
         if DEBUG:
             logger.info("✅ HTTP client sessions closed successfully")
     except Exception as e:

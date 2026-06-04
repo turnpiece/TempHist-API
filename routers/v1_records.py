@@ -64,7 +64,7 @@ from utils.temperature import (
     get_friendly_date,
 )
 from utils.validation import validate_location_for_ssrf
-from utils.visual_crossing_timeline import LocationNotFoundError, fetch_timeline_days
+from utils.weather_provider import LocationNotFoundError, fetch_timeline_days
 from utils.weather import create_metadata, get_year_range, track_missing_year
 from utils.weather_data import get_temperature_series
 
