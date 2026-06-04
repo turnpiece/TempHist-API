@@ -122,11 +122,14 @@ def _process_om_response(payload: dict, filter_start: date, filter_end: date) ->
     start_s = filter_start.isoformat()
     end_s = filter_end.isoformat()
 
-    return [
-        {"datetime": t, "temp": m, "tempmax": mx, "tempmin": mn}
-        for t, m, mx, mn in zip(times, means, maxs, mins)
-        if t and start_s <= t <= end_s
-    ]
+    days = []
+    for t, m, mx, mn in zip(times, means, maxs, mins):
+        if not t or not (start_s <= t <= end_s):
+            continue
+        if m is None and mx is not None and mn is not None:
+            m = round((mx + mn) / 2, 1)
+        days.append({"datetime": t, "temp": m, "tempmax": mx, "tempmin": mn})
+    return days
 
 
 def _extract_metadata(payload: dict) -> Dict[str, Any]:
