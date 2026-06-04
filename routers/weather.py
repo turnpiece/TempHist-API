@@ -1,6 +1,5 @@
 """Weather endpoints."""
 
-import asyncio
 import json
 import logging
 from datetime import date as dt_date
@@ -44,7 +43,7 @@ from routers.dependencies import get_redis_client  # noqa: E402
 
 
 @router.get("/weather/{location:path}/{date}")
-def get_weather(
+async def get_weather(
     location: str = Path(..., description="Location name", max_length=200),
     date: str = Path(..., description="Date in YYYY-MM-DD format"),
     unit_group: str = Query("celsius", description="Temperature unit: 'celsius' or 'fahrenheit'"),
@@ -88,9 +87,7 @@ def get_weather(
             logger.info("⚠️  CACHING DISABLED: fetching from API")
 
     logger.info("[DEBUG] About to call get_weather_for_date...")
-    # Use the shared async function for consistency
-    # Since this is a sync endpoint, run the async function in the event loop
-    result = asyncio.run(get_weather_for_date(location, date, redis_client))
+    result = await get_weather_for_date(location, date, redis_client)
 
     # Log the final response being returned to the client
     if DEBUG:
