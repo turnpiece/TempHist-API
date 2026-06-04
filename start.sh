@@ -3,6 +3,9 @@ set -euo pipefail
 
 echo "Starting TempHist API local stack..."
 
+# Ensure uv uses its own .venv project environment, not any activated virtualenv
+unset VIRTUAL_ENV
+
 # 1) Ensure local dependencies are synced using uv
 if [[ ! -f "requirements.txt" ]]; then
   echo "Error: requirements.txt not found!"
