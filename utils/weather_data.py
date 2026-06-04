@@ -27,8 +27,6 @@ from utils.weather_provider import fetch_single_date
 
 logger = logging.getLogger(__name__)
 
-_TEMP_FIELDS = ("temp", "tempmin", "tempmax")
-
 
 def _c_to_f(value) -> float | None:
     """Convert Celsius to Fahrenheit, rounded to 2dp."""
