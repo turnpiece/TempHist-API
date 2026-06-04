@@ -40,6 +40,10 @@ Use the following variables:
 # Required
 API_ACCESS_TOKEN=your_key_here
 
+# Weather provider (optional — defaults to open_meteo)
+WEATHER_PROVIDER=open_meteo           # or visual_crossing
+VISUAL_CROSSING_API_KEY=your_key_here # required only when WEATHER_PROVIDER=visual_crossing
+
 # Redis Configuration
 REDIS_URL=redis://localhost:6379  # Optional, defaults to localhost
 CACHE_ENABLED=true  # Optional, defaults to true
@@ -1577,6 +1581,14 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
 
 #### 🔧 **Main API Service Variables**
+
+**Weather Provider:**
+
+```bash
+# Weather provider selection (default: open_meteo)
+WEATHER_PROVIDER=open_meteo                        # open_meteo (default) or visual_crossing
+VISUAL_CROSSING_API_KEY=your_key_here              # Required only when WEATHER_PROVIDER=visual_crossing
+```
 
 **Core Configuration:**
 

@@ -1,4 +1,4 @@
-"""Weather data fetching functions — backed by Open-Meteo."""
+"""Weather data fetching functions — delegates to the configured weather provider."""
 
 import asyncio
 import json
@@ -21,9 +21,9 @@ from config import (
     SHORT_CACHE_DURATION,
     SHORT_CACHE_DURATION_SECONDS,
 )
-from utils.open_meteo_client import fetch_single_date
 from utils.sanitization import sanitize_for_logging
 from utils.weather import is_today
+from utils.weather_provider import fetch_single_date
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ async def get_weather_for_date(
     date_str: str,
     redis_client: redis.Redis,
 ) -> dict:
-    """Fetch and cache weather data for a specific date via Open-Meteo."""
+    """Fetch and cache weather data for a specific date via the configured weather provider."""
     logger.debug("get_weather_for_date for %s on %s", sanitize_for_logging(location), date_str)
     cache_key = get_weather_cache_key(location, date_str)
     if CACHE_ENABLED:
@@ -61,7 +61,7 @@ async def get_weather_for_date(
             except Exception as e:
                 logger.error("Error decoding cached data for %s: %s", cache_key, e)
 
-    logger.debug("Cache miss: %s — fetching from Open-Meteo", cache_key)
+    logger.debug("Cache miss: %s — fetching from weather provider", cache_key)
 
     try:
         year, month, day = map(int, date_str.split("-")[:3])
@@ -72,7 +72,7 @@ async def get_weather_for_date(
     try:
         result = await fetch_single_date(location, date_str)
     except Exception as exc:
-        logger.error("Open-Meteo fetch failed for %s on %s: %s", location, date_str, exc)
+        logger.error("Weather fetch failed for %s on %s: %s", location, date_str, exc)
         return {"error": str(exc)}
 
     if "error" in result:
@@ -103,7 +103,7 @@ async def get_weather_for_date(
         to_cache = {"days": [day_data]}
 
     if DEBUG:
-        logger.debug("🌤️ FRESH OM RESPONSE: %s | %s", location, date_str)
+        logger.debug("🌤️ FRESH WEATHER RESPONSE: %s | %s", location, date_str)
 
     if CACHE_ENABLED:
         cache_duration = (
@@ -117,7 +117,7 @@ async def get_weather_for_date(
 
 
 async def get_forecast_data(location: str, date, redis_client: redis.Redis = None, unit_group: str = "celsius") -> Dict:
-    """Get forecast data for a location and date via Open-Meteo."""
+    """Get forecast data for a location and date via the configured weather provider."""
     if hasattr(date, "strftime"):
         date_str = date.strftime("%Y-%m-%d")
     else:
@@ -128,7 +128,7 @@ async def get_forecast_data(location: str, date, redis_client: redis.Redis = Non
     try:
         result = await fetch_single_date(location, date_str)
     except Exception as exc:
-        logger.error("Open-Meteo forecast fetch failed for %s on %s: %s", location, date_str, exc)
+        logger.error("Weather forecast fetch failed for %s on %s: %s", location, date_str, exc)
         return {"error": str(exc)}
 
     if "error" in result:
@@ -159,7 +159,7 @@ async def fetch_weather_batch(
     max_concurrent: int = None,
     semaphore_override=None,
 ) -> dict:
-    """Fetch weather data for multiple dates in parallel via Open-Meteo.
+    """Fetch weather data for multiple dates in parallel via the configured weather provider.
 
     Returns a dict mapping date_str to weather data.
     """

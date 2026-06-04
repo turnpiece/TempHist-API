@@ -98,6 +98,11 @@ Then add your other environment variables:
 # Required
 API_ACCESS_TOKEN=your_token_here
 
+# Weather provider (defaults to open_meteo — no key needed)
+# Set to visual_crossing and supply the key to use Visual Crossing instead:
+# WEATHER_PROVIDER=visual_crossing
+# VISUAL_CROSSING_API_KEY=your_key_here
+
 # Firebase (optional - see Firebase section below)
 FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}
 
@@ -135,11 +140,18 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
 ### Required Variables
 
-| Variable           | Description                                     | Example                                           |
-| ------------------ | ----------------------------------------------- | ------------------------------------------------- |
-| `API_ACCESS_TOKEN` | API access token for automated systems          | `ghi789...`                                       |
-| `REDIS_URL`        | Redis connection URL (auto-provided by Railway) | `redis://default:...@redis.railway.internal:6379` |
-| `MAPBOX_TOKEN`     | Mapbox public token for location geocoding      | `pk.eyJ1...`                                      |
+| Variable                  | Description                                                      | Example                                           |
+| ------------------------- | ---------------------------------------------------------------- | ------------------------------------------------- |
+| `API_ACCESS_TOKEN`        | API access token for automated systems                           | `ghi789...`                                       |
+| `REDIS_URL`               | Redis connection URL (auto-provided by Railway)                  | `redis://default:...@redis.railway.internal:6379` |
+| `MAPBOX_TOKEN`            | Mapbox public token for location geocoding                       | `pk.eyJ1...`                                      |
+
+### Weather Provider Variables
+
+| Variable                  | Default       | Description                                                                  |
+| ------------------------- | ------------- | ---------------------------------------------------------------------------- |
+| `WEATHER_PROVIDER`        | `open_meteo`  | `open_meteo` (free, no key) or `visual_crossing` (requires API key below)    |
+| `VISUAL_CROSSING_API_KEY` | *(none)*      | Required only when `WEATHER_PROVIDER=visual_crossing`                        |
 
 ### Optional Variables
 

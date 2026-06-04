@@ -72,6 +72,11 @@ HTTP_TIMEOUT_LONG = 120.0  # Long timeout for large data requests
 HTTP_TIMEOUT = HTTP_TIMEOUT_DEFAULT  # Alias for backward compatibility
 MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection
 
+# Weather provider selection
+# Set WEATHER_PROVIDER=visual_crossing to use Visual Crossing (requires VISUAL_CROSSING_API_KEY).
+# Defaults to open_meteo (free, no API key required).
+WEATHER_PROVIDER = os.getenv("WEATHER_PROVIDER", "open_meteo").strip().lower()
+
 # Open-Meteo API configuration
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
