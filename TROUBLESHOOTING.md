@@ -205,7 +205,7 @@ REDIS_URL=redis://default:password@redis.railway.internal:6379
 
 **Common Causes**:
 
-1. Visual Crossing API errors
+1. Open-Meteo geocoding or data errors
 2. Invalid location parameters
 3. Timeout errors
 4. Rate limiting
@@ -216,9 +216,9 @@ REDIS_URL=redis://default:password@redis.railway.internal:6379
 
 2. **Common error causes**:
 
-   - **API errors**: Verify API key is valid and has quota
+   - **Geocoding errors**: Location name could not be resolved — check location name format
    - **Invalid location**: Check location name format
-   - **Timeout**: Network or API response time issues
+   - **Timeout**: Network or Open-Meteo API response time issues
    - **Redis errors**: Check Redis connectivity
 
 3. **Check deployment logs**:
@@ -532,15 +532,14 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 2. **Common causes**:
 
    - Missing environment variables
-   - API key issues (Visual Crossing)
    - Redis connection problems
+   - Open-Meteo geocoding failure or unexpected response format
    - Invalid data from external API
 
 3. **Verify configuration**:
 
 ```bash
 # Check all required variables are set:
-VISUAL_CROSSING_API_KEY
 API_ACCESS_TOKEN
 REDIS_URL
 ```
@@ -574,7 +573,7 @@ python prewarm.py --locations 20 --days 7
 
 3. **Check external API response times**:
 
-   - Visual Crossing API may be slow
+   - Open-Meteo API may be slow
    - Network latency issues
 
 4. **Use async job endpoints** for heavy computations:

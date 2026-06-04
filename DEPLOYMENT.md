@@ -17,7 +17,6 @@ Complete deployment instructions for the TempHist API.
 
 - GitHub account
 - Railway account (https://railway.app/)
-- Visual Crossing API key
 - Firebase service account JSON (optional)
 
 ### Basic Deployment Steps
@@ -96,8 +95,7 @@ REDIS_URL=${{Redis.REDIS_URL}}
 Then add your other environment variables:
 
 ```bash
-# Required API Keys
-VISUAL_CROSSING_API_KEY=your_key_here
+# Required
 API_ACCESS_TOKEN=your_token_here
 
 # Firebase (optional - see Firebase section below)
@@ -137,12 +135,11 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
 ### Required Variables
 
-| Variable                  | Description                                     | Example                                           |
-| ------------------------- | ----------------------------------------------- | ------------------------------------------------- |
-| `VISUAL_CROSSING_API_KEY` | Visual Crossing weather API key                 | `abc123...`                                       |
-| `API_ACCESS_TOKEN`        | API access token for automated systems          | `ghi789...`                                       |
-| `REDIS_URL`               | Redis connection URL (auto-provided by Railway) | `redis://default:...@redis.railway.internal:6379` |
-| `MAPBOX_TOKEN`            | Mapbox public token for location geocoding      | `pk.eyJ1...`                                      |
+| Variable           | Description                                     | Example                                           |
+| ------------------ | ----------------------------------------------- | ------------------------------------------------- |
+| `API_ACCESS_TOKEN` | API access token for automated systems          | `ghi789...`                                       |
+| `REDIS_URL`        | Redis connection URL (auto-provided by Railway) | `redis://default:...@redis.railway.internal:6379` |
+| `MAPBOX_TOKEN`     | Mapbox public token for location geocoding      | `pk.eyJ1...`                                      |
 
 ### Optional Variables
 

@@ -4,7 +4,7 @@
 
 ### Overview
 
-TempHist API is a Python/FastAPI backend serving historical temperature data (50 years) via Open-Meteo (free, with no API key, or paid and with an API key). It can also use Visual Crossing with an API key. It uses Redis for caching/rate-limiting/queuing and optionally PostgreSQL for persistent cache with location aliasing.
+TempHist API is a Python/FastAPI backend serving historical temperature data (50 years) via Open-Meteo (ERA5 reanalysis data). Open-Meteo is free for non-commercial use (no API key); a paid API key unlocks higher rate limits. It uses Redis for caching/rate-limiting/queuing and optionally PostgreSQL for persistent cache with location aliasing.
 
 ### Services
 
@@ -21,7 +21,7 @@ Or use `./start.sh` to start both the API server and worker together via uv.
 
 Secrets are injected automatically. Key ones: `REDIS_URL`, `API_ACCESS_TOKEN`, `TEMPHIST_PG_DSN`, `MAPBOX_TOKEN`. See `README.md` for the full list.
 
-`VISUAL_CROSSING_API_KEY` is no longer used — the weather source is now Open-Meteo.
+`VISUAL_CROSSING_API_KEY` is not used — the weather source is Open-Meteo, which requires no API key.
 
 ### Running tests
 

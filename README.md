@@ -1,6 +1,6 @@
 # TempHist API
 
-A FastAPI backend for historical temperature data using Visual Crossing with comprehensive caching, rate limiting, and monitoring capabilities.
+A FastAPI backend for historical temperature data using Open-Meteo with comprehensive caching, rate limiting, and monitoring capabilities.
 
 ## 🚀 Features
 
@@ -29,7 +29,6 @@ A FastAPI backend for historical temperature data using Visual Crossing with com
 - Python 3.10+ (production uses **3.12.3**; see `.python-version` and `render.yaml`)
 - Redis server (local or cloud) - Required
 - PostgreSQL database (local or cloud) - Optional, for persistent cache with location aliasing
-- Visual Crossing API key
 
 ## ⚙️ Configuration
 
@@ -38,8 +37,7 @@ Create a `.env` file in the project root (the same directory as `main.py` and `c
 Use the following variables:
 
 ```bash
-# Required API Keys
-VISUAL_CROSSING_API_KEY=your_key_here
+# Required
 API_ACCESS_TOKEN=your_key_here
 
 # Redis Configuration
@@ -309,7 +307,7 @@ When serving approximate data, comprehensive metadata is included:
 **Performance Benefits:**
 - Cache hit rate: Improved from ~60-70% to ~85-95%
 - Response time: Reduced by 200-500ms average
-- API cost reduction: ~40-60% fewer Visual Crossing requests
+- Upstream request reduction: ~40-60% fewer Open-Meteo requests
 
 ### Cache Endpoints
 
@@ -1310,7 +1308,7 @@ The API implements a sophisticated multi-layer caching system:
 #### 1. PostgreSQL Persistent Cache
 - **Historical temperature data**: Long-term storage with location aliasing
 - **Location deduplication**: Nearby locations (within 25km) share cached data
-- **Persistent aliases**: Stable mappings reduce repeated Visual Crossing lookups
+- **Persistent aliases**: Stable mappings reduce repeated upstream weather lookups
 - **Duration**: Permanent (until data becomes stale or is manually invalidated)
 
 #### 2. Redis Fast Cache
@@ -1395,7 +1393,7 @@ cProfile.run('calculate_historical_average([{\"x\": 2020, \"y\": 15.5}])')
 - **Response-Timing Middleware** (`main.py`): emits `X-Response-Time` headers and logs requests slower than 1 s to surface bottlenecks early.
 - **Redis Pipelining** (`cache_utils.py`, `job_worker.py`): batches multi-year cache writes/reads to cut network round trips and latency.
 - **Tiered Cache TTLs** (`cache_utils.py`, `job_worker.py`): extends TTL for older years (up to 365 days) while keeping recent data fresh.
-- **Visual Crossing Timeout Control** (`main.py`, `config.py`, `utils/visual_crossing_timeline.py`): separates `HTTP_TIMEOUT_VISUAL_CROSSING` (default 30 s) so slow upstream calls fail fast.
+- **Open-Meteo Timeout Control** (`utils/open_meteo_client.py`, `config.py`): configures separate connect and read timeouts so slow upstream calls fail fast.
 
 ### Monitoring Tools
 
@@ -1548,7 +1546,7 @@ grep "RATE" temphist.log
 - **PostgreSQL database** (version 12+ recommended) - Optional, for persistent cache
 - **Memory**: 512MB RAM minimum, 1GB+ recommended (2GB+ if using PostgreSQL)
 - **Storage**: 100MB+ for application, 500MB+ recommended if using PostgreSQL persistent cache
-- **Network**: Outbound HTTPS access to weather APIs
+- **Network**: Outbound HTTPS access to Open-Meteo APIs (`archive-api.open-meteo.com`, `api.open-meteo.com`)
 
 **Supported Platforms:**
 
@@ -1560,12 +1558,6 @@ grep "RATE" temphist.log
 ### Environment Variables
 
 #### 🔑 **Required Variables**
-
-**API Keys (Required for main service):**
-
-```bash
-VISUAL_CROSSING_API_KEY=your_visual_crossing_key    # Primary weather data source
-```
 
 **Database:**
 
