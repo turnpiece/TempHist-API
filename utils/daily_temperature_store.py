@@ -1174,12 +1174,14 @@ class DailyTemperatureStore:
 
 
 _store: Optional[DailyTemperatureStore] = None
-_store_lock = asyncio.Lock()
+_store_lock: Optional[asyncio.Lock] = None
 
 
 async def get_daily_temperature_store() -> DailyTemperatureStore:
     """Return a singleton DailyTemperatureStore instance."""
-    global _store
+    global _store, _store_lock
+    if _store_lock is None:
+        _store_lock = asyncio.Lock()
     if _store is not None:
         return _store
     async with _store_lock:

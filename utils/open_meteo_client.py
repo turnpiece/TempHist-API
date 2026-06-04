@@ -26,16 +26,19 @@ _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY = 1.0
 
 # Semaphore(2) at ~285ms/req ≈ 7 req/s — well under OM's 600 req/min free-tier cap.
-_sem = asyncio.Semaphore(2)
+# Initialized lazily to avoid binding to a closed event loop at import time.
+_sem: Optional[asyncio.Semaphore] = None
 
 # ── Shared HTTP session ───────────────────────────────────────────────────────
 
 _client: Optional[aiohttp.ClientSession] = None
-_client_lock = asyncio.Lock()
+_client_lock: Optional[asyncio.Lock] = None
 
 
 async def _get_client() -> aiohttp.ClientSession:
-    global _client
+    global _client, _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
     if _client is not None and not _client.closed:
         return _client
     async with _client_lock:
@@ -240,6 +243,9 @@ async def fetch_days(
     }
 
     async def fetch_one(url: str, fs: date, fe: date) -> None:
+        global _sem
+        if _sem is None:
+            _sem = asyncio.Semaphore(2)
         attempt = 0
         while True:
             attempt += 1
