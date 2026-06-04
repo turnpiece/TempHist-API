@@ -14,7 +14,7 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 filterwarnings = [
-    "ignore::DeprecationWarning:pyparsing",
+    "ignore:.*deprecated.*:DeprecationWarning:matplotlib",
 ]
 
 [tool.ruff]
