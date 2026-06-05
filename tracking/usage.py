@@ -1,7 +1,8 @@
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import redis
 
@@ -171,6 +172,36 @@ class LocationUsageTracker:
             )
         except Exception as _e:
             logger.debug("Could not cache display string for %s: %s", location_id, _e)
+
+    def store_location_metadata(self, location_id: str, metadata: dict) -> None:
+        """Persist minimal metadata for a non-preapproved location.
+
+        Stored so that the location can be returned by the popular endpoint
+        with enough fields to be rendered (name, country, etc.) even without
+        a full preapproved LocationItem.  TTL matches store_location_display.
+        """
+        if not USAGE_TRACKING_ENABLED or not metadata:
+            return
+        try:
+            self.redis_client.set(
+                f"loc_meta:{location_id}",
+                json.dumps(metadata, ensure_ascii=False),
+                ex=95 * 86400,
+            )
+        except Exception as _e:
+            logger.debug("Could not cache metadata for %s: %s", location_id, _e)
+
+    def get_location_metadata(self, location_id: str) -> Optional[dict]:
+        """Retrieve stored minimal metadata for a location ID, or None."""
+        if not USAGE_TRACKING_ENABLED:
+            return None
+        try:
+            raw = self.redis_client.get(f"loc_meta:{location_id}")
+            if raw:
+                return json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        except Exception as _e:
+            logger.debug("Could not retrieve metadata for %s: %s", location_id, _e)
+        return None
 
     def get_popular_display_strings(self, limit: int = 20, days: int = 30) -> List[str]:
         """Return display strings for the top-ranked locations.

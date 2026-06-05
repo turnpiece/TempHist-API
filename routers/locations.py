@@ -34,6 +34,7 @@ if not MAPBOX_TOKEN:
 
 # Constants
 CACHE_TTL = 604800  # 7 days (data changes infrequently)
+POPULAR_CACHE_TTL = 3600  # 1 hour — rebuilt from live selection signal
 RATE_LIMIT_REQUESTS = 60  # requests per minute
 RATE_LIMIT_WINDOW = 60  # 1 minute window
 CACHE_PREFIX = "preapproved:v1"
@@ -441,8 +442,7 @@ async def warm_cache() -> None:
             "locations": [loc.model_dump() for loc in locations_data],
         }
         await set_cached_response(get_cache_key(), response_data)
-        await set_cached_response(get_popular_cache_key(), response_data)
-        logger.info("Warmed preapproved and popular locations caches")
+        logger.info("Warmed preapproved locations cache")
     except Exception as e:
         logger.error(f"Error warming cache: {e}")
 
@@ -707,9 +707,13 @@ async def get_locations_status():
 # ---------------------------------------------------------------------------
 
 
-def _build_popular_locations(limit: int) -> List[LocationItem]:
+def _build_popular_locations(limit: int) -> List[dict]:
     """
-    Return ranked LocationItem objects for the popular endpoint.
+    Return ranked location dicts for the popular endpoint.
+
+    Preapproved locations are returned with full metadata (including image
+    fields).  Non-preapproved locations are returned with whatever minimal
+    metadata was stored at selection time (name, country, etc.; no images).
 
     Selection-ranked results are used whenever any signal exists; preapproved
     locations always pad the list so there are at least as many results as
@@ -717,27 +721,31 @@ def _build_popular_locations(limit: int) -> List[LocationItem]:
     only when the usage tracker is unavailable.
     """
     tracker = get_usage_tracker()
+    loc_by_id = {loc.id: loc for loc in locations_data}
+
     if tracker is None:
-        return locations_data[:limit]
+        return [loc.model_dump() for loc in locations_data[:limit]]
 
     # Fetch extra to cover IDs that may not be in the preapproved list
     ranked = tracker.get_popular_from_selections(limit=limit * 2, days=POPULARITY_WINDOW_DAYS)
-    loc_by_id = {loc.id: loc for loc in locations_data}
 
-    result: List[LocationItem] = []
+    result: List[dict] = []
     for location_id, _score in ranked:
-        loc = loc_by_id.get(location_id)
-        if loc:
-            result.append(loc)
+        if location_id in loc_by_id:
+            result.append(loc_by_id[location_id].model_dump())
+        else:
+            meta = tracker.get_location_metadata(location_id)
+            if meta:
+                result.append(meta)
         if len(result) >= limit:
             break
 
     # Pad with preapproved fallback if not enough signal-derived results
     if len(result) < limit:
-        seen_ids = {loc.id for loc in result}
+        seen_ids = {loc["id"] for loc in result}
         for loc in locations_data:
             if loc.id not in seen_ids:
-                result.append(loc)
+                result.append(loc.model_dump())
             if len(result) >= limit:
                 break
 
@@ -814,18 +822,29 @@ async def get_popular_locations(
                     loc.pop(field, None)
         return cached_response
 
-    # Build ranked list (popularity order preserved), then apply filters
+    # Build ranked list (popularity order preserved), then apply filters.
+    # _build_popular_locations returns dicts (mixed preapproved + non-preapproved),
+    # so we filter inline rather than via filter_locations (which expects LocationItem).
     popular = _build_popular_locations(limit or POPULARITY_MAX_LOCATIONS)
-    filtered_locations = filter_locations(popular, resolved_country, tier, limit, preserve_order=True)
+    filtered: List[dict] = popular
+    if resolved_country:
+        if isinstance(resolved_country, frozenset):
+            filtered = [loc for loc in filtered if loc.get("country_code") in resolved_country]
+        else:
+            filtered = [loc for loc in filtered if loc.get("country_code") == resolved_country]
+    if tier:
+        filtered = [loc for loc in filtered if loc.get("tier") == tier]
+    if limit:
+        filtered = filtered[:limit]
 
-    # Cache full data (with images)
+    # Cache stores full data (images present for preapproved; absent for non-preapproved)
     full_data = {
         "version": 1,
-        "count": len(filtered_locations),
+        "count": len(filtered),
         "generated_at": datetime.now().isoformat(),
-        "locations": [loc.model_dump() for loc in filtered_locations],
+        "locations": filtered,
     }
-    await set_cached_response(cache_key, full_data)
+    await set_cached_response(cache_key, full_data, ttl=POPULAR_CACHE_TTL)
 
     response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
     response.headers["ETag"] = locations_etag
@@ -834,7 +853,7 @@ async def get_popular_locations(
     if include_images:
         return full_data
 
-    slim_locs = [_loc_to_dict(loc, include_images=False) for loc in filtered_locations]
+    slim_locs = [{k: v for k, v in loc.items() if k not in _IMAGE_FIELDS} for loc in filtered]
     return {**full_data, "locations": slim_locs}
 
 
@@ -955,6 +974,23 @@ async def record_location_selection(request: Request, body: SelectionRequest):
     tracker = get_usage_tracker()
     if tracker is not None:
         tracker.record_selection(canonical_id, uid)
+
+        loc_by_id = {loc.id: loc for loc in locations_data}
+        if canonical_id not in loc_by_id and body.name:
+            country_name = None
+            if body.country_code:
+                country = pycountry.countries.get(alpha_2=body.country_code.upper())
+                if country:
+                    country_name = country.name
+            tracker.store_location_metadata(canonical_id, {
+                "id": canonical_id,
+                "slug": canonical_id,
+                "name": body.name,
+                "admin1": body.admin1,
+                "country_name": country_name,
+                "country_code": body.country_code.upper() if body.country_code else None,
+            })
+
         display = _build_display_string(body)
         if display:
             tracker.store_location_display(canonical_id, display)

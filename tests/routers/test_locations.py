@@ -480,8 +480,8 @@ class TestDataLoading:
         ):
             await initialize_locations_data(mock_redis)
 
-        # Verify cache was warmed (preapproved:v1:all and popular:v1:all)
-        assert mock_redis.setex.call_count == 2
+        # Verify cache was warmed (preapproved:v1:all only — popular cache is not pre-populated)
+        assert mock_redis.setex.call_count == 1
 
     @pytest.mark.asyncio
     async def test_initialize_locations_data_file_not_found(self, mock_redis):
@@ -894,11 +894,12 @@ class TestSelectionEndpoint:
 
     def test_record_selection_with_name_only(self, main_client, mock_tracker):
         """Name-only submission generates a slug and records it."""
-        response = main_client.post(
-            "/v1/locations/selections",
-            json={"name": "Macclesfield"},
-            headers={"Authorization": "Bearer test-token"},
-        )
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Macclesfield"},
+                headers={"Authorization": "Bearer test-token"},
+            )
         assert response.status_code == 204
         mock_tracker.record_selection.assert_called_once_with("macclesfield", "testuser")
 
@@ -914,7 +915,7 @@ class TestSelectionEndpoint:
         mock_tracker.record_selection.assert_called_once_with("london", "testuser")
 
     def test_record_selection_name_no_preapproved_match_uses_slug(self, main_client, mock_tracker):
-        """Name + country_code with no preapproved match falls back to slug."""
+        """Name + country_code with no preapproved match falls back to slug and stores metadata."""
         with patch("routers.locations.locations_data", []):
             response = main_client.post(
                 "/v1/locations/selections",
@@ -923,6 +924,12 @@ class TestSelectionEndpoint:
             )
         assert response.status_code == 204
         mock_tracker.record_selection.assert_called_once_with("stoke_on_trent", "testuser")
+        mock_tracker.store_location_metadata.assert_called_once()
+        call_args = mock_tracker.store_location_metadata.call_args
+        assert call_args[0][0] == "stoke_on_trent"
+        meta = call_args[0][1]
+        assert meta["name"] == "Stoke-on-Trent"
+        assert meta["country_code"] == "GB"
 
     def test_record_selection_tracker_unavailable(self, main_client):
         """204 returned silently when tracker is None."""
