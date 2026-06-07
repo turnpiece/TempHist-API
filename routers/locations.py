@@ -180,6 +180,18 @@ class SelectionRequest(BaseModel):
         max_length=200,
         description="Full country name (e.g. 'India'). Takes precedence over country_code lookup.",
     )
+    latitude: Optional[float] = Field(
+        None,
+        ge=-90,
+        le=90,
+        description="Latitude of the selected location, if known (e.g. from geocoding search results).",
+    )
+    longitude: Optional[float] = Field(
+        None,
+        ge=-180,
+        le=180,
+        description="Longitude of the selected location, if known (e.g. from geocoding search results).",
+    )
 
     @model_validator(mode="after")
     def require_location_or_name(self) -> "SelectionRequest":
@@ -341,6 +353,35 @@ def _find_preapproved_id(name: str, country_code: str) -> Optional[str]:
         if (loc.name.lower(), loc.country_code) == target:
             return loc.id
     return None
+
+
+def _resolve_country_fields(country_code: Optional[str], country_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve a (country_code, country_name) pair, filling in whichever is missing.
+
+    - If both are supplied, they're returned as-is (normalised).
+    - If only country_code is supplied, country_name is looked up via pycountry.
+    - If only country_name is supplied, country_code is looked up via a fuzzy
+      pycountry search (best match by relevance), so clients that only know
+      the country's display name (e.g. from Mapbox) still get a usable code
+      for things like flag rendering.
+    """
+    code = country_code.upper() if country_code else None
+    name = country_name or None
+
+    if code and not name:
+        country = pycountry.countries.get(alpha_2=code)
+        if country:
+            name = country.name
+
+    if name and not code:
+        try:
+            matches = pycountry.countries.search_fuzzy(name)
+            if matches:
+                code = matches[0].alpha_2
+        except LookupError:
+            pass
+
+    return code, name
 
 
 def _resolve_canonical_id(body: "SelectionRequest") -> str:
@@ -982,18 +1023,16 @@ async def record_location_selection(request: Request, body: SelectionRequest):
 
         loc_by_id = {loc.id: loc for loc in locations_data}
         if canonical_id not in loc_by_id and body.name:
-            country_name = body.country_name
-            if not country_name and body.country_code:
-                country = pycountry.countries.get(alpha_2=body.country_code.upper())
-                if country:
-                    country_name = country.name
+            country_code, country_name = _resolve_country_fields(body.country_code, body.country_name)
             tracker.store_location_metadata(canonical_id, {
                 "id": canonical_id,
                 "slug": canonical_id,
                 "name": body.name,
                 "admin1": body.admin1,
                 "country_name": country_name,
-                "country_code": body.country_code.upper() if body.country_code else None,
+                "country_code": country_code,
+                "latitude": body.latitude,
+                "longitude": body.longitude,
             })
 
         display = _build_display_string(body)

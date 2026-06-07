@@ -571,6 +571,18 @@ class TestPopularCacheKey:
 class TestPopularLocationsEndpoint:
     """Test the popular locations endpoint (currently falls back to preapproved data)."""
 
+    @pytest.fixture(autouse=True)
+    def no_usage_tracker(self):
+        """Force the preapproved-fallback path so these tests are deterministic.
+
+        Without this, get_usage_tracker() returns whatever live tracker the
+        process-wide cache singleton holds (e.g. a real Redis connection shared
+        with other test modules / a local dev server), and real selection
+        signal recorded elsewhere would leak into these counts and orderings.
+        """
+        with patch("routers.locations.get_usage_tracker", return_value=None):
+            yield
+
     def test_get_all_locations(self, client, mock_locations_data):
         response = client.get("/v1/locations/popular")
 
@@ -647,8 +659,7 @@ class TestPopularLocationsEndpoint:
 
     def test_returns_same_locations_as_preapproved(self, client, mock_locations_data):
         """Popular falls back to preapproved data until usage tracking is implemented."""
-        with patch("routers.locations.get_usage_tracker", return_value=None):
-            popular = client.get("/v1/locations/popular").json()
+        popular = client.get("/v1/locations/popular").json()
         preapproved = client.get("/v1/locations/preapproved").json()
 
         assert popular["count"] == preapproved["count"]
@@ -658,8 +669,7 @@ class TestPopularLocationsEndpoint:
 
     def test_no_image_fields_by_default(self, client, mock_locations_data):
         """Image fields are omitted from the popular response by default."""
-        with patch("routers.locations.get_usage_tracker", return_value=None):
-            response = client.get("/v1/locations/popular")
+        response = client.get("/v1/locations/popular")
         assert response.status_code == 200
         for loc in response.json()["locations"]:
             assert "imageUrl" not in loc
@@ -668,8 +678,7 @@ class TestPopularLocationsEndpoint:
 
     def test_include_images_returns_image_fields(self, client, mock_locations_data):
         """include_images=true includes image fields."""
-        with patch("routers.locations.get_usage_tracker", return_value=None):
-            response = client.get("/v1/locations/popular?include_images=true")
+        response = client.get("/v1/locations/popular?include_images=true")
         assert response.status_code == 200
         for loc in response.json()["locations"]:
             assert "imageUrl" in loc
@@ -930,6 +939,46 @@ class TestSelectionEndpoint:
         meta = call_args[0][1]
         assert meta["name"] == "Stoke-on-Trent"
         assert meta["country_code"] == "GB"
+
+    def test_record_selection_resolves_country_code_from_country_name(self, main_client, mock_tracker):
+        """country_name without country_code is reverse-resolved via pycountry fuzzy search."""
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Chennai", "country_name": "India"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.store_location_metadata.assert_called_once()
+        meta = mock_tracker.store_location_metadata.call_args[0][1]
+        assert meta["country_name"] == "India"
+        assert meta["country_code"] == "IN"
+
+    def test_record_selection_resolves_country_name_from_country_code(self, main_client, mock_tracker):
+        """country_code without country_name is resolved to the full name via pycountry."""
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Chennai", "country_code": "IN"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        meta = mock_tracker.store_location_metadata.call_args[0][1]
+        assert meta["country_name"] == "India"
+        assert meta["country_code"] == "IN"
+
+    def test_record_selection_stores_coordinates(self, main_client, mock_tracker):
+        """latitude/longitude are captured in stored metadata when supplied."""
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Chennai", "country_code": "IN", "latitude": 13.0827, "longitude": 80.2707},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        meta = mock_tracker.store_location_metadata.call_args[0][1]
+        assert meta["latitude"] == 13.0827
+        assert meta["longitude"] == 80.2707
 
     def test_record_selection_tracker_unavailable(self, main_client):
         """204 returned silently when tracker is None."""
