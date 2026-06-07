@@ -175,6 +175,11 @@ class SelectionRequest(BaseModel):
         max_length=2,
         description="ISO 3166-1 alpha-2 country code",
     )
+    country_name: Optional[str] = Field(
+        None,
+        max_length=200,
+        description="Full country name (e.g. 'India'). Takes precedence over country_code lookup.",
+    )
 
     @model_validator(mode="after")
     def require_location_or_name(self) -> "SelectionRequest":
@@ -977,8 +982,8 @@ async def record_location_selection(request: Request, body: SelectionRequest):
 
         loc_by_id = {loc.id: loc for loc in locations_data}
         if canonical_id not in loc_by_id and body.name:
-            country_name = None
-            if body.country_code:
+            country_name = body.country_name
+            if not country_name and body.country_code:
                 country = pycountry.countries.get(alpha_2=body.country_code.upper())
                 if country:
                     country_name = country.name
