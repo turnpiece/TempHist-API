@@ -19,6 +19,7 @@ import redis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from config import CANONICALIZATION_RADIUS_KM
 from main import app as main_app
 
 # Import the router and models
@@ -862,6 +863,11 @@ class TestSelectionEndpoint:
     @pytest.fixture
     def mock_tracker(self):
         tracker = MagicMock()
+        # Defaults: no existing metadata, no nearby canonical ID — i.e. every
+        # selection in these tests is treated as fresh/standalone unless a
+        # test explicitly configures find_nearby_canonical_id to converge.
+        tracker.get_location_metadata.return_value = None
+        tracker.find_nearby_canonical_id.return_value = None
         with patch("routers.locations.get_usage_tracker", return_value=tracker):
             yield tracker
 
@@ -979,6 +985,89 @@ class TestSelectionEndpoint:
         meta = mock_tracker.store_location_metadata.call_args[0][1]
         assert meta["latitude"] == 13.0827
         assert meta["longitude"] == 80.2707
+
+    def test_record_selection_converges_onto_nearby_canonical_id(self, main_client, mock_tracker):
+        """A freshly-minted slug with coordinates near an existing canonical ID converges onto it.
+
+        Prevents the same physical place from fragmenting signal across
+        differently-spelled submissions, e.g. "Delhi" vs "New Delhi".
+        """
+        mock_tracker.find_nearby_canonical_id.return_value = "new_delhi"
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Delhi", "country_code": "IN", "latitude": 28.7041, "longitude": 77.1025},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.find_nearby_canonical_id.assert_called_once_with(28.7041, 77.1025, CANONICALIZATION_RADIUS_KM)
+        mock_tracker.record_selection.assert_called_once_with("new_delhi", "testuser")
+        mock_tracker.add_to_geo_index.assert_not_called()
+
+    def test_record_selection_registers_geo_index_when_no_match(self, main_client, mock_tracker):
+        """A freshly-minted slug with coordinates and no nearby match registers itself in the geo-index."""
+        mock_tracker.find_nearby_canonical_id.return_value = None
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Chennai", "country_code": "IN", "latitude": 13.0827, "longitude": 80.2707},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.add_to_geo_index.assert_called_once_with("chennai", 13.0827, 80.2707)
+        mock_tracker.record_selection.assert_called_once_with("chennai", "testuser")
+
+    def test_record_selection_skips_geo_lookup_without_coordinates(self, main_client, mock_tracker):
+        """No lat/lon supplied → geo-canonicalization is skipped entirely."""
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Chennai", "country_code": "IN"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.find_nearby_canonical_id.assert_not_called()
+        mock_tracker.add_to_geo_index.assert_not_called()
+        mock_tracker.record_selection.assert_called_once_with("chennai", "testuser")
+
+    def test_record_selection_skips_geo_lookup_for_explicit_location_id(self, main_client, mock_tracker):
+        """Explicit location_id is trusted as-is — geo-canonicalization never runs for it."""
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"location_id": "my_custom_id", "latitude": 13.0827, "longitude": 80.2707},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.find_nearby_canonical_id.assert_not_called()
+        mock_tracker.add_to_geo_index.assert_not_called()
+        mock_tracker.record_selection.assert_called_once_with("my_custom_id", "testuser")
+
+    def test_record_selection_skips_geo_lookup_for_preapproved_match(self, main_client, mock_tracker):
+        """Name matching a preapproved location is trusted as-is — geo-canonicalization never runs for it."""
+        with patch("routers.locations.locations_data", [LocationItem(**SAMPLE_LOCATIONS[0])]):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "London", "country_code": "GB", "latitude": 51.5072, "longitude": -0.1276},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.find_nearby_canonical_id.assert_not_called()
+        mock_tracker.add_to_geo_index.assert_not_called()
+        mock_tracker.record_selection.assert_called_once_with("london", "testuser")
+
+    def test_record_selection_does_not_overwrite_existing_metadata_after_convergence(self, main_client, mock_tracker):
+        """Converging onto an existing canonical ID must not clobber its stored metadata."""
+        mock_tracker.find_nearby_canonical_id.return_value = "new_delhi"
+        mock_tracker.get_location_metadata.return_value = {"id": "new_delhi", "name": "New Delhi"}
+        with patch("routers.locations.locations_data", []):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={"name": "Delhi", "country_code": "IN", "latitude": 28.7041, "longitude": 77.1025},
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.store_location_metadata.assert_not_called()
 
     def test_record_selection_tracker_unavailable(self, main_client):
         """204 returned silently when tracker is None."""

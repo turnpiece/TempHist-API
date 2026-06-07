@@ -191,6 +191,48 @@ class LocationUsageTracker:
         except Exception as _e:
             logger.debug("Could not cache metadata for %s: %s", location_id, _e)
 
+    # Geo-index used to canonicalize selections of the same physical place
+    # submitted under different name strings / admin-level detail (e.g.
+    # "Chennai" vs "Chennai, Tamil Nadu, India" both resolving to whichever
+    # slug claimed that spot first). Populated lazily — only when a freshly
+    # minted (non-explicit, non-preapproved) slug arrives with coordinates.
+    geo_index_key = "loc_geo:v1"
+
+    def find_nearby_canonical_id(self, latitude: float, longitude: float, radius_km: float) -> Optional[str]:
+        """Return the closest canonical ID already registered within radius_km, or None.
+
+        Backed by Redis GEOSEARCH. Used so that a newly-submitted location
+        with coordinates converges onto an existing canonical ID for the same
+        physical place rather than minting a new, signal-fragmenting slug.
+        """
+        if not USAGE_TRACKING_ENABLED:
+            return None
+        try:
+            results = self.redis_client.geosearch(
+                self.geo_index_key,
+                longitude=longitude,
+                latitude=latitude,
+                radius=radius_km,
+                unit="km",
+                sort="ASC",
+                count=1,
+            )
+            if results:
+                member = results[0]
+                return member.decode() if isinstance(member, bytes) else member
+        except Exception as _e:
+            logger.debug("Geo-index lookup failed for (%s, %s): %s", latitude, longitude, _e)
+        return None
+
+    def add_to_geo_index(self, canonical_id: str, latitude: float, longitude: float) -> None:
+        """Register a canonical ID's coordinates so future nearby submissions converge onto it."""
+        if not USAGE_TRACKING_ENABLED:
+            return
+        try:
+            self.redis_client.geoadd(self.geo_index_key, [longitude, latitude, canonical_id])
+        except Exception as _e:
+            logger.debug("Could not add %s to geo-index: %s", canonical_id, _e)
+
     def get_location_metadata(self, location_id: str) -> Optional[dict]:
         """Retrieve stored minimal metadata for a location ID, or None."""
         if not USAGE_TRACKING_ENABLED:

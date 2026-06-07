@@ -150,3 +150,62 @@ class TestGetTotalSelections:
         tracker.get_total_selections(days=1)
 
         mock_redis.delete.assert_called_once_with("selections:total:tmp")
+
+
+# ---------------------------------------------------------------------------
+# geo-index: find_nearby_canonical_id / add_to_geo_index
+#
+# Backs canonicalization/dedup — converging differently-spelled submissions
+# of the same physical place ("Chennai" vs "Chennai, Tamil Nadu, India") onto
+# a single canonical ID so selection signal isn't fragmented.
+# ---------------------------------------------------------------------------
+
+
+class TestGeoIndex:
+    def test_find_nearby_returns_closest_member(self, tracker, mock_redis):
+        mock_redis.geosearch.return_value = [b"new_delhi"]
+
+        result = tracker.find_nearby_canonical_id(28.7041, 77.1025, 45)
+
+        assert result == "new_delhi"
+        mock_redis.geosearch.assert_called_once_with(
+            tracker.geo_index_key,
+            longitude=77.1025,
+            latitude=28.7041,
+            radius=45,
+            unit="km",
+            sort="ASC",
+            count=1,
+        )
+
+    def test_find_nearby_returns_none_when_empty(self, tracker, mock_redis):
+        mock_redis.geosearch.return_value = []
+
+        result = tracker.find_nearby_canonical_id(0.0, 0.0, 45)
+
+        assert result is None
+
+    def test_find_nearby_decodes_string_members(self, tracker, mock_redis):
+        mock_redis.geosearch.return_value = ["new_delhi"]
+
+        result = tracker.find_nearby_canonical_id(28.7041, 77.1025, 45)
+
+        assert result == "new_delhi"
+
+    def test_find_nearby_returns_none_on_redis_error(self, tracker, mock_redis):
+        mock_redis.geosearch.side_effect = Exception("boom")
+
+        result = tracker.find_nearby_canonical_id(28.7041, 77.1025, 45)
+
+        assert result is None
+
+    def test_add_to_geo_index_calls_geoadd_with_lon_lat_member(self, tracker, mock_redis):
+        tracker.add_to_geo_index("chennai", 13.0827, 80.2707)
+
+        mock_redis.geoadd.assert_called_once_with(tracker.geo_index_key, [80.2707, 13.0827, "chennai"])
+
+    def test_add_to_geo_index_swallows_redis_error(self, tracker, mock_redis):
+        mock_redis.geoadd.side_effect = Exception("boom")
+
+        # Should not raise
+        tracker.add_to_geo_index("chennai", 13.0827, 80.2707)

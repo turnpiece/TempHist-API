@@ -24,7 +24,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from cache.accessors import get_usage_tracker
-from config import BASE_URL, MAPBOX_TOKEN, POPULARITY_MAX_LOCATIONS, POPULARITY_WINDOW_DAYS
+from config import (
+    BASE_URL,
+    CANONICALIZATION_RADIUS_KM,
+    MAPBOX_TOKEN,
+    POPULARITY_MAX_LOCATIONS,
+    POPULARITY_WINDOW_DAYS,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1019,10 +1025,32 @@ async def record_location_selection(request: Request, body: SelectionRequest):
 
     tracker = get_usage_tracker()
     if tracker is not None:
+        loc_by_id = {loc.id: loc for loc in locations_data}
+
+        # Geo-canonicalization: only relevant for freshly-minted slugs (i.e.
+        # neither an explicit location_id nor a preapproved name match was
+        # found — see _resolve_canonical_id). Explicit/preapproved IDs are
+        # trusted as-is and never re-pointed. When coordinates are available,
+        # check whether an existing canonical ID already covers this physical
+        # spot within CANONICALIZATION_RADIUS_KM; if so, converge onto it so
+        # "Chennai" / "Chennai, India" / "Chennai, Tamil Nadu, India" all
+        # accumulate signal under one ID instead of fragmenting it. Otherwise
+        # register this slug's coordinates so future nearby submissions find it.
+        is_minted_slug = not body.location_id and canonical_id not in loc_by_id
+        if is_minted_slug and body.latitude is not None and body.longitude is not None:
+            nearby_id = tracker.find_nearby_canonical_id(body.latitude, body.longitude, CANONICALIZATION_RADIUS_KM)
+            if nearby_id:
+                logger.debug(
+                    "geo-canonicalization: %s (%s, %s) converged onto existing %s",
+                    canonical_id, body.latitude, body.longitude, nearby_id,
+                )
+                canonical_id = nearby_id
+            else:
+                tracker.add_to_geo_index(canonical_id, body.latitude, body.longitude)
+
         tracker.record_selection(canonical_id, uid)
 
-        loc_by_id = {loc.id: loc for loc in locations_data}
-        if canonical_id not in loc_by_id and body.name:
+        if canonical_id not in loc_by_id and body.name and not tracker.get_location_metadata(canonical_id):
             country_code, country_name = _resolve_country_fields(body.country_code, body.country_name)
             tracker.store_location_metadata(canonical_id, {
                 "id": canonical_id,
