@@ -50,6 +50,7 @@ SAMPLE_LOCATIONS = [
         "admin1": "England",
         "country_name": "United Kingdom",
         "country_code": "GB",
+        "continent": "Europe",
         "latitude": 51.5074,
         "longitude": -0.1278,
         "timezone": "Europe/London",
@@ -67,6 +68,7 @@ SAMPLE_LOCATIONS = [
         "admin1": "New York",
         "country_name": "United States",
         "country_code": "US",
+        "continent": "North America",
         "latitude": 40.7128,
         "longitude": -74.0060,
         "timezone": "America/New_York",
@@ -84,6 +86,7 @@ SAMPLE_LOCATIONS = [
         "admin1": "Île-de-France",
         "country_name": "France",
         "country_code": "FR",
+        "continent": "Europe",
         "latitude": 48.8566,
         "longitude": 2.3522,
         "timezone": "Europe/Paris",
@@ -217,10 +220,10 @@ class TestUtilityFunctions:
 
     def test_get_cache_key(self):
         """Test cache key generation."""
-        assert get_cache_key() == "preapproved:v1:all"
-        assert get_cache_key("US") == "preapproved:v1:country:US"
-        assert get_cache_key(tier="global") == "preapproved:v1:tier:global"
-        assert get_cache_key("US", "global") == "preapproved:v1:country:US:tier:global"
+        assert get_cache_key() == "preapproved:v2:all"
+        assert get_cache_key("US") == "preapproved:v2:country:US"
+        assert get_cache_key(tier="global") == "preapproved:v2:tier:global"
+        assert get_cache_key("US", "global") == "preapproved:v2:country:US:tier:global"
 
     def test_filter_locations(self, sample_locations):
         """Test location filtering."""
@@ -287,6 +290,14 @@ class TestPreapprovedLocationsEndpoint:
             assert "webp" in location["imageUrl"]
             assert "jpeg" in location["imageUrl"]
             assert "imageAlt" in location
+
+        # Check that continent is present and correct
+        continents = {loc["id"]: loc["continent"] for loc in data["locations"]}
+        assert continents == {
+            "london": "Europe",
+            "new_york": "North America",
+            "paris": "Europe",
+        }
 
         # Check cache headers
         assert "Cache-Control" in response.headers
@@ -481,7 +492,7 @@ class TestDataLoading:
         ):
             await initialize_locations_data(mock_redis)
 
-        # Verify cache was warmed (preapproved:v1:all only — popular cache is not pre-populated)
+        # Verify cache was warmed (preapproved:v2:all only — popular cache is not pre-populated)
         assert mock_redis.setex.call_count == 1
 
     @pytest.mark.asyncio
@@ -563,10 +574,10 @@ class TestPopularCacheKey:
     """Test popular cache key generation."""
 
     def test_get_popular_cache_key(self):
-        assert get_popular_cache_key() == "popular:v1:all"
-        assert get_popular_cache_key("US") == "popular:v1:country:US"
-        assert get_popular_cache_key(tier="global") == "popular:v1:tier:global"
-        assert get_popular_cache_key("US", "global") == "popular:v1:country:US:tier:global"
+        assert get_popular_cache_key() == "popular:v2:all"
+        assert get_popular_cache_key("US") == "popular:v2:country:US"
+        assert get_popular_cache_key(tier="global") == "popular:v2:tier:global"
+        assert get_popular_cache_key("US", "global") == "popular:v2:country:US:tier:global"
 
 
 class TestPopularLocationsEndpoint:

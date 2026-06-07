@@ -43,8 +43,8 @@ CACHE_TTL = 604800  # 7 days (data changes infrequently)
 POPULAR_CACHE_TTL = 3600  # 1 hour — rebuilt from live selection signal
 RATE_LIMIT_REQUESTS = 60  # requests per minute
 RATE_LIMIT_WINDOW = 60  # 1 minute window
-CACHE_PREFIX = "preapproved:v1"
-POPULAR_CACHE_PREFIX = "popular:v1"
+CACHE_PREFIX = "preapproved:v2"
+POPULAR_CACHE_PREFIX = "popular:v2"
 MAX_LIMIT = 500
 
 # Country code aliases: non-ISO codes that users commonly try
@@ -115,6 +115,7 @@ class LocationItem(BaseModel):
     admin1: str = Field(..., description="First-level administrative division")
     country_name: str = Field(..., description="Full country name")
     country_code: str = Field(..., description="ISO 3166-1 alpha-2 country code")
+    continent: str = Field(..., description="Continent name (e.g. 'Europe', 'North America')")
     latitude: float = Field(..., description="Latitude coordinate")
     longitude: float = Field(..., description="Longitude coordinate")
     timezone: str = Field(..., description="IANA timezone identifier")
@@ -831,7 +832,7 @@ async def get_popular_locations(
 
     Response shape:
       { version, count, generated_at, locations: [{id, slug, name, admin1,
-        country_name, country_code, latitude, longitude, timezone, tier,
+        country_name, country_code, continent, latitude, longitude, timezone, tier,
         [imageUrl, imageAlt, imageAttribution if include_images=true]}] }
     """
     client_ip = request.client.host
