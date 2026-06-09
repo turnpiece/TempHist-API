@@ -34,6 +34,21 @@ class TestCanonicalizeLocation:
         result = canonicalize_location("London", "London, England, United Kingdom")
         assert result == "london_england_united_kingdom"
 
+    def test_canonical_name_takes_precedence(self):
+        result = canonicalize_location(
+            "London",
+            canonical_name="London, England, United Kingdom",
+        )
+        assert result == "london_england_united_kingdom"
+
+    def test_canonical_name_overrides_conflicting_resolved_address(self):
+        result = canonicalize_location(
+            "London",
+            resolved_address="London, UK",
+            canonical_name="London, England, United Kingdom",
+        )
+        assert result == "london_england_united_kingdom"
+
     def test_extra_whitespace(self):
         assert canonicalize_location("  New   York  ,  USA  ") == "new_york_usa"
 
@@ -166,6 +181,53 @@ class TestCacheSet:
         stored_b64 = pipe.set.call_args[0][1]
         stored = json.loads(gzip.decompress(base64.b64decode(stored_b64)))
         assert stored["meta"]["served_from"]["canonical_location"] == "london_england_united_kingdom"
+
+    def test_canonical_name_used_for_canonical(self):
+        r, pipe = _make_redis_mock()
+
+        cache_set(
+            r,
+            agg="yearly",
+            original_location="london",
+            end_date=date(2024, 3, 25),
+            payload={},
+            canonical_name="London, England, United Kingdom",
+        )
+
+        stored_b64 = pipe.set.call_args[0][1]
+        stored = json.loads(gzip.decompress(base64.b64decode(stored_b64)))
+        assert stored["meta"]["served_from"]["canonical_location"] == "london_england_united_kingdom"
+
+    def test_get_with_canonical_name_hits_short_form_entry(self):
+        r, _ = _make_redis_mock()
+        canonical = canonicalize_location(
+            "London, England, United Kingdom",
+            canonical_name="London, England, United Kingdom",
+        )
+        wrapped = {
+            "data": {"records": [1, 2, 3]},
+            "meta": {
+                "requested": {"location": "London, England, United Kingdom", "end_date": "2024-03-25"},
+                "served_from": {
+                    "canonical_location": canonical,
+                    "end_date": "2024-03-25",
+                    "temporal_delta_days": 0,
+                },
+                "approximate": {"temporal": False},
+            },
+        }
+        r.get.return_value = _compress(wrapped)
+
+        result = cache_get(
+            r,
+            agg="daily",
+            original_location="London",
+            end_date=date(2024, 3, 25),
+            canonical_name="London, England, United Kingdom",
+        )
+
+        assert result is not None
+        assert result["data"] == {"records": [1, 2, 3]}
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 Improved caching utilities for TempHist API with canonicalized location keys and temporal tolerance.
 
 This module provides:
-- Canonicalized location keys using VC's resolvedAddress when available
+- Canonicalized location keys using a resolved canonical name when available
 - Temporal tolerance for different aggregation periods
 - Redis sorted set-based date matching
 - Metadata tracking for approximate data usage
@@ -47,21 +47,35 @@ def _ensure_date_str(d: date | str) -> str:
     return d if isinstance(d, str) else d.isoformat()
 
 
-def canonicalize_location(original: str, resolved_address: Optional[str] = None) -> str:
-    """
-    Canonicalize location string for consistent caching.
+def _preferred_canonical_name(
+    canonical_name: Optional[str] = None,
+    resolved_address: Optional[str] = None,
+) -> Optional[str]:
+    """Return the preferred canonical location label for key generation."""
+    return canonical_name or resolved_address
 
-    Prefer VC's resolvedAddress (stable) if provided; otherwise do safe lexical normalization.
-    No hard-coded suffix lists - let VC's data be the source of truth.
+
+def canonicalize_location(
+    original: str,
+    resolved_address: Optional[str] = None,
+    *,
+    canonical_name: Optional[str] = None,
+) -> str:
+    """
+    Canonicalize location string for consistent temporal cache keys.
+
+    Prefer a resolved canonical name (from Postgres, preapproved data, or legacy
+    provider metadata) when provided; otherwise do safe lexical normalization.
 
     Examples:
-        canonicalize_location("London, UK", "London, England, United Kingdom")
+        canonicalize_location("London", canonical_name="London, England, United Kingdom")
         -> "london_england_united_kingdom"
 
-        canonicalize_location("New York", None)
+        canonicalize_location("New York")
         -> "new_york"
     """
-    s = (resolved_address or original or "").strip().lower()
+    preferred = _preferred_canonical_name(canonical_name, resolved_address)
+    s = (preferred or original or "").strip().lower()
 
     if not s:
         return ""
@@ -90,6 +104,7 @@ def cache_set(
     end_date: date,
     payload: dict,
     resolved_address: Optional[str] = None,
+    canonical_name: Optional[str] = None,
     ttl_seconds: Optional[int] = None,
 ) -> bool:
     """
@@ -101,14 +116,19 @@ def cache_set(
         original_location: Original location string
         end_date: End date (use full YYYY-MM-DD for monthly/yearly)
         payload: Data payload to cache
-        resolved_address: VC's resolvedAddress (preferred for canonicalization)
+        resolved_address: Deprecated alias for canonical_name
+        canonical_name: Canonical location label for key generation
         ttl_seconds: Time to live in seconds (default: 7 days)
 
     Returns:
         True if successful, False otherwise
     """
     try:
-        canonical = canonicalize_location(original_location, resolved_address)
+        canonical = canonicalize_location(
+            original_location,
+            resolved_address,
+            canonical_name=canonical_name,
+        )
         end_iso = _ensure_date_str(end_date)
         vkey = _val_key(agg, canonical, end_iso)
         tkey = _tindex_key(agg, canonical)
@@ -156,6 +176,7 @@ def cache_get(
     original_location: str,
     end_date: date,
     resolved_address: Optional[str] = None,
+    canonical_name: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Retrieve cached data with temporal tolerance support.
@@ -165,13 +186,18 @@ def cache_get(
         agg: Aggregation period ("daily", "weekly", "monthly", "yearly")
         original_location: Original location string
         end_date: End date to look up
-        resolved_address: VC's resolvedAddress (for canonicalization)
+        resolved_address: Deprecated alias for canonical_name
+        canonical_name: Canonical location label for key generation
 
     Returns:
         Wrapped data with metadata if found, None otherwise
     """
     try:
-        canonical = canonicalize_location(original_location, resolved_address)
+        canonical = canonicalize_location(
+            original_location,
+            resolved_address,
+            canonical_name=canonical_name,
+        )
         end_iso = _ensure_date_str(end_date)
         vkey = _val_key(agg, canonical, end_iso)
 
@@ -260,6 +286,7 @@ def cache_invalidate(
     original_location: str,
     end_date: Optional[date] = None,
     resolved_address: Optional[str] = None,
+    canonical_name: Optional[str] = None,
 ) -> bool:
     """
     Invalidate cached data for a specific location and aggregation.
@@ -269,10 +296,15 @@ def cache_invalidate(
         agg: Aggregation period
         original_location: Original location string
         end_date: Specific date to invalidate (None = all dates)
-        resolved_address: VC's resolvedAddress (for canonicalization)
+        resolved_address: Deprecated alias for canonical_name
+        canonical_name: Canonical location label for key generation
     """
     try:
-        canonical = canonicalize_location(original_location, resolved_address)
+        canonical = canonicalize_location(
+            original_location,
+            resolved_address,
+            canonical_name=canonical_name,
+        )
         tkey = _tindex_key(agg, canonical)
 
         if end_date:

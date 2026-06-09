@@ -36,6 +36,14 @@ class DailyTemperatureRecord:
     source: str
 
 
+@dataclass(frozen=True)
+class LocationCacheIdentity:
+    """Canonical location identity for Redis and temporal cache keying."""
+
+    redis_slug: str
+    canonical_name: str
+
+
 _PREAPPROVED_LOCATION_MAP: Optional[Dict[str, Dict[str, Any]]] = None
 
 
@@ -267,32 +275,45 @@ class DailyTemperatureStore:
 
         return None
 
-    async def resolve_cache_slug(self, location: str, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Return the canonical Redis cache slug for a location string.
+    async def resolve_location_cache_identity(
+        self,
+        location: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> LocationCacheIdentity:
+        """Return canonical Redis slug and display name for cache keying.
 
         Resolution order:
         1. Existing Postgres alias or locations.normalized_name match
         2. Geocode (store/preapproved/Mapbox) + alias creation / 45 km geo snap
-        3. Preapproved slug when Postgres is unavailable
+        3. Preapproved identity when Postgres is unavailable
         4. Lexical normalize_location_for_cache fallback
         """
         normalized = normalize_location_for_cache(location)
+        preapproved = _get_preapproved_location_info(normalized)
         preapproved_slug = _canonical_preapproved_cache_slug(location)
+        preapproved_name = preapproved.get("full_name") if preapproved else None
+
+        def _fallback_identity() -> LocationCacheIdentity:
+            slug = preapproved_slug or normalized
+            name = preapproved_name or location
+            return LocationCacheIdentity(redis_slug=slug, canonical_name=name)
 
         pool = await self._ensure_pool()
         if pool is None:
-            return preapproved_slug or normalized
+            return _fallback_identity()
 
         try:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT l.normalized_name
+                    SELECT l.normalized_name,
+                           COALESCE(l.resolved_name, l.original_name) AS canonical_name
                     FROM location_aliases a
                     JOIN locations l ON l.id = a.location_id
                     WHERE a.alias_normalized_name = $1
                     UNION ALL
-                    SELECT normalized_name
+                    SELECT normalized_name,
+                           COALESCE(resolved_name, original_name) AS canonical_name
                     FROM locations
                     WHERE normalized_name = $1
                       AND NOT EXISTS (
@@ -303,7 +324,10 @@ class DailyTemperatureStore:
                     normalized,
                 )
                 if row:
-                    return row["normalized_name"]
+                    return LocationCacheIdentity(
+                        redis_slug=row["normalized_name"],
+                        canonical_name=row["canonical_name"] or location,
+                    )
 
                 meta: Dict[str, Any] = dict(metadata) if metadata else {}
                 if meta.get("latitude") is None or meta.get("longitude") is None:
@@ -323,7 +347,7 @@ class DailyTemperatureStore:
                             if tz:
                                 meta.setdefault("timezone", tz)
                         except Exception as exc:
-                            logger.debug("Geocode for cache slug failed for %r: %s", location, exc)
+                            logger.debug("Geocode for cache identity failed for %r: %s", location, exc)
 
                 location_id = await self._get_or_create_location_id(
                     conn,
@@ -332,16 +356,31 @@ class DailyTemperatureStore:
                     meta or None,
                 )
                 if location_id is None:
-                    return preapproved_slug or normalized
+                    return _fallback_identity()
 
-                canon = await conn.fetchval(
-                    "SELECT normalized_name FROM locations WHERE id = $1",
+                canon_row = await conn.fetchrow(
+                    """
+                    SELECT normalized_name,
+                           COALESCE(resolved_name, original_name) AS canonical_name
+                    FROM locations
+                    WHERE id = $1
+                    """,
                     location_id,
                 )
-                return canon or preapproved_slug or normalized
+                if canon_row:
+                    return LocationCacheIdentity(
+                        redis_slug=canon_row["normalized_name"],
+                        canonical_name=canon_row["canonical_name"] or location,
+                    )
+                return _fallback_identity()
         except Exception as exc:
-            logger.debug("resolve_cache_slug failed for %r: %s", location, exc)
-            return preapproved_slug or normalized
+            logger.debug("resolve_location_cache_identity failed for %r: %s", location, exc)
+            return _fallback_identity()
+
+    async def resolve_cache_slug(self, location: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Return the canonical Redis cache slug for a location string."""
+        identity = await self.resolve_location_cache_identity(location, metadata)
+        return identity.redis_slug
 
     async def ping(self) -> dict:
         """Check database connectivity. Returns a status dict suitable for health endpoints."""
@@ -1267,10 +1306,19 @@ _store: Optional[DailyTemperatureStore] = None
 _store_lock: Optional[asyncio.Lock] = None
 
 
+async def resolve_location_cache_identity(
+    location: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> LocationCacheIdentity:
+    """Resolve a location string to canonical Redis slug and display name."""
+    store = await get_daily_temperature_store()
+    return await store.resolve_location_cache_identity(location, metadata)
+
+
 async def resolve_location_cache_slug(location: str, metadata: Optional[Dict[str, Any]] = None) -> str:
     """Resolve a location string to the canonical Redis records cache slug."""
-    store = await get_daily_temperature_store()
-    return await store.resolve_cache_slug(location, metadata)
+    identity = await resolve_location_cache_identity(location, metadata)
+    return identity.redis_slug
 
 
 async def get_daily_temperature_store() -> DailyTemperatureStore:

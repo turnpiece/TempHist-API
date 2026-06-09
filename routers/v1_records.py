@@ -53,6 +53,7 @@ from utils.cache_headers import set_weather_cache_headers
 from utils.daily_temperature_store import (
     DailyTemperatureRecord,
     get_daily_temperature_store,
+    resolve_location_cache_identity,
     resolve_location_cache_slug,
 )
 from utils.location_validation import InvalidLocationCache, is_location_likely_invalid, validate_location_response
@@ -960,7 +961,8 @@ async def get_record(
         current_year = datetime.now(timezone.utc).year
         end_date = datetime(current_year, month, day).date()
 
-        slug = await resolve_location_cache_slug(location)
+        location_identity = await resolve_location_cache_identity(location)
+        slug = location_identity.redis_slug
 
         # Get year range (50 years back + current year)
         years = get_year_range(current_year)
@@ -1036,7 +1038,13 @@ async def get_record(
                         logger.debug(f"Error parsing bundle cache: {e}, falling through to per-year lookup")
 
             # Step 1b: Try temporal cache (supports approximate matching for monthly/yearly)
-            temporal_hit = temporal_cache_get(redis_client, agg=period, original_location=location, end_date=end_date)
+            temporal_hit = temporal_cache_get(
+                redis_client,
+                agg=period,
+                original_location=location,
+                end_date=end_date,
+                canonical_name=location_identity.canonical_name,
+            )
             if temporal_hit:
                 data = temporal_hit["data"]
                 meta = temporal_hit["meta"]
@@ -1339,6 +1347,7 @@ async def get_record(
                     original_location=location,
                     end_date=end_date,
                     payload=data,
+                    canonical_name=location_identity.canonical_name,
                 )
             except Exception as e:
                 logger.warning(f"Failed to store in temporal cache: {e}")
