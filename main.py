@@ -65,6 +65,7 @@ from routers.stats import router as stats_router
 from routers.v1_records import router as v1_records_router
 from routers.weather import router as weather_router
 from utils.ip_utils import get_client_ip, is_ip_blacklisted, is_ip_whitelisted
+from utils.path_parsing import extract_location_from_path
 
 if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
     logging.getLogger(__name__).warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
@@ -1263,10 +1264,8 @@ async def verify_token_middleware(request: Request, call_next):
 
             # Check location diversity for Visual Crossing API endpoints
             if location_monitor:
-                # Extract location from path
-                path_parts = request.url.path.split("/")
-                if len(path_parts) >= 3:
-                    location = path_parts[2]  # e.g., "/weather/london/2024-01-15" -> "london"
+                location, _endpoint = extract_location_from_path(request.url.path)
+                if location:
                     location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
                     if not location_allowed:
                         if DEBUG:
@@ -1297,14 +1296,10 @@ async def verify_token_middleware(request: Request, call_next):
         pass
 
     # Track usage for Visual Crossing API endpoints
-    if USAGE_TRACKING_ENABLED and get_usage_tracker():
-        vc_api_paths = ["/weather/", "/forecast/", "/v1/records/"]
-        if any(request.url.path.startswith(path) for path in vc_api_paths):
-            path_parts = request.url.path.split("/")
-            if len(path_parts) >= 3:
-                location = path_parts[2]
-                endpoint = path_parts[1] if len(path_parts) > 1 else "unknown"
-                get_usage_tracker().track_location_request(location, endpoint)
+    if USAGE_TRACKING_ENABLED and get_usage_tracker() and is_vc_api_endpoint:
+        location, endpoint = extract_location_from_path(request.url.path)
+        if location:
+            get_usage_tracker().track_location_request(location, endpoint)
 
     if DEBUG:
         logger.debug("[DEBUG] Middleware: Protected path, checking Firebase token...")
