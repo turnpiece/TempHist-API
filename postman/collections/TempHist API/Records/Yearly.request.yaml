@@ -1,4 +1,5 @@
 $kind: http-request
-url: "{{baseURL}}/v1/records/yearly/New York, United States/05-26"
+name: Yearly
+url: "{{baseURL}}/v1/records/yearly/Greater%20London,%20England,%20United%20Kingdom/06-09"
 method: GET
 order: 4000

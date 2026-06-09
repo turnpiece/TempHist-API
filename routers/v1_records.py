@@ -29,6 +29,7 @@ from cache.keys import (
     assemble_and_cache,
     bundle_key,
     compute_bundle_etag,
+    get_bundle_with_slug_fallback,
     get_local_today,
     get_records,
     get_year_etags,
@@ -870,13 +871,15 @@ async def _get_record_data_internal(
     # Parse identifier
     month, day, _ = parse_identifier(period, identifier)
     current_year = datetime.now(timezone.utc).year
-    slug = await resolve_location_cache_slug(location)
+    location_identity = await resolve_location_cache_identity(location)
+    slug = location_identity.redis_slug
+    lookup_slugs = location_identity.lookup_slugs or (slug,)
     years = get_year_range(current_year)
 
     if CACHE_ENABLED:
-        # Try bundle cache first
-        bundle_key_str = bundle_key(period, slug, identifier)
-        bundle_data = redis_client.get(bundle_key_str)
+        bundle_data, _bundle_etag, _hit_slug = get_bundle_with_slug_fallback(
+            redis_client, period, lookup_slugs, identifier
+        )
 
         if bundle_data:
             try:
@@ -891,7 +894,9 @@ async def _get_record_data_internal(
                 logger.debug("Could not read bundle cache: %s", _e)
 
         # MGET all year keys
-        year_data, missing_past, missing_current = await get_records(redis_client, period, slug, identifier, years)
+        year_data, missing_past, missing_current = await get_records(
+            redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
+        )
 
         # Handle missing years (simplified - just fetch if needed)
         if missing_past or missing_current:
@@ -963,6 +968,7 @@ async def get_record(
 
         location_identity = await resolve_location_cache_identity(location)
         slug = location_identity.redis_slug
+        lookup_slugs = location_identity.lookup_slugs or (slug,)
 
         # Get year range (50 years back + current year)
         years = get_year_range(current_year)
@@ -977,10 +983,11 @@ async def get_record(
 
         if CACHE_ENABLED:
             # Step 1: Try bundle cache first (fast path)
+            bundle_data, bundle_etag, _bundle_hit_slug = get_bundle_with_slug_fallback(
+                redis_client, period, lookup_slugs, identifier
+            )
             bundle_key_str = bundle_key(period, slug, identifier)
             bundle_etag_key = f"{bundle_key_str}:etag"
-            bundle_data = redis_client.get(bundle_key_str)
-            bundle_etag = redis_client.get(bundle_etag_key)
 
             if bundle_data and bundle_etag:
                 try:
@@ -1090,15 +1097,18 @@ async def get_record(
                 return json_response
 
             # Step 2: MGET all year keys
-            year_data, missing_past, missing_current = await get_records(redis_client, period, slug, identifier, years)
+            year_data, missing_past, missing_current = await get_records(
+                redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
+            )
 
             # Step 3: Handle missing years — enqueue background jobs, never inline fetch
             if missing_past or missing_current:
                 # If only current year is missing, serve stale bundle immediately and enqueue refresh
                 if missing_past == [] and missing_current:
                     # Try to serve last bundle if available (stale-while-revalidate)
-                    bundle_data = redis_client.get(bundle_key_str)
-                    bundle_etag = redis_client.get(f"{bundle_key_str}:etag")
+                    bundle_data, bundle_etag, _stale_hit_slug = get_bundle_with_slug_fallback(
+                        redis_client, period, lookup_slugs, identifier
+                    )
                     if bundle_data:
                         try:
                             data_str = bundle_data.decode("utf-8") if isinstance(bundle_data, bytes) else bundle_data
@@ -1125,7 +1135,9 @@ async def get_record(
                                     raise HTTPException(status_code=400, detail=error_msg)
 
                                 # Compute bundle ETag from per-year ETags
-                                year_etags = await get_year_etags(redis_client, period, slug, identifier, years)
+                                year_etags = await get_year_etags(
+                                    redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
+                                )
                                 bundle_etag_computed = compute_bundle_etag(year_etags)
 
                                 # Check ETag conditional request
@@ -1221,7 +1233,9 @@ async def get_record(
             # Step 4: Assemble response from per-year records
             if year_data:
                 # Get per-year ETags
-                year_etags = await get_year_etags(redis_client, period, slug, identifier, list(year_data.keys()))
+                year_etags = await get_year_etags(
+                    redis_client, period, slug, identifier, list(year_data.keys()), lookup_slugs=lookup_slugs
+                )
 
                 # Assemble bundle and store with ETag (returns payload and ETag)
                 bundle_payload, bundle_etag_computed = await assemble_and_cache(
@@ -1271,7 +1285,12 @@ async def get_record(
                     bundle_etag_computed = None
                 else:
                     year_etags = await get_year_etags(
-                        redis_client, period, slug, identifier, list(per_year_records.keys())
+                        redis_client,
+                        period,
+                        slug,
+                        identifier,
+                        list(per_year_records.keys()),
+                        lookup_slugs=lookup_slugs,
                     )
                     bundle_payload, bundle_etag_computed = await assemble_and_cache(
                         redis_client, period, slug, identifier, per_year_records, year_etags

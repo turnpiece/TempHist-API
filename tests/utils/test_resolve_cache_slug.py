@@ -56,9 +56,16 @@ class TestResolveCacheSlug:
         conn = AsyncMock()
         conn.fetchrow = AsyncMock(
             return_value={
+                "id": 42,
                 "normalized_name": "greater_london__england__united_kingdom",
                 "canonical_name": "Greater London, England, United Kingdom",
             }
+        )
+        conn.fetch = AsyncMock(
+            return_value=[
+                {"slug": "greater_london__england__united_kingdom"},
+                {"slug": "london"},
+            ]
         )
         pool = MagicMock()
         pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -83,6 +90,12 @@ class TestResolveCacheSlug:
                 },
             ]
         )
+        conn.fetch = AsyncMock(
+            return_value=[
+                {"slug": "london__england__united_kingdom"},
+                {"slug": "london"},
+            ]
+        )
         pool = MagicMock()
         pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
         pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -103,7 +116,11 @@ class TestResolveCacheSlug:
 
     @pytest.mark.asyncio
     async def test_module_slug_helper_returns_redis_slug(self):
-        expected = LocationCacheIdentity(redis_slug="london", canonical_name="London, England, United Kingdom")
+        expected = LocationCacheIdentity(
+            redis_slug="london",
+            canonical_name="London, England, United Kingdom",
+            lookup_slugs=("london",),
+        )
         mock_store = MagicMock()
         mock_store.resolve_location_cache_identity = AsyncMock(return_value=expected)
         with patch(
@@ -122,6 +139,7 @@ class TestResolveCacheSlug:
         assert identity == LocationCacheIdentity(
             redis_slug="london",
             canonical_name="London, England, United Kingdom",
+            lookup_slugs=("london",),
         )
 
     @pytest.mark.asyncio
@@ -130,9 +148,16 @@ class TestResolveCacheSlug:
         conn = AsyncMock()
         conn.fetchrow = AsyncMock(
             return_value={
+                "id": 42,
                 "normalized_name": "greater_london__england__united_kingdom",
                 "canonical_name": "Greater London, England, United Kingdom",
             }
+        )
+        conn.fetch = AsyncMock(
+            return_value=[
+                {"slug": "greater_london__england__united_kingdom"},
+                {"slug": "london"},
+            ]
         )
         pool = MagicMock()
         pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
@@ -143,10 +168,15 @@ class TestResolveCacheSlug:
 
         assert identity.redis_slug == "greater_london__england__united_kingdom"
         assert identity.canonical_name == "Greater London, England, United Kingdom"
+        assert "london" in identity.lookup_slugs
 
     @pytest.mark.asyncio
     async def test_module_identity_helper_delegates_to_store(self):
-        expected = LocationCacheIdentity(redis_slug="london", canonical_name="London, England, United Kingdom")
+        expected = LocationCacheIdentity(
+            redis_slug="london",
+            canonical_name="London, England, United Kingdom",
+            lookup_slugs=("london",),
+        )
         mock_store = MagicMock()
         mock_store.resolve_location_cache_identity = AsyncMock(return_value=expected)
         with patch(

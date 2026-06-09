@@ -14,9 +14,9 @@ import redis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from cache.keys import bundle_key, rec_key
+from cache.keys import get_bundle_with_slug_fallback, rec_key
 from routers.dependencies import get_redis_client
-from utils.daily_temperature_store import resolve_location_cache_slug
+from utils.daily_temperature_store import resolve_location_cache_identity
 from utils.share_store import get_share_store
 
 logger = logging.getLogger(__name__)
@@ -152,41 +152,42 @@ async def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optiona
     called).  Falls back to reading per-year records directly (written by the
     async job), so share pages that only use the async flow still get a chart.
     """
-    slug = await resolve_location_cache_slug(share["location"])
+    identity = await resolve_location_cache_identity(share["location"])
+    lookup_slugs = identity.lookup_slugs or (identity.redis_slug,)
     period = share["period"]
     identifier = share["identifier"]
 
-    # 1. Try the bundle key first — fastest path
-    bkey = bundle_key(period, slug, identifier)
-    try:
-        raw = redis_client.get(bkey)
-        if raw:
-            data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+    bundle_data, _bundle_etag, _hit_slug = get_bundle_with_slug_fallback(
+        redis_client, period, lookup_slugs, identifier
+    )
+    if bundle_data:
+        try:
+            data = json.loads(bundle_data.decode() if isinstance(bundle_data, bytes) else bundle_data)
             records = data.get("records", [])
             if records:
                 return records
-    except Exception as exc:
-        logger.warning("Redis bundle read failed for share %s: %s", share.get("id"), exc)
+        except Exception as exc:
+            logger.warning("Redis bundle read failed for share %s: %s", share.get("id"), exc)
 
-    # 2. Bundle absent — assemble from per-year records written by the async job
     logger.info("OG bundle miss for share=%s, falling back to per-year records", share.get("id"))
     current_year = datetime.now(timezone.utc).year
     years = list(range(1950, current_year + 1))
-    keys = [rec_key(period, slug, identifier, y) for y in years]
-    try:
-        values = redis_client.mget(keys)
-        records = []
-        for year, value in zip(years, values):
-            if value:
-                try:
-                    records.append(json.loads(value.decode() if isinstance(value, bytes) else value))
-                except Exception as _e:
-                    logger.debug("Could not decode OG per-year record: %s", _e)
-        if records:
-            logger.info("OG per-year fallback: share=%s found %d records", share.get("id"), len(records))
-            return records
-    except Exception as exc:
-        logger.warning("Redis per-year read failed for share %s: %s", share.get("id"), exc)
+    records = []
+    for try_slug in lookup_slugs:
+        keys = [rec_key(period, try_slug, identifier, y) for y in years]
+        try:
+            values = redis_client.mget(keys)
+            for year, value in zip(years, values):
+                if value:
+                    try:
+                        records.append(json.loads(value.decode() if isinstance(value, bytes) else value))
+                    except Exception as _e:
+                        logger.debug("Could not decode OG per-year record: %s", _e)
+            if records:
+                logger.info("OG per-year fallback: share=%s found %d records", share.get("id"), len(records))
+                return records
+        except Exception as exc:
+            logger.warning("Redis per-year read failed for share %s: %s", share.get("id"), exc)
 
     return None
 

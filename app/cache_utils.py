@@ -86,6 +86,75 @@ def canonicalize_location(
     return canonical
 
 
+def _temporal_lookup_canonicals(
+    original: str,
+    resolved_address: Optional[str] = None,
+    canonical_name: Optional[str] = None,
+) -> list[str]:
+    """Ordered temporal cache location keys: canonical first, then legacy lexical."""
+    primary = canonicalize_location(original, resolved_address, canonical_name=canonical_name)
+    legacy = canonicalize_location(original)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for candidate in (primary, legacy):
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return ordered
+
+
+def _migrate_temporal_entry(
+    r: redis.Redis,
+    *,
+    agg: str,
+    from_canonical: str,
+    to_canonical: str,
+    end_iso: str,
+) -> None:
+    """Copy a temporal cache entry from a legacy canonical key to the preferred key."""
+    if from_canonical == to_canonical:
+        return
+    old_vkey = _val_key(agg, from_canonical, end_iso)
+    new_vkey = _val_key(agg, to_canonical, end_iso)
+    if r.exists(new_vkey):
+        r.delete(old_vkey)
+        old_tkey = _tindex_key(agg, from_canonical)
+        r.zrem(old_tkey, end_iso)
+        return
+    if not r.exists(old_vkey):
+        return
+    try:
+        ttl = r.ttl(old_vkey)
+        value = r.get(old_vkey)
+        if value is None:
+            return
+        if ttl and ttl > 0:
+            r.setex(new_vkey, ttl, value)
+        else:
+            r.set(new_vkey, value)
+        r.delete(old_vkey)
+        old_tkey = _tindex_key(agg, from_canonical)
+        new_tkey = _tindex_key(agg, to_canonical)
+        score = r.zscore(old_tkey, end_iso)
+        if score is not None:
+            r.zadd(new_tkey, {end_iso: score})
+            r.zrem(old_tkey, end_iso)
+            index_ttl = r.ttl(old_tkey)
+            if index_ttl and index_ttl > 0:
+                r.expire(new_tkey, index_ttl)
+    except Exception as exc:
+        logger.debug("Temporal cache migrate %s -> %s failed: %s", from_canonical, to_canonical, exc)
+
+
+def _decode_temporal_entry(stored, original_location: str) -> Optional[dict]:
+    if not stored:
+        return None
+    raw_gz = base64.b64decode(stored) if isinstance(stored, str) else stored
+    obj = json.loads(gzip.decompress(raw_gz))
+    obj["meta"]["requested"]["location"] = original_location
+    return obj
+
+
 def _val_key(agg: str, canonical_loc: str, end_iso: str) -> str:
     """Generate Redis key for cached value."""
     return f"{KEY_NS}:{agg}:{canonical_loc}:{end_iso}"
@@ -193,86 +262,107 @@ def cache_get(
         Wrapped data with metadata if found, None otherwise
     """
     try:
-        canonical = canonicalize_location(
+        end_iso = _ensure_date_str(end_date)
+        lookup_canonicals = _temporal_lookup_canonicals(
             original_location,
             resolved_address,
             canonical_name=canonical_name,
         )
-        end_iso = _ensure_date_str(end_date)
-        vkey = _val_key(agg, canonical, end_iso)
+        if not lookup_canonicals:
+            return None
 
-        # Try exact match first
-        try:
-            stored = r.get(vkey)
-        except UnicodeDecodeError:
-            logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {vkey}")
+        primary_canonical = lookup_canonicals[0]
+
+        for canonical in lookup_canonicals:
+            vkey = _val_key(agg, canonical, end_iso)
             try:
-                r.delete(vkey)
-            except Exception as _del_err:
-                logger.debug("Failed to delete legacy cache key %s: %s", vkey, _del_err)
-            stored = None
-        if stored:
-            # Handle both base64-encoded string (new) and raw bytes (legacy)
-            raw_gz = base64.b64decode(stored) if isinstance(stored, str) else stored
-            obj = json.loads(gzip.decompress(raw_gz))
-            # Update the requested location to match what the caller asked for
-            obj["meta"]["requested"]["location"] = original_location
-            logger.debug(f"Temporal cache hit (exact): {canonical}:{agg}:{end_iso}")
-            return obj
+                stored = r.get(vkey)
+            except UnicodeDecodeError:
+                logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {vkey}")
+                try:
+                    r.delete(vkey)
+                except Exception as _del_err:
+                    logger.debug("Failed to delete legacy cache key %s: %s", vkey, _del_err)
+                stored = None
+            if stored:
+                obj = _decode_temporal_entry(stored, original_location)
+                if obj and canonical != primary_canonical:
+                    _migrate_temporal_entry(
+                        r,
+                        agg=agg,
+                        from_canonical=canonical,
+                        to_canonical=primary_canonical,
+                        end_iso=end_iso,
+                    )
+                if obj:
+                    logger.debug(f"Temporal cache hit (exact): {canonical}:{agg}:{end_iso}")
+                return obj
 
         # Try temporal tolerance for non-daily aggregations
         tol_days = TEMPORAL_TOLERANCE.get(agg, 0)
         if tol_days <= 0:
             return None
 
-        # Look for nearest date within tolerance via sorted set
-        tkey = _tindex_key(agg, canonical)
         center = _epoch(end_date)
         window = tol_days * 86400
 
-        candidates = r.zrangebyscore(tkey, center - window, center + window)
+        for canonical in lookup_canonicals:
+            tkey = _tindex_key(agg, canonical)
+            candidates = r.zrangebyscore(tkey, center - window, center + window)
+            if not candidates:
+                continue
 
-        if not candidates:
-            return None
+            def _delta(iso_bytes: bytes) -> int:
+                d = date.fromisoformat(iso_bytes.decode() if isinstance(iso_bytes, bytes) else iso_bytes)
+                return abs((end_date - d).days)
 
-        # Pick nearest by absolute delta
-        def _delta(iso_bytes: bytes) -> int:
-            d = date.fromisoformat(iso_bytes.decode() if isinstance(iso_bytes, bytes) else iso_bytes)
-            return abs((end_date - d).days)
+            nearest_iso = min(candidates, key=_delta)
+            if isinstance(nearest_iso, bytes):
+                nearest_iso = nearest_iso.decode()
 
-        nearest_iso = min(candidates, key=_delta)
-        if isinstance(nearest_iso, bytes):
-            nearest_iso = nearest_iso.decode()
-
-        _approx_key = _val_key(agg, canonical, nearest_iso)
-        try:
-            stored2 = r.get(_approx_key)
-        except UnicodeDecodeError:
-            logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {_approx_key}")
+            approx_key = _val_key(agg, canonical, nearest_iso)
             try:
-                r.delete(_approx_key)
-            except Exception as _del_err:
-                logger.debug("Failed to delete legacy cache key %s: %s", _approx_key, _del_err)
-            stored2 = None
+                stored2 = r.get(approx_key)
+            except UnicodeDecodeError:
+                logger.info(f"Temporal cache legacy key deleted (non-UTF-8): {approx_key}")
+                try:
+                    r.delete(approx_key)
+                except Exception as _del_err:
+                    logger.debug("Failed to delete legacy cache key %s: %s", approx_key, _del_err)
+                stored2 = None
 
-        if not stored2:
-            return None
+            if not stored2:
+                continue
 
-        raw_gz2 = base64.b64decode(stored2) if isinstance(stored2, str) else stored2
-        obj = json.loads(gzip.decompress(raw_gz2))
-        delta_days = abs((end_date - date.fromisoformat(nearest_iso)).days)
+            obj = _decode_temporal_entry(stored2, original_location)
+            if not obj:
+                continue
 
-        obj["meta"]["approximate"]["temporal"] = True
-        obj["meta"]["served_from"]["canonical_location"] = canonical
-        obj["meta"]["served_from"]["end_date"] = nearest_iso
-        obj["meta"]["served_from"]["temporal_delta_days"] = delta_days
-        obj["meta"]["requested"] = {
-            "location": original_location,
-            "end_date": end_iso,
-        }
+            delta_days = abs((end_date - date.fromisoformat(nearest_iso)).days)
+            if canonical != primary_canonical:
+                _migrate_temporal_entry(
+                    r,
+                    agg=agg,
+                    from_canonical=canonical,
+                    to_canonical=primary_canonical,
+                    end_iso=nearest_iso,
+                )
 
-        logger.debug(f"Temporal cache hit (approx): {canonical}:{agg}:{end_iso} -> {nearest_iso} (Δ{delta_days}d)")
-        return obj
+            obj["meta"]["approximate"]["temporal"] = True
+            obj["meta"]["served_from"]["canonical_location"] = primary_canonical
+            obj["meta"]["served_from"]["end_date"] = nearest_iso
+            obj["meta"]["served_from"]["temporal_delta_days"] = delta_days
+            obj["meta"]["requested"] = {
+                "location": original_location,
+                "end_date": end_iso,
+            }
+
+            logger.debug(
+                f"Temporal cache hit (approx): {canonical}:{agg}:{end_iso} -> {nearest_iso} (Δ{delta_days}d)"
+            )
+            return obj
+
+        return None
 
     except Exception as e:
         logger.error(f"Temporal cache get error for {agg}:{original_location}:{end_date}: {e}")
@@ -300,30 +390,33 @@ def cache_invalidate(
         canonical_name: Canonical location label for key generation
     """
     try:
-        canonical = canonicalize_location(
+        lookup_canonicals = _temporal_lookup_canonicals(
             original_location,
             resolved_address,
             canonical_name=canonical_name,
         )
-        tkey = _tindex_key(agg, canonical)
+        if not lookup_canonicals:
+            return False
 
         if end_date:
             end_iso = _ensure_date_str(end_date)
-            vkey = _val_key(agg, canonical, end_iso)
-
-            pipe = r.pipeline()
-            pipe.delete(vkey)
-            pipe.zrem(tkey, end_iso)
-            pipe.execute()
-        else:
-            timestamps = r.zrange(tkey, 0, -1)
-
-            pipe = r.pipeline()
-            for ts_iso in timestamps:
-                vkey = _val_key(agg, canonical, ts_iso.decode() if isinstance(ts_iso, bytes) else ts_iso)
+            for canonical in lookup_canonicals:
+                vkey = _val_key(agg, canonical, end_iso)
+                tkey = _tindex_key(agg, canonical)
+                pipe = r.pipeline()
                 pipe.delete(vkey)
-            pipe.delete(tkey)
-            pipe.execute()
+                pipe.zrem(tkey, end_iso)
+                pipe.execute()
+        else:
+            for canonical in lookup_canonicals:
+                tkey = _tindex_key(agg, canonical)
+                timestamps = r.zrange(tkey, 0, -1)
+                pipe = r.pipeline()
+                for ts_iso in timestamps:
+                    vkey = _val_key(agg, canonical, ts_iso.decode() if isinstance(ts_iso, bytes) else ts_iso)
+                    pipe.delete(vkey)
+                pipe.delete(tkey)
+                pipe.execute()
 
         return True
 

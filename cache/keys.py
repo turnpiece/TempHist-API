@@ -8,7 +8,7 @@ import logging
 import os
 from datetime import date as dt_date
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import redis
 
@@ -254,6 +254,99 @@ def get_local_today(
 
 
 # ---------------------------------------------------------------------------
+# Legacy slug fallback + lazy migration (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def migrate_redis_key(redis_client: redis.Redis, old_key: str, new_key: str) -> bool:
+    """Rename a Redis key to its canonical form, preserving TTL when possible."""
+    if old_key == new_key or not redis_client.exists(old_key):
+        return False
+    if redis_client.exists(new_key):
+        redis_client.delete(old_key)
+        return False
+    try:
+        redis_client.rename(old_key, new_key)
+        return True
+    except redis.RedisError:
+        try:
+            ttl = redis_client.ttl(old_key)
+            value = redis_client.get(old_key)
+            if value is None:
+                return False
+            if ttl and ttl > 0:
+                redis_client.setex(new_key, ttl, value)
+            else:
+                redis_client.set(new_key, value)
+            redis_client.delete(old_key)
+            return True
+        except Exception as exc:
+            if DEBUG:
+                logger.debug("Could not migrate cache key %s -> %s: %s", old_key, new_key, exc)
+            return False
+
+
+def migrate_bundle_slug(
+    redis_client: redis.Redis,
+    scope: str,
+    from_slug: str,
+    to_slug: str,
+    identifier: str,
+) -> None:
+    """Migrate bundle and ETag keys from a legacy slug to the canonical slug."""
+    if from_slug == to_slug:
+        return
+    old_bundle = bundle_key(scope, from_slug, identifier)
+    new_bundle = bundle_key(scope, to_slug, identifier)
+    migrate_redis_key(redis_client, old_bundle, new_bundle)
+    migrate_redis_key(redis_client, f"{old_bundle}:etag", f"{new_bundle}:etag")
+
+
+def migrate_year_record_slugs(
+    redis_client: redis.Redis,
+    scope: str,
+    from_slug: str,
+    to_slug: str,
+    identifier: str,
+    years: Sequence[int],
+) -> None:
+    """Migrate per-year record and ETag keys from a legacy slug to the canonical slug."""
+    if from_slug == to_slug:
+        return
+    for year in years:
+        migrate_redis_key(
+            redis_client, rec_key(scope, from_slug, identifier, year), rec_key(scope, to_slug, identifier, year)
+        )
+        migrate_redis_key(
+            redis_client,
+            rec_etag_key(scope, from_slug, identifier, year),
+            rec_etag_key(scope, to_slug, identifier, year),
+        )
+
+
+def get_bundle_with_slug_fallback(
+    redis_client: redis.Redis,
+    scope: str,
+    lookup_slugs: Sequence[str],
+    identifier: str,
+) -> Tuple[Optional[Any], Optional[Any], Optional[str]]:
+    """Try bundle keys in order; lazily migrate a legacy hit to the canonical slug."""
+    if not lookup_slugs:
+        return None, None, None
+
+    canonical_slug = lookup_slugs[0]
+    for slug in lookup_slugs:
+        bundle_key_str = bundle_key(scope, slug, identifier)
+        bundle_data = redis_client.get(bundle_key_str)
+        bundle_etag = redis_client.get(f"{bundle_key_str}:etag")
+        if bundle_data and bundle_etag:
+            if slug != canonical_slug:
+                migrate_bundle_slug(redis_client, scope, slug, canonical_slug, identifier)
+            return bundle_data, bundle_etag, slug
+    return None, None, None
+
+
+# ---------------------------------------------------------------------------
 # Batch record helpers (MGET-based)
 # ---------------------------------------------------------------------------
 
@@ -264,38 +357,55 @@ async def get_records(
     slug: str,
     identifier: str,
     years: List[int],
+    lookup_slugs: Optional[Sequence[str]] = None,
 ) -> Tuple[Dict[int, Dict], List[int], bool]:
     if not years:
         return {}, [], False
 
+    slugs = tuple(lookup_slugs) if lookup_slugs else (slug,)
+    if not slugs:
+        slugs = (slug,)
+    canonical_slug = slugs[0]
     current_year = datetime.now(timezone.utc).year
-    keys = [rec_key(scope, slug, identifier, year) for year in years]
-
-    try:
-        values = redis_client.mget(keys)
-    except Exception as e:
-        logger.error(f"Error in MGET for records: {e}")
-        return {}, years, current_year in years
-
     year_data: Dict[int, Dict] = {}
-    missing_past: List[int] = []
-    missing_current = False
+    migrated_from: Optional[str] = None
 
-    for year, value in zip(years, values):
-        if value:
+    for try_slug in slugs:
+        remaining_years = [year for year in years if year not in year_data]
+        if not remaining_years:
+            break
+
+        keys = [rec_key(scope, try_slug, identifier, year) for year in remaining_years]
+        try:
+            values = redis_client.mget(keys)
+        except Exception as e:
+            logger.error(f"Error in MGET for records: {e}")
+            return year_data, [y for y in years if y not in year_data and y < current_year], current_year in years
+
+        for year, value in zip(remaining_years, values):
+            if not value:
+                continue
             try:
                 year_data[year] = json.loads(value.decode() if isinstance(value, bytes) else value)
+                if try_slug != canonical_slug and migrated_from is None:
+                    migrated_from = try_slug
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 logger.warning(f"Error decoding cached data for year {year}: {e}")
-                if year < current_year:
-                    missing_past.append(year)
-                elif year == current_year:
-                    missing_current = True
-        else:
-            if year < current_year:
-                missing_past.append(year)
-            elif year == current_year:
-                missing_current = True
+
+    if migrated_from:
+        migrate_year_record_slugs(
+            redis_client, scope, migrated_from, canonical_slug, identifier, list(year_data.keys())
+        )
+
+    missing_past: List[int] = []
+    missing_current = False
+    for year in years:
+        if year in year_data:
+            continue
+        if year < current_year:
+            missing_past.append(year)
+        elif year == current_year:
+            missing_current = True
 
     return year_data, missing_past, missing_current
 
@@ -306,19 +416,31 @@ async def get_year_etags(
     slug: str,
     identifier: str,
     years: List[int],
+    lookup_slugs: Optional[Sequence[str]] = None,
 ) -> Dict[int, str]:
     if not years:
         return {}
-    keys = [rec_etag_key(scope, slug, identifier, year) for year in years]
-    try:
-        values = redis_client.mget(keys)
-    except Exception as e:
-        logger.error(f"Error in MGET for ETags: {e}")
-        return {year: "" for year in years}
-    return {
-        year: (value.decode() if isinstance(value, bytes) else value) if value else ""
-        for year, value in zip(years, values)
-    }
+
+    slugs = tuple(lookup_slugs) if lookup_slugs else (slug,)
+    if not slugs:
+        slugs = (slug,)
+
+    etags: Dict[int, str] = {}
+    for try_slug in slugs:
+        remaining_years = [year for year in years if year not in etags]
+        if not remaining_years:
+            break
+        keys = [rec_etag_key(scope, try_slug, identifier, year) for year in remaining_years]
+        try:
+            values = redis_client.mget(keys)
+        except Exception as e:
+            logger.error(f"Error in MGET for ETags: {e}")
+            return {year: etags.get(year, "") for year in years}
+        for year, value in zip(remaining_years, values):
+            if value:
+                etags[year] = value.decode() if isinstance(value, bytes) else value
+
+    return {year: etags.get(year, "") for year in years}
 
 
 async def assemble_and_cache(

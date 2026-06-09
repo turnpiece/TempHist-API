@@ -42,6 +42,18 @@ class LocationCacheIdentity:
 
     redis_slug: str
     canonical_name: str
+    lookup_slugs: Tuple[str, ...] = ()
+
+
+def _build_lookup_slugs(redis_slug: str, request_normalized: str, alias_slugs: Iterable[str]) -> Tuple[str, ...]:
+    """Ordered unique slugs for cache reads (canonical first, then legacy aliases)."""
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for candidate in (redis_slug, request_normalized, *alias_slugs):
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
 
 
 _PREAPPROVED_LOCATION_MAP: Optional[Dict[str, Dict[str, Any]]] = None
@@ -296,7 +308,36 @@ class DailyTemperatureStore:
         def _fallback_identity() -> LocationCacheIdentity:
             slug = preapproved_slug or normalized
             name = preapproved_name or location
-            return LocationCacheIdentity(redis_slug=slug, canonical_name=name)
+            return LocationCacheIdentity(
+                redis_slug=slug,
+                canonical_name=name,
+                lookup_slugs=_build_lookup_slugs(slug, normalized, ()),
+            )
+
+        async def _identity_from_location_id(
+            conn: asyncpg.Connection,
+            location_id: int,
+            redis_slug: str,
+            canonical_name: str,
+        ) -> LocationCacheIdentity:
+            alias_rows = await conn.fetch(
+                """
+                SELECT alias_normalized_name AS slug
+                FROM location_aliases
+                WHERE location_id = $1
+                UNION
+                SELECT normalized_name AS slug
+                FROM locations
+                WHERE id = $1
+                """,
+                location_id,
+            )
+            alias_slugs = [row["slug"] for row in alias_rows]
+            return LocationCacheIdentity(
+                redis_slug=redis_slug,
+                canonical_name=canonical_name,
+                lookup_slugs=_build_lookup_slugs(redis_slug, normalized, alias_slugs),
+            )
 
         pool = await self._ensure_pool()
         if pool is None:
@@ -306,13 +347,15 @@ class DailyTemperatureStore:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT l.normalized_name,
+                    SELECT l.id,
+                           l.normalized_name,
                            COALESCE(l.resolved_name, l.original_name) AS canonical_name
                     FROM location_aliases a
                     JOIN locations l ON l.id = a.location_id
                     WHERE a.alias_normalized_name = $1
                     UNION ALL
-                    SELECT normalized_name,
+                    SELECT id,
+                           normalized_name,
                            COALESCE(resolved_name, original_name) AS canonical_name
                     FROM locations
                     WHERE normalized_name = $1
@@ -324,9 +367,11 @@ class DailyTemperatureStore:
                     normalized,
                 )
                 if row:
-                    return LocationCacheIdentity(
-                        redis_slug=row["normalized_name"],
-                        canonical_name=row["canonical_name"] or location,
+                    return await _identity_from_location_id(
+                        conn,
+                        int(row["id"]),
+                        row["normalized_name"],
+                        row["canonical_name"] or location,
                     )
 
                 meta: Dict[str, Any] = dict(metadata) if metadata else {}
@@ -368,9 +413,11 @@ class DailyTemperatureStore:
                     location_id,
                 )
                 if canon_row:
-                    return LocationCacheIdentity(
-                        redis_slug=canon_row["normalized_name"],
-                        canonical_name=canon_row["canonical_name"] or location,
+                    return await _identity_from_location_id(
+                        conn,
+                        location_id,
+                        canon_row["normalized_name"],
+                        canon_row["canonical_name"] or location,
                     )
                 return _fallback_identity()
         except Exception as exc:
