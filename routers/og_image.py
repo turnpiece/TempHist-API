@@ -14,8 +14,9 @@ import redis
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from cache.keys import bundle_key, normalize_location_for_cache, rec_key
+from cache.keys import bundle_key, rec_key
 from routers.dependencies import get_redis_client
+from utils.daily_temperature_store import resolve_location_cache_slug
 from utils.share_store import get_share_store
 
 logger = logging.getLogger(__name__)
@@ -144,14 +145,14 @@ async def _lookup_share(share_id: str, redis_client: redis.Redis) -> Optional[di
     return share
 
 
-def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optional[list]:
+async def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optional[list]:
     """Return per-year temperature records from Redis, or None.
 
     Tries the assembled bundle first (written when the GET records endpoint is
     called).  Falls back to reading per-year records directly (written by the
     async job), so share pages that only use the async flow still get a chart.
     """
-    slug = normalize_location_for_cache(share["location"])
+    slug = await resolve_location_cache_slug(share["location"])
     period = share["period"]
     identifier = share["identifier"]
 
@@ -497,7 +498,7 @@ async def og_image(
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found.")
 
-    records = _get_bundle_records(share, redis_client)
+    records = await _get_bundle_records(share, redis_client)
 
     # Redis cold (or CACHE_ENABLED=false) — fetch live as a fallback
     if not records:

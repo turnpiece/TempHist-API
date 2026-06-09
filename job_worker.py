@@ -390,13 +390,14 @@ class JobWorker:
         from fastapi import HTTPException
 
         from cache.core import ETagGenerator, get_ttl_for_year
-        from cache.keys import normalize_location_for_cache, rec_etag_key, rec_key
+        from cache.keys import rec_etag_key, rec_key
         from routers.v1_records import (
             _extract_per_year_records,
             _get_ttl_for_current_year,
             _rebuild_full_response_from_values,
             get_temperature_data_v1,
         )
+        from utils.daily_temperature_store import resolve_location_cache_slug
         from utils.weather import get_year_range
 
         logger.info(f"🔍 Processing record job with params: {params}")
@@ -411,8 +412,8 @@ class JobWorker:
                 f"Missing required params - scope: {scope}, location: {location}, identifier: {identifier}"
             )
 
-        # Normalize location to slug
-        slug = normalize_location_for_cache(location)
+        # Resolve canonical cache slug (may differ from slug stored in older jobs)
+        slug = await resolve_location_cache_slug(location)
         current_year = datetime.now(timezone.utc).year
         oldest_year = current_year - 50
 
@@ -449,7 +450,7 @@ class JobWorker:
                         if not _year_cache:
                             logger.info(f"⏭️ No DB data for year {year} at {location}, skipping")
                             try:
-                                skip_key = f"backfill:skip:{scope}:{normalize_location_for_cache(location)}:{year}"
+                                skip_key = f"backfill:skip:{scope}:{slug}:{year}"
                                 self.redis.setex(skip_key, 86400, "1")
                             except Exception as _e:
                                 logger.debug("Could not set backfill skip key: %s", _e)

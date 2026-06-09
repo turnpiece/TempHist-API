@@ -32,7 +32,6 @@ from cache.keys import (
     get_local_today,
     get_records,
     get_year_etags,
-    normalize_location_for_cache,
     rec_etag_key,
     rec_key,
 )
@@ -54,6 +53,7 @@ from utils.cache_headers import set_weather_cache_headers
 from utils.daily_temperature_store import (
     DailyTemperatureRecord,
     get_daily_temperature_store,
+    resolve_location_cache_slug,
 )
 from utils.location_validation import InvalidLocationCache, is_location_likely_invalid, validate_location_response
 from utils.temperature import (
@@ -234,7 +234,13 @@ def _evaluate_coverage(
     ), ratio
 
 
-def _enqueue_backfill_job(period: str, location: str, identifier: str, year: int) -> None:
+async def _enqueue_backfill_job(
+    period: str,
+    location: str,
+    identifier: str,
+    year: int,
+    slug: str | None = None,
+) -> None:
     """Request the background worker to backfill missing daily data for a specific year.
 
     Uses a per-key cooldown so that rapid client retries don't flood the job
@@ -245,7 +251,8 @@ def _enqueue_backfill_job(period: str, location: str, identifier: str, year: int
         if not job_manager:
             return
 
-        slug = normalize_location_for_cache(location)
+        if slug is None:
+            slug = await resolve_location_cache_slug(location)
 
         # Skip years known to have no data (marked by the worker after a failed DB pre-check
         # or after the full VC computation also returns no data for that year)
@@ -282,6 +289,7 @@ async def _collect_rolling_window_values(
     day: int,
     unit_group: str,
     years: List[int],
+    slug: str | None = None,
 ) -> Tuple[List[TemperatureValue], List[float], List[Dict], List[Dict]]:
     store = await get_daily_temperature_store()
 
@@ -340,7 +348,7 @@ async def _collect_rolling_window_values(
             )
 
         if missing_dates:
-            _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year)
+            await _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year, slug=slug)
 
             if not coverage_ok:
                 for range_start, range_end in _collapse_consecutive_dates(missing_dates):
@@ -468,6 +476,7 @@ async def get_temperature_data_v1(
     """Get temperature data for v1 API using rolling timeline windows for weekly/monthly/yearly."""
     # Parse identifier based on period (all use MM-DD format representing end date)
     month, day, period_type = parse_identifier(period, identifier)
+    slug = await resolve_location_cache_slug(location)
 
     # Use 50 years of data ending at current year (consistent with other endpoints)
     current_year = datetime.now().year
@@ -520,6 +529,7 @@ async def get_temperature_data_v1(
             day=day,
             unit_group=unit_group,
             years=years,
+            slug=slug,
         )
         values.extend(window_values)
         all_temps.extend(aggregated_values)
@@ -859,7 +869,7 @@ async def _get_record_data_internal(
     # Parse identifier
     month, day, _ = parse_identifier(period, identifier)
     current_year = datetime.now(timezone.utc).year
-    slug = normalize_location_for_cache(location)
+    slug = await resolve_location_cache_slug(location)
     years = get_year_range(current_year)
 
     if CACHE_ENABLED:
@@ -950,8 +960,7 @@ async def get_record(
         current_year = datetime.now(timezone.utc).year
         end_date = datetime(current_year, month, day).date()
 
-        # Normalize location to slug format
-        slug = normalize_location_for_cache(location)
+        slug = await resolve_location_cache_slug(location)
 
         # Get year range (50 years back + current year)
         years = get_year_range(current_year)
@@ -1554,7 +1563,7 @@ async def get_record_updated(
     """
     try:
         # Create the same cache key that would be used by the main endpoint
-        normalized_location = normalize_location_for_cache(location)
+        normalized_location = await resolve_location_cache_slug(location)
         cache_key = f"records:{period}:{normalized_location}:{identifier}:celsius:v1:values,average,trend,summary"
 
         # Get the updated timestamp from cache

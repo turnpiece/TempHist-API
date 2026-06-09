@@ -465,6 +465,7 @@ class CacheStats:
                 bucket["misses"] += 1
 
         if location:
+            location = normalize_location_for_cache(location)
             if location not in self.stats["location_stats"]:
                 self.stats["location_stats"][location] = {"hits": 0, "misses": 0, "errors": 0, "total": 0}
             bucket = self.stats["location_stats"][location]
@@ -541,8 +542,16 @@ class CacheStats:
         return result
 
     def get_location_stats(self) -> Dict:
-        result = {}
+        merged: Dict[str, Dict] = {}
         for location, stats in self.stats["location_stats"].items():
+            key = normalize_location_for_cache(location)
+            if key not in merged:
+                merged[key] = {"hits": 0, "misses": 0, "errors": 0, "total": 0}
+            for field in ("hits", "misses", "errors", "total"):
+                merged[key][field] += stats[field]
+
+        result = {}
+        for location, stats in merged.items():
             total = stats["hits"] + stats["misses"]
             result[location] = {
                 "total_requests": stats["total"],

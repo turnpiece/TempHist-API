@@ -143,6 +143,20 @@ def _get_preapproved_location_info(normalized_name: str) -> Optional[Dict[str, A
     return mapping.get(normalized_name)
 
 
+def _canonical_preapproved_cache_slug(location: str) -> Optional[str]:
+    """Return a stable cache slug for a known preapproved location, if matched."""
+    info = _get_preapproved_location_info(normalize_location_for_cache(location))
+    if not info:
+        return None
+    slug = info.get("slug") or info.get("id")
+    if slug:
+        return normalize_location_for_cache(str(slug).replace("-", " "))
+    full_name = info.get("full_name")
+    if full_name:
+        return normalize_location_for_cache(full_name)
+    return None
+
+
 class DailyTemperatureStore:
     """Persistent cache for daily temperature data backed by Postgres."""
 
@@ -252,6 +266,82 @@ class DailyTemperatureStore:
             )
 
         return None
+
+    async def resolve_cache_slug(self, location: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+        """Return the canonical Redis cache slug for a location string.
+
+        Resolution order:
+        1. Existing Postgres alias or locations.normalized_name match
+        2. Geocode (store/preapproved/Mapbox) + alias creation / 45 km geo snap
+        3. Preapproved slug when Postgres is unavailable
+        4. Lexical normalize_location_for_cache fallback
+        """
+        normalized = normalize_location_for_cache(location)
+        preapproved_slug = _canonical_preapproved_cache_slug(location)
+
+        pool = await self._ensure_pool()
+        if pool is None:
+            return preapproved_slug or normalized
+
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT l.normalized_name
+                    FROM location_aliases a
+                    JOIN locations l ON l.id = a.location_id
+                    WHERE a.alias_normalized_name = $1
+                    UNION ALL
+                    SELECT normalized_name
+                    FROM locations
+                    WHERE normalized_name = $1
+                      AND NOT EXISTS (
+                        SELECT 1 FROM location_aliases WHERE alias_normalized_name = $1
+                      )
+                    LIMIT 1
+                    """,
+                    normalized,
+                )
+                if row:
+                    return row["normalized_name"]
+
+                meta: Dict[str, Any] = dict(metadata) if metadata else {}
+                if meta.get("latitude") is None or meta.get("longitude") is None:
+                    coords = await self.get_coordinates(location)
+                    if coords:
+                        meta.setdefault("latitude", coords[0])
+                        meta.setdefault("longitude", coords[1])
+                        if coords[2]:
+                            meta.setdefault("timezone", coords[2])
+                    else:
+                        try:
+                            from utils.open_meteo_client import geocode_location
+
+                            lat, lon, tz = await geocode_location(location)
+                            meta.setdefault("latitude", lat)
+                            meta.setdefault("longitude", lon)
+                            if tz:
+                                meta.setdefault("timezone", tz)
+                        except Exception as exc:
+                            logger.debug("Geocode for cache slug failed for %r: %s", location, exc)
+
+                location_id = await self._get_or_create_location_id(
+                    conn,
+                    location,
+                    normalized,
+                    meta or None,
+                )
+                if location_id is None:
+                    return preapproved_slug or normalized
+
+                canon = await conn.fetchval(
+                    "SELECT normalized_name FROM locations WHERE id = $1",
+                    location_id,
+                )
+                return canon or preapproved_slug or normalized
+        except Exception as exc:
+            logger.debug("resolve_cache_slug failed for %r: %s", location, exc)
+            return preapproved_slug or normalized
 
     async def ping(self) -> dict:
         """Check database connectivity. Returns a status dict suitable for health endpoints."""
@@ -1175,6 +1265,12 @@ class DailyTemperatureStore:
 
 _store: Optional[DailyTemperatureStore] = None
 _store_lock: Optional[asyncio.Lock] = None
+
+
+async def resolve_location_cache_slug(location: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+    """Resolve a location string to the canonical Redis records cache slug."""
+    store = await get_daily_temperature_store()
+    return await store.resolve_cache_slug(location, metadata)
 
 
 async def get_daily_temperature_store() -> DailyTemperatureStore:

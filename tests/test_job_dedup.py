@@ -178,8 +178,9 @@ class TestNewJobCreation:
 
 
 class TestBackfillCooldown:
+    @pytest.mark.asyncio
     @patch("routers.v1_records.get_job_manager")
-    def test_first_call_enqueues(self, mock_get_jm):
+    async def test_first_call_enqueues(self, mock_get_jm):
         """First backfill request should set cooldown and create job."""
         from routers.v1_records import _enqueue_backfill_job
 
@@ -189,13 +190,14 @@ class TestBackfillCooldown:
         # Redis SET NX returns True (key was newly created)
         mock_jm.redis.set.return_value = True
 
-        _enqueue_backfill_job("weekly", "Singapore, Singapore", "03-26", 2024)
+        await _enqueue_backfill_job("weekly", "Singapore, Singapore", "03-26", 2024, slug="singapore__singapore")
 
         mock_jm.redis.set.assert_called_once()
         mock_jm.create_job.assert_called_once()
 
+    @pytest.mark.asyncio
     @patch("routers.v1_records.get_job_manager")
-    def test_second_call_within_cooldown_skips(self, mock_get_jm):
+    async def test_second_call_within_cooldown_skips(self, mock_get_jm):
         """Repeated backfill request within cooldown should skip enqueue."""
         from routers.v1_records import _enqueue_backfill_job
 
@@ -205,12 +207,13 @@ class TestBackfillCooldown:
         # Redis SET NX returns False (key already exists — cooldown active)
         mock_jm.redis.set.return_value = False
 
-        _enqueue_backfill_job("weekly", "Singapore, Singapore", "03-26", 2024)
+        await _enqueue_backfill_job("weekly", "Singapore, Singapore", "03-26", 2024, slug="singapore__singapore")
 
         mock_jm.create_job.assert_not_called()
 
+    @pytest.mark.asyncio
     @patch("routers.v1_records.get_job_manager")
-    def test_cooldown_key_format(self, mock_get_jm):
+    async def test_cooldown_key_format(self, mock_get_jm):
         """Cooldown key should encode period, slug, identifier, and year."""
         from routers.v1_records import _enqueue_backfill_job
 
@@ -219,7 +222,7 @@ class TestBackfillCooldown:
         mock_jm.redis.exists.return_value = 0  # no skip marker
         mock_jm.redis.set.return_value = True
 
-        _enqueue_backfill_job("yearly", "London, United Kingdom", "06-15", 1990)
+        await _enqueue_backfill_job("yearly", "London, United Kingdom", "06-15", 1990, slug="london__united_kingdom")
 
         set_call = mock_jm.redis.set.call_args
         cooldown_key = set_call[0][0]
@@ -231,8 +234,9 @@ class TestBackfillCooldown:
         assert set_call[1]["nx"] is True
         assert set_call[1]["ex"] == 60
 
+    @pytest.mark.asyncio
     @patch("routers.v1_records.get_job_manager")
-    def test_skip_marker_prevents_enqueue(self, mock_get_jm):
+    async def test_skip_marker_prevents_enqueue(self, mock_get_jm):
         """If a skip marker exists for this year, no job should be created."""
         from routers.v1_records import _enqueue_backfill_job
 
@@ -240,13 +244,16 @@ class TestBackfillCooldown:
         mock_get_jm.return_value = mock_jm
         mock_jm.redis.exists.return_value = 1  # skip marker present
 
-        _enqueue_backfill_job("yearly", "Mogadishu, Banaadir, Somalia", "05-21", 1994)
+        await _enqueue_backfill_job(
+            "yearly", "Mogadishu, Banaadir, Somalia", "05-21", 1994, slug="mogadishu__banaadir__somalia"
+        )
 
         mock_jm.redis.set.assert_not_called()
         mock_jm.create_job.assert_not_called()
 
+    @pytest.mark.asyncio
     @patch("routers.v1_records.get_job_manager")
-    def test_vc_confirmed_skip_marker_prevents_enqueue(self, mock_get_jm):
+    async def test_vc_confirmed_skip_marker_prevents_enqueue(self, mock_get_jm):
         """backfill:skip marker (set by DB pre-check or VC result) blocks re-enqueue."""
         from routers.v1_records import _enqueue_backfill_job
 
@@ -255,20 +262,23 @@ class TestBackfillCooldown:
         # Per-year skip key present (e.g. set after VC confirmed no data)
         mock_jm.redis.exists.return_value = 1
 
-        _enqueue_backfill_job("daily", "Mogadishu, Banaadir, Somalia", "01-15", 2010)
+        await _enqueue_backfill_job(
+            "daily", "Mogadishu, Banaadir, Somalia", "01-15", 2010, slug="mogadishu__banaadir__somalia"
+        )
 
         mock_jm.redis.set.assert_not_called()
         mock_jm.create_job.assert_not_called()
 
+    @pytest.mark.asyncio
     @patch("routers.v1_records.get_job_manager")
-    def test_no_job_manager_does_not_raise(self, mock_get_jm):
+    async def test_no_job_manager_does_not_raise(self, mock_get_jm):
         """If job manager is unavailable, should silently return."""
         from routers.v1_records import _enqueue_backfill_job
 
         mock_get_jm.return_value = None
 
         # Should not raise
-        _enqueue_backfill_job("weekly", "Singapore", "03-26", 2024)
+        await _enqueue_backfill_job("weekly", "Singapore", "03-26", 2024, slug="singapore")
 
 
 # ---------------------------------------------------------------------------
