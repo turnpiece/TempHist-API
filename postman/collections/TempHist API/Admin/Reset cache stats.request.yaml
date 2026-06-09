@@ -3,5 +3,5 @@ name: Reset cache stats
 url: "{{baseURL}}/cache-stats/reset"
 method: POST
 headers:
-  X-Admin-Key: "{{ADMIN_API_KEY}}{"
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 order: 2485144680138048

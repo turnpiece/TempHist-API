@@ -40,14 +40,16 @@ class TestResolveCacheSlug:
     async def test_without_postgres_uses_preapproved_slug(self):
         store = self._make_store(disabled=True)
         with patch.object(store, "_ensure_pool", new=AsyncMock(return_value=None)):
-            slug = await store.resolve_cache_slug("London")
+            with patch.object(store, "_resolve_coords_for_cache", new=AsyncMock(return_value=None)):
+                slug = await store.resolve_cache_slug("London")
         assert slug == "london"
 
     @pytest.mark.asyncio
     async def test_without_postgres_falls_back_to_lexical_normalize(self):
         store = self._make_store(disabled=True)
         with patch.object(store, "_ensure_pool", new=AsyncMock(return_value=None)):
-            slug = await store.resolve_cache_slug("Not A Real Place XYZ")
+            with patch.object(store, "_resolve_coords_for_cache", new=AsyncMock(return_value=None)):
+                slug = await store.resolve_cache_slug("Not A Real Place XYZ")
         assert slug == "not_a_real_place_xyz"
 
     @pytest.mark.asyncio
@@ -72,10 +74,12 @@ class TestResolveCacheSlug:
         pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
         with patch.object(store, "_ensure_pool", new=AsyncMock(return_value=pool)):
-            slug = await store.resolve_cache_slug("London")
+            with patch.object(store, "_resolve_coords_for_cache", new=AsyncMock(return_value=None)):
+                with patch.object(store, "_find_nearby_metro_anchor", new=AsyncMock(return_value=None)):
+                    slug = await store.resolve_cache_slug("London")
 
         assert slug == "greater_london__england__united_kingdom"
-        conn.fetchrow.assert_awaited_once()
+        assert conn.fetchrow.await_count == 2
 
     @pytest.mark.asyncio
     async def test_creates_alias_via_geo_snap_when_no_existing_alias(self):
@@ -102,14 +106,17 @@ class TestResolveCacheSlug:
 
         with patch.object(store, "_ensure_pool", new=AsyncMock(return_value=pool)):
             with patch.object(
-                store, "get_coordinates", new=AsyncMock(return_value=(51.5074, -0.1278, "Europe/London"))
+                store,
+                "_resolve_coords_for_cache",
+                new=AsyncMock(return_value=(51.5074, -0.1278, "Europe/London")),
             ):
-                with patch.object(
-                    store,
-                    "_get_or_create_location_id",
-                    new=AsyncMock(return_value=42),
-                ) as mock_create:
-                    slug = await store.resolve_cache_slug("London")
+                with patch.object(store, "_find_nearby_metro_anchor", new=AsyncMock(return_value=None)):
+                    with patch.object(
+                        store,
+                        "_get_or_create_location_id",
+                        new=AsyncMock(return_value=42),
+                    ) as mock_create:
+                        slug = await store.resolve_cache_slug("London")
 
         assert slug == "london__england__united_kingdom"
         mock_create.assert_awaited_once()
@@ -132,10 +139,11 @@ class TestResolveCacheSlug:
         mock_store.resolve_location_cache_identity.assert_awaited_once_with("London", None)
 
     @pytest.mark.asyncio
-    async def test_identity_without_postgres_uses_preapproved(self):
+    async def test_identity_without_postgres_uses_preapproved_when_no_coords(self):
         store = self._make_store(disabled=True)
         with patch.object(store, "_ensure_pool", new=AsyncMock(return_value=None)):
-            identity = await store.resolve_location_cache_identity("London")
+            with patch.object(store, "_resolve_coords_for_cache", new=AsyncMock(return_value=None)):
+                identity = await store.resolve_location_cache_identity("London")
         assert identity == LocationCacheIdentity(
             redis_slug="london",
             canonical_name="London, England, United Kingdom",
@@ -164,7 +172,9 @@ class TestResolveCacheSlug:
         pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
         with patch.object(store, "_ensure_pool", new=AsyncMock(return_value=pool)):
-            identity = await store.resolve_location_cache_identity("London")
+            with patch.object(store, "_resolve_coords_for_cache", new=AsyncMock(return_value=None)):
+                with patch.object(store, "_find_nearby_metro_anchor", new=AsyncMock(return_value=None)):
+                    identity = await store.resolve_location_cache_identity("London")
 
         assert identity.redis_slug == "greater_london__england__united_kingdom"
         assert identity.canonical_name == "Greater London, England, United Kingdom"

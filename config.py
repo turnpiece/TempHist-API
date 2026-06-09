@@ -66,6 +66,12 @@ POPULARITY_WINDOW_DAYS = int(os.getenv("POPULARITY_WINDOW_DAYS", "30"))
 # The hard cap MAX_LIMIT=500 in the router is the real safety net.
 POPULARITY_MAX_LOCATIONS = int(os.getenv("POPULARITY_MAX_LOCATIONS", "500"))
 CANONICALIZATION_RADIUS_KM = int(os.getenv("CANONICALIZATION_RADIUS_KM", "45"))
+# Metro-area cache snapping: nearby places share Redis record keys for faster cache hits.
+# TempHist is a temperature-history app (trends/comparisons), not hyperlocal forecasts.
+METRO_CACHE_SNAP_KM = int(os.getenv("METRO_CACHE_SNAP_KM", "30"))
+METRO_CACHE_GRID_DEGREES = float(
+    os.getenv("METRO_CACHE_GRID_DEGREES", str(round(METRO_CACHE_SNAP_KM / 100.0, 2)))
+)
 # HTTP timeout configuration
 HTTP_TIMEOUT_DEFAULT = 60.0  # Default HTTP timeout in seconds
 HTTP_TIMEOUT_SHORT = 5.0  # Short timeout for health checks

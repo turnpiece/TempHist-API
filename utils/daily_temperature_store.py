@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import asyncpg  # type: ignore[import-untyped]
 
 from cache.keys import normalize_location_for_cache
-from config import CANONICALIZATION_RADIUS_KM
+from config import CANONICALIZATION_RADIUS_KM, METRO_CACHE_GRID_DEGREES, METRO_CACHE_SNAP_KM
 
 
 def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[bool, bool, bool]:
@@ -54,6 +54,19 @@ def _build_lookup_slugs(redis_slug: str, request_normalized: str, alias_slugs: I
             seen.add(candidate)
             ordered.append(candidate)
     return tuple(ordered)
+
+
+def coords_to_metro_slug(
+    latitude: float,
+    longitude: float,
+    grid_degrees: float = METRO_CACHE_GRID_DEGREES,
+) -> str:
+    """Map coordinates to a shared metro grid slug (~25 km cells by default)."""
+    grid_lat = round(latitude / grid_degrees) * grid_degrees
+    grid_lon = round(longitude / grid_degrees) * grid_degrees
+    lat_text = f"{grid_lat:.3f}".replace("-", "n").replace(".", "p")
+    lon_text = f"{grid_lon:.3f}".replace("-", "w").replace(".", "p")
+    return f"geo_{lat_text}_{lon_text}"
 
 
 _PREAPPROVED_LOCATION_MAP: Optional[Dict[str, Dict[str, Any]]] = None
@@ -287,6 +300,76 @@ class DailyTemperatureStore:
 
         return None
 
+    async def _resolve_coords_for_cache(
+        self,
+        location: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Tuple[float, float, Optional[str]]]:
+        """Resolve coordinates for cache metro snapping."""
+        meta: Dict[str, Any] = dict(metadata) if metadata else {}
+        if meta.get("latitude") is not None and meta.get("longitude") is not None:
+            return (
+                float(meta["latitude"]),
+                float(meta["longitude"]),
+                meta.get("timezone"),
+            )
+
+        coords = await self.get_coordinates(location)
+        if coords is not None:
+            return coords
+
+        try:
+            from utils.open_meteo_client import geocode_location
+
+            lat, lon, tz = await geocode_location(location)
+            return lat, lon, tz
+        except Exception as exc:
+            logger.debug("Geocode for cache identity failed for %r: %s", location, exc)
+            return None
+
+    async def _ensure_location_alias(
+        self,
+        conn: asyncpg.Connection,
+        alias_normalized: str,
+        location_id: int,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO location_aliases (alias_normalized_name, location_id)
+            VALUES ($1, $2)
+            ON CONFLICT (alias_normalized_name) DO NOTHING
+            """,
+            alias_normalized,
+            location_id,
+        )
+
+    async def _identity_from_location_id(
+        self,
+        conn: asyncpg.Connection,
+        location_id: int,
+        redis_slug: str,
+        canonical_name: str,
+        request_normalized: str,
+    ) -> LocationCacheIdentity:
+        alias_rows = await conn.fetch(
+            """
+            SELECT alias_normalized_name AS slug
+            FROM location_aliases
+            WHERE location_id = $1
+            UNION
+            SELECT normalized_name AS slug
+            FROM locations
+            WHERE id = $1
+            """,
+            location_id,
+        )
+        alias_slugs = [row["slug"] for row in alias_rows]
+        return LocationCacheIdentity(
+            redis_slug=redis_slug,
+            canonical_name=canonical_name,
+            lookup_slugs=_build_lookup_slugs(redis_slug, request_normalized, alias_slugs),
+        )
+
     async def resolve_location_cache_identity(
         self,
         location: str,
@@ -296,47 +379,33 @@ class DailyTemperatureStore:
 
         Resolution order:
         1. Existing Postgres alias or locations.normalized_name match
-        2. Geocode (store/preapproved/Mapbox) + alias creation / 45 km geo snap
-        3. Preapproved identity when Postgres is unavailable
-        4. Lexical normalize_location_for_cache fallback
+        2. Geocode (store/preapproved/Mapbox) + alias creation
+        3. Metro-area snap to nearest other location within METRO_CACHE_SNAP_KM
+        4. Coordinate grid slug when Postgres is unavailable
+        5. Preapproved / lexical normalize_location_for_cache fallback
         """
         normalized = normalize_location_for_cache(location)
         preapproved = _get_preapproved_location_info(normalized)
         preapproved_slug = _canonical_preapproved_cache_slug(location)
         preapproved_name = preapproved.get("full_name") if preapproved else None
+        coords = await self._resolve_coords_for_cache(location, metadata)
 
         def _fallback_identity() -> LocationCacheIdentity:
+            if coords is not None:
+                slug = coords_to_metro_slug(coords[0], coords[1])
+                name = preapproved_name or location
+                legacy = [preapproved_slug] if preapproved_slug and preapproved_slug != slug else []
+                return LocationCacheIdentity(
+                    redis_slug=slug,
+                    canonical_name=name,
+                    lookup_slugs=_build_lookup_slugs(slug, normalized, legacy),
+                )
             slug = preapproved_slug or normalized
             name = preapproved_name or location
             return LocationCacheIdentity(
                 redis_slug=slug,
                 canonical_name=name,
                 lookup_slugs=_build_lookup_slugs(slug, normalized, ()),
-            )
-
-        async def _identity_from_location_id(
-            conn: asyncpg.Connection,
-            location_id: int,
-            redis_slug: str,
-            canonical_name: str,
-        ) -> LocationCacheIdentity:
-            alias_rows = await conn.fetch(
-                """
-                SELECT alias_normalized_name AS slug
-                FROM location_aliases
-                WHERE location_id = $1
-                UNION
-                SELECT normalized_name AS slug
-                FROM locations
-                WHERE id = $1
-                """,
-                location_id,
-            )
-            alias_slugs = [row["slug"] for row in alias_rows]
-            return LocationCacheIdentity(
-                redis_slug=redis_slug,
-                canonical_name=canonical_name,
-                lookup_slugs=_build_lookup_slugs(redis_slug, normalized, alias_slugs),
             )
 
         pool = await self._ensure_pool()
@@ -366,42 +435,25 @@ class DailyTemperatureStore:
                     """,
                     normalized,
                 )
-                if row:
-                    return await _identity_from_location_id(
-                        conn,
-                        int(row["id"]),
-                        row["normalized_name"],
-                        row["canonical_name"] or location,
-                    )
 
                 meta: Dict[str, Any] = dict(metadata) if metadata else {}
-                if meta.get("latitude") is None or meta.get("longitude") is None:
-                    coords = await self.get_coordinates(location)
-                    if coords:
-                        meta.setdefault("latitude", coords[0])
-                        meta.setdefault("longitude", coords[1])
-                        if coords[2]:
-                            meta.setdefault("timezone", coords[2])
-                    else:
-                        try:
-                            from utils.open_meteo_client import geocode_location
+                if coords is not None:
+                    meta.setdefault("latitude", coords[0])
+                    meta.setdefault("longitude", coords[1])
+                    if coords[2]:
+                        meta.setdefault("timezone", coords[2])
 
-                            lat, lon, tz = await geocode_location(location)
-                            meta.setdefault("latitude", lat)
-                            meta.setdefault("longitude", lon)
-                            if tz:
-                                meta.setdefault("timezone", tz)
-                        except Exception as exc:
-                            logger.debug("Geocode for cache identity failed for %r: %s", location, exc)
-
-                location_id = await self._get_or_create_location_id(
-                    conn,
-                    location,
-                    normalized,
-                    meta or None,
-                )
-                if location_id is None:
-                    return _fallback_identity()
+                if row:
+                    location_id = int(row["id"])
+                else:
+                    location_id = await self._get_or_create_location_id(
+                        conn,
+                        location,
+                        normalized,
+                        meta or None,
+                    )
+                    if location_id is None:
+                        return _fallback_identity()
 
                 canon_row = await conn.fetchrow(
                     """
@@ -412,14 +464,33 @@ class DailyTemperatureStore:
                     """,
                     location_id,
                 )
-                if canon_row:
-                    return await _identity_from_location_id(
+                if not canon_row:
+                    return _fallback_identity()
+
+                cache_location_id = location_id
+                cache_slug = canon_row["normalized_name"]
+                cache_name = canon_row["canonical_name"] or location
+
+                if coords is not None:
+                    anchor = await self._find_nearby_metro_anchor(
                         conn,
-                        location_id,
-                        canon_row["normalized_name"],
-                        canon_row["canonical_name"] or location,
+                        coords[0],
+                        coords[1],
+                        exclude_location_id=location_id,
                     )
-                return _fallback_identity()
+                    if anchor is not None:
+                        cache_location_id = int(anchor["id"])
+                        cache_slug = anchor["normalized_name"]
+                        cache_name = anchor["resolved_name"] or anchor["original_name"] or cache_name
+                        await self._ensure_location_alias(conn, normalized, cache_location_id)
+
+                return await self._identity_from_location_id(
+                    conn,
+                    cache_location_id,
+                    cache_slug,
+                    cache_name,
+                    normalized,
+                )
         except Exception as exc:
             logger.debug("resolve_location_cache_identity failed for %r: %s", location, exc)
             return _fallback_identity()
@@ -1097,6 +1168,7 @@ class DailyTemperatureStore:
         latitude: Optional[float],
         longitude: Optional[float],
         max_distance_km: float = CANONICALIZATION_RADIUS_KM,
+        exclude_location_id: Optional[int] = None,
     ) -> Optional[asyncpg.Record]:
         """Return closest existing location within max_distance_km km of (lat, lng), or None.
 
@@ -1140,6 +1212,7 @@ class DailyTemperatureStore:
               AND longitude IS NOT NULL
               AND latitude BETWEEN $3 AND $4
               AND longitude BETWEEN $5 AND $6
+              AND ($7::bigint IS NULL OR id <> $7)
             ORDER BY distance_km
             LIMIT 1
             """,
@@ -1149,6 +1222,7 @@ class DailyTemperatureStore:
             max_lat,
             min_lon,
             max_lon,
+            exclude_location_id,
         )
         if not row:
             return None
@@ -1161,6 +1235,22 @@ class DailyTemperatureStore:
             return row
 
         return None
+
+    async def _find_nearby_metro_anchor(
+        self,
+        conn: asyncpg.Connection,
+        latitude: float,
+        longitude: float,
+        exclude_location_id: Optional[int] = None,
+    ) -> Optional[asyncpg.Record]:
+        """Return the nearest *other* location within METRO_CACHE_SNAP_KM for shared cache keys."""
+        return await self._find_nearby_location(
+            conn,
+            latitude,
+            longitude,
+            max_distance_km=METRO_CACHE_SNAP_KM,
+            exclude_location_id=exclude_location_id,
+        )
 
     async def _get_or_create_location_id(
         self,
