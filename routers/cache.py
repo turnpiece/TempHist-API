@@ -9,14 +9,14 @@ from fastapi import APIRouter, Depends, Query
 from cache.accessors import get_cache_invalidator, get_cache_stats, get_cache_warmer, get_job_manager
 from cache.core import CACHE_INVALIDATION_ENABLED
 from cache.warming import CACHE_STATS_ENABLED, CACHE_WARMING_ENABLED, CACHE_WARMING_INTERVAL_HOURS
-from utils.firebase import verify_firebase_token
+from utils.admin_auth import verify_admin_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.post("/cache-warm")
-async def trigger_cache_warming():
+async def trigger_cache_warming(_admin: bool = Depends(verify_admin_key)):
     """Trigger manual cache warming for all popular locations (legacy endpoint - now uses job system)."""
     if not CACHE_WARMING_ENABLED or not get_cache_warmer():
         return {"status": "disabled", "message": "Cache warming is not enabled"}
@@ -173,7 +173,7 @@ async def get_cache_warming_job_status(job_id: str):
 
 
 @router.get("/cache-stats")
-async def get_cache_statistics(user=Depends(verify_firebase_token)):
+async def get_cache_statistics(_admin: bool = Depends(verify_admin_key)):
     """Get comprehensive cache statistics and performance metrics."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -183,7 +183,7 @@ async def get_cache_statistics(user=Depends(verify_firebase_token)):
 
 
 @router.get("/cache-stats/health")
-async def get_cache_health(user=Depends(verify_firebase_token)):
+async def get_cache_health(_admin: bool = Depends(verify_admin_key)):
     """Get cache health assessment and alerts."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -193,7 +193,7 @@ async def get_cache_health(user=Depends(verify_firebase_token)):
 
 
 @router.get("/cache-stats/endpoints")
-async def get_cache_endpoint_stats(user=Depends(verify_firebase_token)):
+async def get_cache_endpoint_stats(_admin: bool = Depends(verify_admin_key)):
     """Get cache statistics broken down by endpoint."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -210,7 +210,7 @@ async def get_cache_endpoint_stats(user=Depends(verify_firebase_token)):
 
 
 @router.get("/cache-stats/locations")
-async def get_cache_location_stats(user=Depends(verify_firebase_token)):
+async def get_cache_location_stats(_admin: bool = Depends(verify_admin_key)):
     """Get cache statistics broken down by location."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -227,7 +227,7 @@ async def get_cache_location_stats(user=Depends(verify_firebase_token)):
 
 
 @router.get("/cache-stats/hourly")
-async def get_cache_hourly_stats(hours: int = Query(24, ge=1, le=168), user=Depends(verify_firebase_token)):
+async def get_cache_hourly_stats(hours: int = Query(24, ge=1, le=168), _admin: bool = Depends(verify_admin_key)):
     """Get hourly cache statistics for the last N hours."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -237,7 +237,7 @@ async def get_cache_hourly_stats(hours: int = Query(24, ge=1, le=168), user=Depe
 
 
 @router.post("/cache-stats/reset")
-async def reset_cache_statistics(user=Depends(verify_firebase_token)):
+async def reset_cache_statistics(_admin: bool = Depends(verify_admin_key)):
     """Reset all cache statistics (admin endpoint)."""
     cache_stats_instance = get_cache_stats()
     if not CACHE_STATS_ENABLED or not cache_stats_instance:
@@ -248,7 +248,7 @@ async def reset_cache_statistics(user=Depends(verify_firebase_token)):
 
 
 @router.delete("/cache/invalidate/key/{cache_key:path}")
-async def invalidate_cache_key(cache_key: str, dry_run: bool = False):
+async def invalidate_cache_key(cache_key: str, dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Invalidate a specific cache key."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -258,7 +258,7 @@ async def invalidate_cache_key(cache_key: str, dry_run: bool = False):
 
 
 @router.delete("/cache/invalidate/pattern")
-async def invalidate_by_pattern(pattern: str, dry_run: bool = False):
+async def invalidate_by_pattern(pattern: str, dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Invalidate cache keys matching a pattern."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -268,7 +268,9 @@ async def invalidate_by_pattern(pattern: str, dry_run: bool = False):
 
 
 @router.delete("/cache/invalidate/endpoint/{endpoint}")
-async def invalidate_by_endpoint(endpoint: str, location: Optional[str] = None, dry_run: bool = False):
+async def invalidate_by_endpoint(
+    endpoint: str, location: Optional[str] = None, dry_run: bool = False, _admin: bool = Depends(verify_admin_key)
+):
     """Invalidate cache keys for a specific endpoint and optionally location."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -278,7 +280,7 @@ async def invalidate_by_endpoint(endpoint: str, location: Optional[str] = None, 
 
 
 @router.delete("/cache/invalidate/location/{location}")
-async def invalidate_by_location(location: str, dry_run: bool = False):
+async def invalidate_by_location(location: str, dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Invalidate all cache keys for a specific location."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -288,7 +290,7 @@ async def invalidate_by_location(location: str, dry_run: bool = False):
 
 
 @router.delete("/cache/invalidate/date/{date}")
-async def invalidate_by_date(date: str, dry_run: bool = False):
+async def invalidate_by_date(date: str, dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Invalidate cache keys for a specific date."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -298,7 +300,7 @@ async def invalidate_by_date(date: str, dry_run: bool = False):
 
 
 @router.delete("/cache/invalidate/forecast")
-async def invalidate_forecast_data(dry_run: bool = False):
+async def invalidate_forecast_data(dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Invalidate all forecast data."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -308,7 +310,7 @@ async def invalidate_forecast_data(dry_run: bool = False):
 
 
 @router.delete("/cache/invalidate/today")
-async def invalidate_today_data(dry_run: bool = False):
+async def invalidate_today_data(dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Invalidate all data for today."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -318,7 +320,7 @@ async def invalidate_today_data(dry_run: bool = False):
 
 
 @router.delete("/cache/invalidate/expired")
-async def invalidate_expired_keys(dry_run: bool = False):
+async def invalidate_expired_keys(dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Invalidate keys that have expired."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -328,7 +330,7 @@ async def invalidate_expired_keys(dry_run: bool = False):
 
 
 @router.get("/cache/info")
-async def get_cache_info():
+async def get_cache_info(_admin: bool = Depends(verify_admin_key)):
     """Get information about current cache state."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}
@@ -337,7 +339,7 @@ async def get_cache_info():
 
 
 @router.delete("/cache/clear")
-async def clear_all_cache(dry_run: bool = False):
+async def clear_all_cache(dry_run: bool = False, _admin: bool = Depends(verify_admin_key)):
     """Clear all cache data (use with caution!)."""
     if not CACHE_INVALIDATION_ENABLED or not get_cache_invalidator():
         return {"status": "disabled", "message": "Cache invalidation is not enabled"}

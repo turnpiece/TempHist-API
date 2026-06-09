@@ -1,4 +1,6 @@
 $kind: http-request
 url: "{{baseURL}}/cache-stats"
 method: GET
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 order: 4000

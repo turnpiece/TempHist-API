@@ -1,4 +1,6 @@
 $kind: http-request
 url: "{{baseURL}}/cache/clear"
 method: DELETE
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 order: 1000

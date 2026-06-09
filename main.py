@@ -14,7 +14,7 @@ from typing import List, Optional
 import firebase_admin
 import httpx
 import redis
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,7 @@ from cache.warming import CACHE_WARMING_ENABLED, scheduled_cache_warming
 
 # Import configuration and rate limiting
 from config import (
+    ADMIN_API_KEY,
     API_ACCESS_TOKEN,
     CORS_ORIGIN_REGEX,
     CORS_ORIGINS,
@@ -64,6 +65,7 @@ from routers.shares import router as shares_router
 from routers.stats import router as stats_router
 from routers.v1_records import router as v1_records_router
 from routers.weather import router as weather_router
+from utils.admin_auth import admin_key_is_valid, is_admin_path, verify_admin_key
 from utils.ip_utils import get_client_ip, is_ip_blacklisted, is_ip_whitelisted
 from utils.path_parsing import extract_location_from_path
 
@@ -1217,6 +1219,21 @@ async def verify_token_middleware(request: Request, call_next):
             logger.debug("[DEBUG] Middleware: Public path, allowing through")
         return await call_next(request)
 
+    # Admin paths require X-Admin-Key only (not Firebase or API_ACCESS_TOKEN)
+    if is_admin_path(request.url.path, request.method):
+        admin_key = request.headers.get("X-Admin-Key")
+        if not ADMIN_API_KEY:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Admin API not configured (ADMIN_API_KEY not set)"},
+            )
+        if not admin_key_is_valid(admin_key):
+            return JSONResponse(status_code=401, content={"detail": "Missing or invalid admin key"})
+        request.state.user = {"uid": "admin", "system": True, "source": "admin_key"}
+        if DEBUG:
+            logger.debug("[DEBUG] Middleware: Admin path, X-Admin-Key verified")
+        return await call_next(request)
+
     # Check if this is a service job using API_ACCESS_TOKEN (bypass rate limiting)
     auth_header = request.headers.get("Authorization")
     is_service_job = False
@@ -1431,6 +1448,7 @@ app.add_middleware(
         "accept",
         "x-requested-with",
         "x-firebase-appcheck",
+        "x-admin-key",
     ],
     expose_headers=["*"],
     max_age=600,  # Cache preflight requests for 10 minutes
@@ -1459,19 +1477,11 @@ app.add_middleware(
 
 
 @app.post("/admin/clear-job-queue")
-async def admin_clear_job_queue(admin_key: str = Header(None, alias="X-Admin-Key")):
+async def admin_clear_job_queue(_admin: bool = Depends(verify_admin_key)):
     """
     Admin endpoint to clear the job queue.
     Requires X-Admin-Key header matching ADMIN_API_KEY environment variable.
     """
-    expected_key = os.getenv("ADMIN_API_KEY")
-
-    if not expected_key:
-        raise HTTPException(status_code=503, detail="Admin API not configured (ADMIN_API_KEY not set)")
-
-    if admin_key != expected_key:
-        raise HTTPException(status_code=401, detail="Invalid admin key")
-
     try:
         from admin_clear_queue import clear_job_queue
 

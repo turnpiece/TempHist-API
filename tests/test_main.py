@@ -820,10 +820,10 @@ class TestIPWhitelistBlacklistIntegration:
         assert isinstance(ip_status["rate_limited"], bool)
 
     def test_rate_limit_stats_shows_ip_lists(self, client):
-        """Test that rate limit stats endpoint shows whitelist and blacklist (requires auth)."""
-        # This endpoint requires authentication
-        with patch("utils.firebase.verify_firebase_token", return_value={"uid": "test_user"}):
-            response = client.get("/rate-limit-stats")
+        """Test that rate limit stats endpoint shows whitelist and blacklist (requires admin key)."""
+        with patch("main.ADMIN_API_KEY", "test-admin-key"):
+            with patch("utils.admin_auth.ADMIN_API_KEY", "test-admin-key"):
+                response = client.get("/rate-limit-stats", headers={"X-Admin-Key": "test-admin-key"})
             assert response.status_code == 200
 
             data = response.json()

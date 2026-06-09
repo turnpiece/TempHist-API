@@ -12,27 +12,10 @@ from config import (
     USAGE_TRACKING_ENABLED,
 )
 from routers.dependencies import get_location_monitor, get_request_monitor, get_service_token_rate_limiter
+from utils.admin_auth import verify_admin_key
 from utils.ip_utils import get_client_ip, is_ip_blacklisted, is_ip_whitelisted
 
 router = APIRouter()
-
-
-def verify_firebase_token(request: Request):
-    """Verify Firebase authentication token."""
-    from fastapi import HTTPException
-
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
-
-    id_token = auth_header.split(" ")[1]
-    try:
-        from firebase_admin import auth
-
-        decoded_token = auth.verify_id_token(id_token)
-        return decoded_token
-    except Exception:
-        raise HTTPException(status_code=403, detail="Invalid token")
 
 
 @router.get("/rate-limit-status")
@@ -105,11 +88,11 @@ async def get_rate_limit_status(
 @router.get("/rate-limit-stats")
 async def get_rate_limit_stats(
     request: Request,
-    user=Depends(verify_firebase_token),
+    _admin: bool = Depends(verify_admin_key),
     location_monitor=Depends(get_location_monitor),
     request_monitor=Depends(get_request_monitor),
 ):
-    """Get overall rate limiting statistics (admin endpoint - requires authentication)."""
+    """Get overall rate limiting statistics (admin endpoint)."""
     if not RATE_LIMIT_ENABLED:
         return {"status": "disabled", "message": "Rate limiting is not enabled"}
 
@@ -136,8 +119,11 @@ async def get_rate_limit_stats(
 
 
 @router.get("/usage-stats")
-async def get_usage_stats(request: Request, user=Depends(verify_firebase_token)):
-    """Get usage tracking statistics."""
+async def get_usage_stats(
+    request: Request,
+    _admin: bool = Depends(verify_admin_key),
+):
+    """Get usage tracking statistics (admin endpoint)."""
     if not USAGE_TRACKING_ENABLED or not get_usage_tracker():
         return {"status": "disabled", "message": "Usage tracking is not enabled"}
 
@@ -151,8 +137,11 @@ async def get_usage_stats(request: Request, user=Depends(verify_firebase_token))
 
 
 @router.get("/usage-stats/{location}")
-async def get_location_usage_stats(location: str):
-    """Get usage statistics for a specific location."""
+async def get_location_usage_stats(
+    location: str,
+    _admin: bool = Depends(verify_admin_key),
+):
+    """Get usage statistics for a specific location (admin endpoint)."""
     if not USAGE_TRACKING_ENABLED or not get_usage_tracker():
         return {"status": "disabled", "message": "Usage tracking is not enabled"}
 

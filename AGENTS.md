@@ -24,7 +24,7 @@ Or use `./start.sh` to start both the API server and worker together via uv.
 
 ### Required environment variables
 
-Secrets are injected automatically. Key ones: `REDIS_URL`, `API_ACCESS_TOKEN`, `TEMPHIST_PG_DSN`, `MAPBOX_TOKEN`. See `README.md` for the full list.
+Secrets are injected automatically. Key ones: `REDIS_URL`, `API_ACCESS_TOKEN`, `ADMIN_API_KEY`, `TEMPHIST_PG_DSN`, `MAPBOX_TOKEN`. See `README.md` for the full list.
 
 `WEATHER_PROVIDER` defaults to `open_meteo`. Set it to `visual_crossing` to use Visual Crossing instead, which also requires `VISUAL_CROSSING_API_KEY`.
 
@@ -58,7 +58,7 @@ Rules enabled: `E/W` (style), `F` (unused imports/vars), `I` (import order), `AS
 
 - Use `uv` for dependency management (`uv pip install -r requirements.txt`). `uv.lock` is gitignored.
 - The `.env` file is loaded from the project root via `config.DOTENV_PATH` (directory containing `config.py` / `main.py`), not from the process working directory.
-- Firebase auth is optional; `API_ACCESS_TOKEN` in the `Authorization: Bearer` header is sufficient for all endpoints during development.
+- Firebase auth is optional; `API_ACCESS_TOKEN` in the `Authorization: Bearer` header is sufficient for data endpoints during development. Operational endpoints (`/usage-stats`, `/cache-stats`, `/cache/clear`, etc.) require `X-Admin-Key: $ADMIN_API_KEY` instead.
 - Firebase App Check (`APP_CHECK_ENFORCEMENT`) defaults to `off`. When the frontend has `VITE_RECAPTCHA_SITE_KEY` set it sends an `X-Firebase-AppCheck` header; the API's CORS config allows this header so browser preflights don't fail.
 - The Swagger UI at `/docs` requires external CDN access (cdn.jsdelivr.net) for its JS/CSS assets.
 - `CACHE_WARMING_ENABLED` should be `false` for local dev to avoid spurious background requests.

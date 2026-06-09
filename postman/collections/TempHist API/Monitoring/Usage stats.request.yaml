@@ -2,4 +2,6 @@ $kind: http-request
 name: Usage stats
 url: "{{baseURL}}/usage-stats"
 method: GET
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 order: 1174904761225554
