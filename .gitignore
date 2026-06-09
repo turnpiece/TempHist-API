@@ -35,6 +35,7 @@ graphify-out/.chunk_files_*.txt
 graphify-out/obsidian/
 graphify-out/converted/
 graphify-out/cache/
+graphify-out/cost.json
 
 # Postman — only track the TempHist API collection; workspace config is personal
 .postman/

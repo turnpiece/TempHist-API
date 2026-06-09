@@ -1,359 +1,547 @@
 {
   "/Users/paul/Sites/temphist-workspace/api/prewarm.py": {
-    "mtime": 1778607283.695601,
-    "hash": "051471cd9ad4538eaacadc86da3f8664"
+    "mtime": 1780595582.6127694,
+    "hash": "a0da4395f7797025642ec4a96fca3b2c"
   },
   "/Users/paul/Sites/temphist-workspace/api/rate_limiting.py": {
-    "mtime": 1770395957.7328765,
-    "hash": "efabeedb0e9ba6770e046f0828355b7f"
+    "mtime": 1780595582.6131098,
+    "hash": "eb271044fea3f618e76684af20032398"
   },
   "/Users/paul/Sites/temphist-workspace/api/config.py": {
-    "mtime": 1778607283.6921074,
-    "hash": "ede0e979dc3de8dee1eaf83e6e05d7fa"
+    "mtime": 1780595582.6091635,
+    "hash": "3d9365130bbde61123631742a320b8ce"
   },
   "/Users/paul/Sites/temphist-workspace/api/version.py": {
-    "mtime": 1778607283.700646,
-    "hash": "a859a23d16e0189ea87e1736328e91e8"
+    "mtime": 1780850974.9060907,
+    "hash": "972921133070a3b293fb616d26e2f069"
   },
   "/Users/paul/Sites/temphist-workspace/api/check_worker_status.py": {
-    "mtime": 1778607283.6896384,
-    "hash": "af5a1bf1ffcef00316ec461e471608e6"
+    "mtime": 1780595582.608919,
+    "hash": "210d63e5d077a67a35421a7b71bd3568"
   },
   "/Users/paul/Sites/temphist-workspace/api/models.py": {
-    "mtime": 1778607283.694944,
-    "hash": "04ac92b3154a28e7964523a3d3438e83"
+    "mtime": 1780595582.6122122,
+    "hash": "ddb4e9ee809168821f7ef505fa148f75"
   },
   "/Users/paul/Sites/temphist-workspace/api/analytics_storage.py": {
-    "mtime": 1770395957.7234163,
-    "hash": "eb8a004754887d1cb7760f027d4e954a"
+    "mtime": 1780595582.606732,
+    "hash": "ee4a0ae16c94c0e107c7d7b1cba7ded4"
   },
   "/Users/paul/Sites/temphist-workspace/api/constants.py": {
-    "mtime": 1770395957.724126,
-    "hash": "f66f63442a31b2e19d072484374ae6b2"
+    "mtime": 1780595582.60946,
+    "hash": "bbd16a50cbe94bc9603dbb097e55fe55"
   },
   "/Users/paul/Sites/temphist-workspace/api/worker_service.py": {
-    "mtime": 1778694072.5921698,
-    "hash": "6d82af6b283d2f1a3b974e6aec5b91c4"
+    "mtime": 1780595582.6206563,
+    "hash": "cf3c6f94fce2f8251ab0a21f585ff57d"
   },
   "/Users/paul/Sites/temphist-workspace/api/bump_version.py": {
-    "mtime": 1770395957.7237244,
-    "hash": "8b8fb80d5e13b625390ed753608bec4f"
+    "mtime": 1780595582.6077476,
+    "hash": "75e5204dac4a1b0696ad13a9e446e5a8"
   },
   "/Users/paul/Sites/temphist-workspace/api/performance_test.py": {
-    "mtime": 1778607283.6953056,
-    "hash": "f3568ea74a2c1709253ad7e5a3950881"
+    "mtime": 1780595582.612344,
+    "hash": "a415f56f041ff473480ad400630ee210"
   },
   "/Users/paul/Sites/temphist-workspace/api/diagnose_jobs.py": {
-    "mtime": 1778607283.692742,
-    "hash": "05c606a2a8931d0e648437855f1c9062"
+    "mtime": 1780595582.609802,
+    "hash": "98da9725b4836319266634fc62d1d6ec"
   },
   "/Users/paul/Sites/temphist-workspace/api/load_test_script.py": {
-    "mtime": 1770395957.7294827,
-    "hash": "8d5df8f8f25ae366b2064efff7c95a3b"
+    "mtime": 1780595582.6108665,
+    "hash": "9217d8f49f9f2d5b47505cf34a40c94e"
   },
   "/Users/paul/Sites/temphist-workspace/api/verify_indexes.py": {
     "mtime": 1778607283.7004218,
     "hash": "e19b7d6ac11225438679a84f24f0b591"
   },
   "/Users/paul/Sites/temphist-workspace/api/exceptions.py": {
-    "mtime": 1778607283.6931722,
-    "hash": "db79070fb26c05eb94b1b6b27052db66"
+    "mtime": 1780595582.6100528,
+    "hash": "e78ec402c4488e2f76e27c3e81958218"
   },
   "/Users/paul/Sites/temphist-workspace/api/job_worker.py": {
-    "mtime": 1778694058.7056458,
-    "hash": "7fd20915480abe44333051d44e701ffd"
+    "mtime": 1780595582.6103358,
+    "hash": "79b3ecbd4df6284ec729f90ca0501ca4"
   },
   "/Users/paul/Sites/temphist-workspace/api/main.py": {
-    "mtime": 1778693974.1919744,
-    "hash": "1ffb3298315d943ed700310fb6a9b6c9"
+    "mtime": 1780595582.6112545,
+    "hash": "358ebdd0da40f5de16bbc008c7977e7b"
   },
   "/Users/paul/Sites/temphist-workspace/api/admin_clear_queue.py": {
-    "mtime": 1775137117.3137887,
-    "hash": "9450f1b1a40613d97034993a6de4926f"
+    "mtime": 1780595582.6065621,
+    "hash": "9843ee32333886c9ad49d0ddf8ad7c0e"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/legacy.py": {
-    "mtime": 1770395957.7337642,
-    "hash": "a5b6d48e2f6bc6d8a0ecfda23fbaeebf"
+    "mtime": 1780595582.6140625,
+    "hash": "f1d59fa6fe8946bba02e4f6dbc1b8a9c"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/v1_records.py": {
-    "mtime": 1778694031.9306936,
-    "hash": "22ebbe0ca264406885efff4c1830cb39"
+    "mtime": 1780599603.9846077,
+    "hash": "f78df493246519a7e95921bde720bbe5"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/health.py": {
-    "mtime": 1778694084.70122,
-    "hash": "d0d69490e1f5a4bf8ec42673559fde37"
+    "mtime": 1780595582.6137643,
+    "hash": "38282726cde74c24d6076b0b23749297"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/og_image.py": {
-    "mtime": 1778693999.50023,
-    "hash": "6ac2645dc86f5468b02c9787ac297aec"
+    "mtime": 1780595582.6144292,
+    "hash": "c6f09dee4c8976e0bf3103fbf1344975"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/weather.py": {
-    "mtime": 1778694012.6010754,
-    "hash": "29ccc7bfbc371ead2cbc762c4a735f68"
+    "mtime": 1780597732.8061345,
+    "hash": "b1c76d18b5074fc5303520dd5b2df88c"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/cache.py": {
-    "mtime": 1778694017.398798,
-    "hash": "42dbbcd41333601093c80adbab4f7b09"
+    "mtime": 1780595582.6134822,
+    "hash": "ad5f158d7c9c8037e5bff829a5af1f7f"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/__init__.py": {
     "mtime": 1770395957.733113,
     "hash": "b8e53938ff25815ca20ffdf44b7c5cc2"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/jobs.py": {
-    "mtime": 1778694128.7610927,
-    "hash": "b4662b032581bba625a95784e3aaae6c"
+    "mtime": 1780595582.6139295,
+    "hash": "6d43175970427739c06b8e0d14b30281"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/stats.py": {
-    "mtime": 1778693997.8213265,
-    "hash": "749bb921f77a937562644b82255b9141"
+    "mtime": 1780595582.6148808,
+    "hash": "d810b470dfac91056bcacf426b57c702"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/analytics.py": {
-    "mtime": 1770395957.7333312,
-    "hash": "44d398289dbe4eebf39dfbfff0ad328e"
+    "mtime": 1780595582.6133246,
+    "hash": "7d8216214cf74ff4b45321822c35a8e5"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/root.py": {
-    "mtime": 1778694011.4720016,
-    "hash": "26810891b4ef7e889d20211bca0deb13"
+    "mtime": 1780595582.6145747,
+    "hash": "57b0fba3123f3dda07b4e30488d6bb0f"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/shares.py": {
-    "mtime": 1774891924.18173,
-    "hash": "3214eb1cefa41966f59590e384efa1ad"
+    "mtime": 1780595582.614723,
+    "hash": "d2f5185f58dfd62e6937ac0b744337f3"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/locations.py": {
-    "mtime": 1778607283.6959958,
-    "hash": "7f19a1cbe3d4102d133fadbd6feee7d6"
+    "mtime": 1780850964.8440256,
+    "hash": "a95b750cec8ac9fb73b1b776804928f2"
   },
   "/Users/paul/Sites/temphist-workspace/api/routers/dependencies.py": {
-    "mtime": 1770395957.7335353,
-    "hash": "aecc1721f87c01a29e496a31cab4f795"
+    "mtime": 1780595582.6136196,
+    "hash": "e890d919827ac0a90a1cbdd1cbb865f7"
   },
   "/Users/paul/Sites/temphist-workspace/api/middleware/logging.py": {
-    "mtime": 1770395957.7300053,
-    "hash": "d24764207b99375a6dbb5b6d8668cf14"
+    "mtime": 1780595582.6116862,
+    "hash": "f37adfa25da9933f11dddf992a1d5f33"
   },
   "/Users/paul/Sites/temphist-workspace/api/middleware/cors.py": {
-    "mtime": 1770395957.7299428,
-    "hash": "ee60dacfe93004ce4a3559812754cea2"
+    "mtime": 1780595582.6115193,
+    "hash": "03d6ec80fb56711a500746d000e25209"
   },
   "/Users/paul/Sites/temphist-workspace/api/middleware/security.py": {
-    "mtime": 1770395957.7302587,
-    "hash": "36307c272a652be556df5d244c078f8d"
+    "mtime": 1780595582.6120734,
+    "hash": "328437e3e81acd71cc55f5533f81be30"
   },
   "/Users/paul/Sites/temphist-workspace/api/middleware/request_size.py": {
-    "mtime": 1770395957.7301314,
-    "hash": "a42bb5a5cca72c2060fae4131cff5721"
+    "mtime": 1780595582.6119576,
+    "hash": "b839e902332b3d49a46201552774dbd0"
   },
   "/Users/paul/Sites/temphist-workspace/api/middleware/__init__.py": {
-    "mtime": 1770395957.7297077,
-    "hash": "b4a4260610aaee1c43938e0de3cbd3c9"
+    "mtime": 1780595582.6113966,
+    "hash": "414a6c26f138e358a94e2799eeee64fb"
   },
   "/Users/paul/Sites/temphist-workspace/api/middleware/request_id.py": {
-    "mtime": 1770395957.7300644,
-    "hash": "887b75f2e72aa4b9418c2881ed11b6ac"
+    "mtime": 1780595582.6118245,
+    "hash": "0ae12c7820b8ee176e61a60af3916eca"
   },
   "/Users/paul/Sites/temphist-workspace/api/app/cache_utils.py": {
-    "mtime": 1774891924.1787703,
-    "hash": "c631ae6256db00e2a4c9a5835f03023b"
+    "mtime": 1780595582.6069129,
+    "hash": "d736edc713560125fd9a4bcad30e37f2"
   },
   "/Users/paul/Sites/temphist-workspace/api/cache/warming.py": {
-    "mtime": 1778693443.0899322,
-    "hash": "a9376bc48d4ef4b4c45452fdeeee0ec2"
+    "mtime": 1780595582.608793,
+    "hash": "73d2ae72ea95204ce3b2d52e6fe70b89"
   },
   "/Users/paul/Sites/temphist-workspace/api/cache/accessors.py": {
-    "mtime": 1778693475.1921456,
-    "hash": "15e437762cb8c2fe54c936edc4bb6f6d"
+    "mtime": 1780595582.6082292,
+    "hash": "c2dcb8267d1ef3bb844499dcf566bd54"
   },
   "/Users/paul/Sites/temphist-workspace/api/cache/__init__.py": {
-    "mtime": 1778693233.7591364,
-    "hash": "d446019bea8c97e0d126c71498dc7b46"
+    "mtime": 1780595582.6080437,
+    "hash": "407ffe822ef81f5a0e63856908be4809"
   },
   "/Users/paul/Sites/temphist-workspace/api/cache/core.py": {
-    "mtime": 1778693309.3161848,
-    "hash": "dd2c149158802d16fc9459765b44968b"
+    "mtime": 1780595582.6084661,
+    "hash": "e0cdd0e48e103d6e072713313c578b89"
   },
   "/Users/paul/Sites/temphist-workspace/api/cache/keys.py": {
-    "mtime": 1778693360.3049922,
-    "hash": "ceaafc7f9472b166ef364fada93eafb9"
+    "mtime": 1780595582.608604,
+    "hash": "6e7496d96ff1cf656cd3d43e54e6d0b5"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/test_deduplication.py": {
-    "mtime": 1778694074.074001,
-    "hash": "3326de9fa7897b03cd46a2c9eeae034e"
+    "mtime": 1780595582.6169639,
+    "hash": "74684151f7a7bbada0b2bc34817f87c0"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/test_async_jobs_integration.py": {
-    "mtime": 1770395957.7351582,
-    "hash": "bd3fc8db3cadf2de971ffeef7ea11835"
+    "mtime": 1780595582.6166072,
+    "hash": "fe7788c4434045b19a323745f6e16581"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/test_dedup_realistic.py": {
-    "mtime": 1778694073.3179798,
-    "hash": "dc31ffb9922af7de65dfff7eb7df311f"
+    "mtime": 1780595582.6168437,
+    "hash": "985dc73471931a8a2c469537eaa21cda"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/__init__.py": {
     "mtime": 1770395957.734597,
     "hash": "8d771d95e254e5e632c1dcfdef3bd38a"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/test_batch_fetch_performance.py": {
-    "mtime": 1770395957.7352293,
-    "hash": "b88a2c14584f524de57348e9a2ff02ca"
+    "mtime": 1780595582.6167321,
+    "hash": "115ea311ccac8e865346c5fd3aeb87ac"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/test_temporal_cache.py": {
-    "mtime": 1774891924.1836767,
-    "hash": "b1bbc2c85a69fb8054369720c3ff9c5d"
+    "mtime": 1780595582.6174462,
+    "hash": "c4769b477a9fc8634d0305e042ff737b"
   },
-  "/Users/paul/Sites/temphist-workspace/api/tests/test_vc_api.py": {
-    "mtime": 1778607283.6988225,
-    "hash": "0539f8ced4ac5194d1f3d9f9d6401122"
+  "/Users/paul/Sites/temphist-workspace/api/tests/test_app_check.py": {
+    "mtime": 1780595582.6164734,
+    "hash": "ae79d0b01a74820ca48143858bc9535b"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/test_main.py": {
-    "mtime": 1778607283.698114,
-    "hash": "0c427e9a48e38b915ca2c54dec435940"
+    "mtime": 1780595582.6172533,
+    "hash": "a740b33f4bc9104a7a7cab6d0d23efef"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/test_job_dedup.py": {
-    "mtime": 1778694074.8698914,
-    "hash": "1bb33a992b1d62d590e6203b8b0af3e6"
+    "mtime": 1780595582.617081,
+    "hash": "de01c0a32023f3369195c184a6573ac7"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_locations.py": {
-    "mtime": 1778607283.6972852,
-    "hash": "ff1c25f88f941b5aef2c783efb837798"
+    "mtime": 1780850964.854074,
+    "hash": "1eb2c38c28a86531cb6ff5b06ef1d131"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_records_agg.py": {
-    "mtime": 1774891924.1832333,
-    "hash": "5bc6ca16094b8eb7d1d2d778aa692ed9"
+    "mtime": 1780595582.616186,
+    "hash": "f1536afae1d9c6b0a16786c2d4766073"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/routers/__init__.py": {
     "mtime": 1770395957.7347004,
     "hash": "a5be91506882f4b863ca8cca2d872a3a"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_shares.py": {
-    "mtime": 1778607283.6976168,
-    "hash": "0010734417cade30d78f25b01205361a"
+    "mtime": 1780595582.6163464,
+    "hash": "73f8b017975c272ce52e9acf9855dca9"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/routers/test_analytics.py": {
-    "mtime": 1774891924.183077,
-    "hash": "2f8a7c81b48f9e0a434f15d67a1ba6d7"
+    "mtime": 1780595582.6158664,
+    "hash": "65cdab7cebd2f3481c5b53f47da28045"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/utils/test_temperature_calculations.py": {
-    "mtime": 1778607283.6990583,
-    "hash": "f3700eee29d990c3fb93e87705f1050d"
+    "mtime": 1780595582.6181598,
+    "hash": "ee1455a8c898a61c40556c4189bf09b4"
   },
   "/Users/paul/Sites/temphist-workspace/api/tests/utils/test_daily_temperature_cache.py": {
-    "mtime": 1770395957.7356813,
-    "hash": "6dd9034dd64957f96ff88b5a29d90d40"
+    "mtime": 1780595582.6178393,
+    "hash": "86ce1b3629b0243f90c0e710b42aa390"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/utils/test_location_canonicalization.py": {
+    "mtime": 1780595582.617999,
+    "hash": "d376cc09f7cccb293bcf050676adafa1"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/tracking/__init__.py": {
+    "mtime": 1779208933.8022635,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/tests/tracking/test_usage.py": {
+    "mtime": 1780835982.0560665,
+    "hash": "270f00f524287b1778cd3a783c94cef3"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/cache_headers.py": {
-    "mtime": 1770395957.735866,
-    "hash": "5563aade8ab82e4ed106e88151fa2641"
+    "mtime": 1780595582.6185832,
+    "hash": "52f1e6bc73c655d2f78d12a8624aa63a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/weather_types.py": {
+    "mtime": 1780595582.6205094,
+    "hash": "e675f138a3af4247291f8e8e086995c9"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/share_store.py": {
-    "mtime": 1774891924.183878,
-    "hash": "1468ead8ac4f26a1ea7b1dda3bcdd712"
+    "mtime": 1780595582.6196167,
+    "hash": "f4c7702b021258d7a1d708edaac95f5b"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/weather.py": {
-    "mtime": 1770395957.7366328,
-    "hash": "b14e15daaa2cf32f6435b1a6f7c6afd1"
+    "mtime": 1780595582.6201422,
+    "hash": "f72aff9337a08c23cad3ff61236aa443"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/__init__.py": {
-    "mtime": 1770395957.7357867,
-    "hash": "416c0442380216249106a2d0958252ab"
+    "mtime": 1780595582.618448,
+    "hash": "84ef2ba676b2b3bca3f34eb0ff19c0f3"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/temperature.py": {
-    "mtime": 1778607283.6998637,
-    "hash": "c6ea99cd89591ef8a2cd6e93c6317b84"
+    "mtime": 1780595582.6197877,
+    "hash": "61e1c5f9059cbb59b6e2d0732a8d403e"
   },
-  "/Users/paul/Sites/temphist-workspace/api/utils/visual_crossing_timeline.py": {
-    "mtime": 1778607283.7001753,
-    "hash": "b666816dbbd93c0c957f78eff30c927b"
+  "/Users/paul/Sites/temphist-workspace/api/utils/weather_provider.py": {
+    "mtime": 1780595582.6204133,
+    "hash": "0eba7222cd35297bf974300f0ed90f57"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/ip_utils.py": {
-    "mtime": 1770395957.736159,
-    "hash": "485baf2bc466de1ec7318271e5dcd9bb"
+    "mtime": 1780595582.6190135,
+    "hash": "d132d2a0027a16e0d0d23b05796affb6"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/redis_client.py": {
-    "mtime": 1770395957.73629,
-    "hash": "9b7be267c3c50f281f421efc7c0430f8"
+    "mtime": 1780595582.6193304,
+    "hash": "d01799f63acb34c5d248aa30ffcc1844"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/visual_crossing_client.py": {
+    "mtime": 1780595582.620021,
+    "hash": "b71ca4782851261d2f64e93dead3d2e2"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/location_validation.py": {
-    "mtime": 1770395957.7362204,
-    "hash": "92228dffce471a8de0b7c1766eb2c4e6"
+    "mtime": 1780595582.6191304,
+    "hash": "adda94fec91ec29ca6be63b1a00a9afc"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/utils/open_meteo_client.py": {
+    "mtime": 1780597231.7859812,
+    "hash": "f42482022bab1066010258ebbc49749b"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/firebase.py": {
-    "mtime": 1770395957.736085,
-    "hash": "4049cbe9c154d0dcedace0e8f192e748"
+    "mtime": 1780595582.618903,
+    "hash": "f286668f871672dc6598068445f03b0e"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/weather_data.py": {
-    "mtime": 1778694017.5759213,
-    "hash": "810fb7017362e832902e99c949565dbf"
+    "mtime": 1780595582.620318,
+    "hash": "f36fba333142bc5d0cdd9186bd72e0c9"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/sanitization.py": {
-    "mtime": 1770395957.7363591,
-    "hash": "02b5a68c17a352894363201132e15d4d"
+    "mtime": 1780595582.6194415,
+    "hash": "b70819df366e33b47a71c8109967654c"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/daily_temperature_store.py": {
-    "mtime": 1778694000.0682626,
-    "hash": "f39420bfc8689f5cfdb50c5d383a1e53"
+    "mtime": 1780597231.785725,
+    "hash": "6237db740d7a35cd1d2f666bdd42f29b"
   },
   "/Users/paul/Sites/temphist-workspace/api/utils/validation.py": {
-    "mtime": 1770395957.7364907,
-    "hash": "e5534e15a6699d5d5389bda07483e80c"
+    "mtime": 1780595582.6199183,
+    "hash": "ee6d497e3025e65464e217f85fba9106"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/benchmarks/compare_apis.py": {
+    "mtime": 1780595582.607104,
+    "hash": "d6993e3de466d2b4b21e7dd4313dd946"
   },
   "/Users/paul/Sites/temphist-workspace/api/tracking/__init__.py": {
-    "mtime": 1778693154.2938917,
+    "mtime": 1779019965.0637186,
     "hash": "11d100d335356aef540bfc575efc741d"
   },
   "/Users/paul/Sites/temphist-workspace/api/tracking/usage.py": {
-    "mtime": 1778693166.7654872,
-    "hash": "e58b74fd59f9df77d05f729dca079738"
+    "mtime": 1780835982.056884,
+    "hash": "ba3ed0cbf07736e61d5e3ba2f6526914"
   },
   "/Users/paul/Sites/temphist-workspace/api/jobs/__init__.py": {
-    "mtime": 1778693172.8731847,
-    "hash": "ce735b6e15714a3daecb6d1d4082eb31"
+    "mtime": 1780595582.6105342,
+    "hash": "a45b6aa22f73348900033f9aa32830ab"
   },
   "/Users/paul/Sites/temphist-workspace/api/jobs/manager.py": {
-    "mtime": 1778693191.7164974,
-    "hash": "4335b78d3498caba888a9aacb60ce68d"
+    "mtime": 1780595582.6106768,
+    "hash": "0c643ab2da304aa1a4093dcb52b68642"
   },
   "/Users/paul/Sites/temphist-workspace/api/render.yaml": {
     "mtime": 1770395957.7329445,
     "hash": "aa55fbf61d4f269a3a6ba3aad05eed53"
   },
   "/Users/paul/Sites/temphist-workspace/api/requirements.txt": {
-    "mtime": 1775245054.9754264,
-    "hash": "1db958373ccbbe86b67ddb7681575e5a"
+    "mtime": 1779208933.801081,
+    "hash": "82ca52cb7f14026b957dd212b9cf1025"
   },
   "/Users/paul/Sites/temphist-workspace/api/CHANGELOG.md": {
-    "mtime": 1778607283.6864545,
-    "hash": "61a8390d8fea5702a2d53ed2dff556e7"
+    "mtime": 1779208933.799364,
+    "hash": "142c6fc065416017c3fd91177382c218"
   },
   "/Users/paul/Sites/temphist-workspace/api/TROUBLESHOOTING.md": {
-    "mtime": 1774891924.1783698,
-    "hash": "255581bde45c6c20b549564a5466a875"
+    "mtime": 1780595582.6063924,
+    "hash": "c59ff9f46dbc6f5eb9ffc7259b0216e3"
   },
   "/Users/paul/Sites/temphist-workspace/api/README.md": {
-    "mtime": 1778607283.688369,
-    "hash": "9b7739c4eb7bf045b49fa0d5645d51b3"
+    "mtime": 1780595582.6062346,
+    "hash": "038aa7b1f5a46126f60cc74477f998ab"
   },
   "/Users/paul/Sites/temphist-workspace/api/DEPLOYMENT.md": {
-    "mtime": 1778607283.6875346,
-    "hash": "d6a404f27ea59dfe7d57e5e2383f7bb8"
+    "mtime": 1780595582.6059165,
+    "hash": "b40cb02c9ce4b6361dbf82f3e0bacb3e"
   },
   "/Users/paul/Sites/temphist-workspace/api/MIGRATION_GUIDE.md": {
     "mtime": 1770395957.7227569,
     "hash": "478fd35556ba89656214fe516a58f13a"
   },
   "/Users/paul/Sites/temphist-workspace/api/AGENTS.md": {
-    "mtime": 1778607283.6861455,
-    "hash": "24c43fc50b9d2b6f6d74300c96d44d43"
+    "mtime": 1780595582.6057308,
+    "hash": "477d44da68b3c4f620187afbef79cc6d"
   },
   "/Users/paul/Sites/temphist-workspace/api/CLOUDFLARE_OPTIMIZATION.md": {
     "mtime": 1778607283.6868973,
     "hash": "87625bd9529b347aa297193158f94f7b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/environments/Production.environment.yaml": {
+    "mtime": 1780171187.9437716,
+    "hash": "81593bdc9ed07a13f8b3c0d18b9a9c9e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/environments/Local.environment.yaml": {
+    "mtime": 1780171187.9436688,
+    "hash": "7195d18c76a2be38a70019e665c768ef"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/environments/Development.environment.yaml": {
+    "mtime": 1780171187.9435594,
+    "hash": "f3190d90b624469bcd1445df0df98495"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/environments/Staging.environment.yaml": {
+    "mtime": 1780171187.943873,
+    "hash": "6baf6e2fa01906bafa7663a11f61a6be"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/Open Meteo/Temperatures 1975 to 1976.request.yaml": {
+    "mtime": 1780408302.850441,
+    "hash": "20f484e3a12ff6b5a339f0d871152edb"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/Open Meteo/Past 5 days and forecast.request.yaml": {
+    "mtime": 1780408930.8880877,
+    "hash": "c275321fcc57110371965fd135c14e89"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Monthly.request.yaml": {
+    "mtime": 1780171187.9413974,
+    "hash": "5cdd35d5dbb77ed0bc0e9ab7ba47d651"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Weekly.request.yaml": {
+    "mtime": 1780171187.9415412,
+    "hash": "903705b2352c4d7784c5cd43645c438d"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Monthly summary.request.yaml": {
+    "mtime": 1780171187.9407897,
+    "hash": "d7ba5e8951b3fdb1267b0f0abed098be"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Yearly.request.yaml": {
+    "mtime": 1780171187.9418714,
+    "hash": "d2137eb6fd879840fcf5a4e89ec71c47"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Daily \u2014 Fahrenheit.request.yaml": {
+    "mtime": 1780595582.6124873,
+    "hash": "995f3f635ae746a287a79802d6d2951a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Yearly summary.request.yaml": {
+    "mtime": 1780171187.9417522,
+    "hash": "f5f68acd40cbd497c70ee19d33640c1b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Daily.request.yaml": {
+    "mtime": 1780595582.612605,
+    "hash": "bf2ef360b468f23733510ed746239b30"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Worker diagnostics.request.yaml": {
+    "mtime": 1780171187.9416487,
+    "hash": "3b980beee075271a63eee5a3ba9a5f33"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Daily summary.request.yaml": {
+    "mtime": 1780171187.9330056,
+    "hash": "3b22317912d5c0a756d6b5bc4a785e88"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Daily \u2014 async.request.yaml": {
+    "mtime": 1780239336.5782733,
+    "hash": "f2b62297fea2f6b1a2b01a4e3b0fe60a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Records/Job status.request.yaml": {
+    "mtime": 1780171187.9367335,
+    "hash": "7ebcca779a72f1c196100b3f285ede1f"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Sharing/List shares.request.yaml": {
+    "mtime": 1780171187.94258,
+    "hash": "1147ad83850c9092cd3198670acbf2b2"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Sharing/Share OG image.request.yaml": {
+    "mtime": 1780171187.9427025,
+    "hash": "69d5c50a727752822b444467b9ec4271"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Sharing/Get share.request.yaml": {
+    "mtime": 1780171187.9424744,
+    "hash": "c66113c0f2d9e50932ee00731603046d"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Sharing/Create share.request.yaml": {
+    "mtime": 1780171187.9423623,
+    "hash": "9b2ab67f237c56a0855ebc404a9c09ec"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Admin/Clear job queue.request.yaml": {
+    "mtime": 1780171187.9263167,
+    "hash": "420ef28bd8046c8f6b3b302e2ef907f7"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Admin/Clear cache.request.yaml": {
+    "mtime": 1780171187.9262056,
+    "hash": "692e6d89b53d97bd33c72ba00e38ff8b"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Admin/Debug jobs.request.yaml": {
+    "mtime": 1780171187.9264233,
+    "hash": "dbc866b703555649e1753e369460479e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Locations/Record selection.request.yaml": {
+    "mtime": 1780835982.0539355,
+    "hash": "996c83378508e54cbf7f58830d13679e"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Locations/Popular locations.request.yaml": {
+    "mtime": 1780171187.9275591,
+    "hash": "269c2cababd5922f2ab920bc84c67451"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Locations/Preapproved locations.request.yaml": {
+    "mtime": 1780171187.927667,
+    "hash": "81655ccce2bc0028d601841c31f91dac"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Locations/Search locations.request.yaml": {
+    "mtime": 1780171187.927876,
+    "hash": "517e64280317f50268dee148004e3a8a"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Weather/Weather on date.request.yaml": {
+    "mtime": 1780171187.9432635,
+    "hash": "2254abdfda7e2a27e917fc16627f13a1"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Weather/Forecast.request.yaml": {
+    "mtime": 1780171187.9431574,
+    "hash": "3389d63b07f96ceeaed9768eee819d94"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Monitoring/Home.request.yaml": {
+    "mtime": 1780171187.9288857,
+    "hash": "42a401c96bc6b8768b942f6c6473c35d"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Monitoring/Cache stats.request.yaml": {
+    "mtime": 1780171187.9281693,
+    "hash": "46530db6a56d7841291aefa83d093baf"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Monitoring/Health.request.yaml": {
+    "mtime": 1780171187.9287744,
+    "hash": "dd6d788f3ea013bb64b1a5cea12f95c9"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Monitoring/Rate limit status.request.yaml": {
+    "mtime": 1780171187.9289963,
+    "hash": "919d568768648b330ed0a881f81f30f8"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Monitoring/Cache warm status.request.yaml": {
+    "mtime": 1780171187.9285553,
+    "hash": "a1d29afd117c62d97ad32d6dffb5fbb9"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Monitoring/Health detailed.request.yaml": {
+    "mtime": 1780171187.9286606,
+    "hash": "fdeb4217edc05ed5780eab5ccd7a7800"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Analytics/Analytics by session.request.yaml": {
+    "mtime": 1780171187.9267917,
+    "hash": "d5c12f501d4c69fb58da3ebe8bb70118"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Analytics/Analytics summary.request.yaml": {
+    "mtime": 1780171187.9270754,
+    "hash": "4ca677959be34174b49c2c2e2386d902"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Analytics/Analytics recent.request.yaml": {
+    "mtime": 1780171187.926976,
+    "hash": "8a4e1b840a7de0fbf0ce677ea0eaeffa"
+  },
+  "/Users/paul/Sites/temphist-workspace/api/postman/collections/TempHist API/Analytics/Submit analytics.request.yaml": {
+    "mtime": 1780171187.927177,
+    "hash": "ac60de4bb0370243e8d12e7b1cbf39f5"
   },
   "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/manchester.webp": {
     "mtime": 1774463014.645363,
     "hash": "502b6e2a69221ed263360925e4b0a810"
   },
   "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/new-york.webp": {
-    "mtime": 1774463014.6459053,
-    "hash": "03715e3be9368442a62246377f792114"
+    "mtime": 1781016087.211307,
+    "hash": "9641d13989e16f6217dfe7a6163e55b4"
   },
   "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/auckland.webp": {
     "mtime": 1774463014.6417737,
@@ -468,8 +656,8 @@
     "hash": "622bdc3155a9e8177cfee9454bda4149"
   },
   "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/new-york.jpg": {
-    "mtime": 1774463014.6458445,
-    "hash": "de12595971634f5081c8ee09ea46ca69"
+    "mtime": 1781016071.683902,
+    "hash": "f37d42b3615c5c6f8bf857ffdc9b12e7"
   },
   "/Users/paul/Sites/temphist-workspace/api/data/locations/processed/dublin.jpg": {
     "mtime": 1774463014.643447,
