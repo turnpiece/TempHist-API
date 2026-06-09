@@ -1,0 +1,5 @@
+$kind: http-request
+name: Usage stats
+url: "{{baseURL}}/usage-stats"
+method: GET
+order: 1174904761225554
