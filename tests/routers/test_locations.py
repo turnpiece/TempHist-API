@@ -19,7 +19,7 @@ import redis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from config import CANONICALIZATION_RADIUS_KM
+from config import SAME_LOCATION_RADIUS_KM
 from main import app as main_app
 
 # Import the router and models
@@ -1011,7 +1011,7 @@ class TestSelectionEndpoint:
                 headers={"Authorization": "Bearer test-token"},
             )
         assert response.status_code == 204
-        mock_tracker.find_nearby_canonical_id.assert_called_once_with(28.7041, 77.1025, CANONICALIZATION_RADIUS_KM)
+        mock_tracker.find_nearby_canonical_id.assert_called_once_with(28.7041, 77.1025, SAME_LOCATION_RADIUS_KM)
         mock_tracker.record_selection.assert_called_once_with("new_delhi", "testuser")
         mock_tracker.add_to_geo_index.assert_not_called()
 
@@ -1054,8 +1054,13 @@ class TestSelectionEndpoint:
         mock_tracker.add_to_geo_index.assert_not_called()
         mock_tracker.record_selection.assert_called_once_with("my_custom_id", "testuser")
 
-    def test_record_selection_skips_geo_lookup_for_preapproved_match(self, main_client, mock_tracker):
-        """Name matching a preapproved location is trusted as-is — geo-canonicalization never runs for it."""
+    def test_record_selection_curated_name_match_with_coords_not_reregistered(self, main_client, mock_tracker):
+        """Coordinate-first: geo is consulted even for a curated name match.
+
+        With no nearby anchor found, resolution falls back to the curated
+        name+country match (`london`). Because it is curated (seeded into the
+        geo index at startup), it is NOT re-registered with the user's coords.
+        """
         with patch("routers.locations.locations_data", [LocationItem(**SAMPLE_LOCATIONS[0])]):
             response = main_client.post(
                 "/v1/locations/selections",
@@ -1063,9 +1068,34 @@ class TestSelectionEndpoint:
                 headers={"Authorization": "Bearer test-token"},
             )
         assert response.status_code == 204
-        mock_tracker.find_nearby_canonical_id.assert_not_called()
+        mock_tracker.find_nearby_canonical_id.assert_called_once_with(51.5072, -0.1276, SAME_LOCATION_RADIUS_KM)
         mock_tracker.add_to_geo_index.assert_not_called()
         mock_tracker.record_selection.assert_called_once_with("london", "testuser")
+
+    def test_record_selection_verbose_name_converges_onto_curated_anchor(self, main_client, mock_tracker):
+        """The #63 bug: a non-matching display name with coords converges onto a curated anchor.
+
+        "Greater London, England, United Kingdom" does not exact-match the
+        curated name "London", but its coordinates fall near the curated
+        anchor (seeded at startup), so it converges onto `london` rather than
+        minting a `greater_london_england_united_kingdom` fragment.
+        """
+        mock_tracker.find_nearby_canonical_id.return_value = "london"
+        with patch("routers.locations.locations_data", [LocationItem(**SAMPLE_LOCATIONS[0])]):
+            response = main_client.post(
+                "/v1/locations/selections",
+                json={
+                    "name": "Greater London, England, United Kingdom",
+                    "country_code": "GB",
+                    "latitude": 51.5072,
+                    "longitude": -0.1276,
+                },
+                headers={"Authorization": "Bearer test-token"},
+            )
+        assert response.status_code == 204
+        mock_tracker.find_nearby_canonical_id.assert_called_once_with(51.5072, -0.1276, SAME_LOCATION_RADIUS_KM)
+        mock_tracker.record_selection.assert_called_once_with("london", "testuser")
+        mock_tracker.add_to_geo_index.assert_not_called()
 
     def test_record_selection_does_not_overwrite_existing_metadata_after_convergence(self, main_client, mock_tracker):
         """Converging onto an existing canonical ID must not clobber its stored metadata."""

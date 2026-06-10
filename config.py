@@ -65,9 +65,19 @@ POPULARITY_WINDOW_DAYS = int(os.getenv("POPULARITY_WINDOW_DAYS", "30"))
 # Set high — clients that need fewer should pass ?limit=N explicitly.
 # The hard cap MAX_LIMIT=500 in the router is the real safety net.
 POPULARITY_MAX_LOCATIONS = int(os.getenv("POPULARITY_MAX_LOCATIONS", "500"))
-CANONICALIZATION_RADIUS_KM = int(os.getenv("CANONICALIZATION_RADIUS_KM", "45"))
-# Metro-area cache snapping: nearby places share Redis record keys for faster cache hits.
-# TempHist is a temperature-history app (trends/comparisons), not hyperlocal forecasts.
+# Identity dedup radius: merges different name strings for the *same* physical
+# point (e.g. "Chennai" vs "Chennai, Tamil Nadu, India") into one canonical
+# identity — one DB row, one popularity bucket, one display name. Deliberately
+# small so genuinely distinct nearby places keep their own identity: Lambeth,
+# Croydon, Birmingham and Coventry all rank and display separately. This is NOT
+# the data-sharing radius — see METRO_CACHE_SNAP_KM for that.
+SAME_LOCATION_RADIUS_KM = float(os.getenv("SAME_LOCATION_RADIUS_KM", "2.0"))
+# Metro-area cache snapping: the single data-sharing radius. Distinct places
+# within this radius of each other share one Redis temperature record for faster
+# cache hits and fewer upstream fetches. TempHist is a temperature-history app
+# (climate trends/comparisons), not a hyperlocal forecast — so a place may be
+# *labelled* as itself while being *served* a near neighbour's data. This is the
+# main speed↔locational-accuracy tuning lever.
 METRO_CACHE_SNAP_KM = int(os.getenv("METRO_CACHE_SNAP_KM", "30"))
 METRO_CACHE_GRID_DEGREES = float(
     os.getenv("METRO_CACHE_GRID_DEGREES", str(round(METRO_CACHE_SNAP_KM / 100.0, 2)))

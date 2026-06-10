@@ -26,10 +26,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from cache.accessors import get_usage_tracker
 from config import (
     BASE_URL,
-    CANONICALIZATION_RADIUS_KM,
     MAPBOX_TOKEN,
     POPULARITY_MAX_LOCATIONS,
     POPULARITY_WINDOW_DAYS,
+    SAME_LOCATION_RADIUS_KM,
 )
 
 # Configure logging
@@ -1016,57 +1016,79 @@ async def record_location_selection(request: Request, body: SelectionRequest):
         raise HTTPException(status_code=429, detail=reason)
 
     uid = request.state.user.get("uid", "anonymous")
-    canonical_id = _resolve_canonical_id(body)
+    tracker = get_usage_tracker()
+
+    if tracker is None:
+        # Nothing to record; resolve only so the debug log is meaningful.
+        logger.debug(
+            "selection resolving (no tracker): input=%r → %s uid=%s",
+            body.location_id or body.name,
+            _resolve_canonical_id(body),
+            uid,
+        )
+        return Response(status_code=204)
+
+    loc_by_id = {loc.id: loc for loc in locations_data}
+    has_coords = body.latitude is not None and body.longitude is not None
+
+    # Resolution is coordinate-first — coordinates are more authoritative than a
+    # display-name string, and they work the same regardless of whether a
+    # location happens to be curated:
+    #   1. An explicit location_id is trusted as-is and never re-pointed.
+    #   2. Coordinates converge onto an existing canonical ID at the *same point*
+    #      (within SAME_LOCATION_RADIUS_KM). This merges different name strings
+    #      for one place — "Greater London, …" / "Chennai, Tamil Nadu, India" /
+    #      a raw GPS fix — without collapsing genuinely distinct neighbours
+    #      (Croydon stays Croydon). Sharing a *temperature record* with a nearby
+    #      metro is a separate concern handled at the cache layer (METRO_CACHE_SNAP_KM).
+    #   3. A curated name+country match is a fallback convenience (mainly for
+    #      coordinate-less submissions).
+    #   4. Otherwise a slug is generated from the name.
+    converged_via_geo = False
+    if body.location_id:
+        canonical_id = body.location_id
+    else:
+        canonical_id = None
+        if has_coords:
+            nearby_id = tracker.find_nearby_canonical_id(body.latitude, body.longitude, SAME_LOCATION_RADIUS_KM)
+            if nearby_id:
+                canonical_id = nearby_id
+                converged_via_geo = True
+        if canonical_id is None:
+            canonical_id = _resolve_canonical_id(body)
+
     logger.debug(
-        "selection resolving: input=%r → canonical_id=%s uid=%s",
+        "selection resolving: input=%r → canonical_id=%s uid=%s geo=%s",
         body.location_id or body.name,
         canonical_id,
         uid,
+        converged_via_geo,
     )
 
-    tracker = get_usage_tracker()
-    if tracker is not None:
-        loc_by_id = {loc.id: loc for loc in locations_data}
+    # Register coordinates for a freshly-minted, non-curated ID so future nearby
+    # submissions converge onto it. Curated anchors are already seeded at
+    # startup and explicit IDs are trusted, so neither needs (re-)registering.
+    if has_coords and not converged_via_geo and not body.location_id and canonical_id not in loc_by_id:
+        tracker.add_to_geo_index(canonical_id, body.latitude, body.longitude)
 
-        # Geo-canonicalization: only relevant for freshly-minted slugs (i.e.
-        # neither an explicit location_id nor a preapproved name match was
-        # found — see _resolve_canonical_id). Explicit/preapproved IDs are
-        # trusted as-is and never re-pointed. When coordinates are available,
-        # check whether an existing canonical ID already covers this physical
-        # spot within CANONICALIZATION_RADIUS_KM; if so, converge onto it so
-        # "Chennai" / "Chennai, India" / "Chennai, Tamil Nadu, India" all
-        # accumulate signal under one ID instead of fragmenting it. Otherwise
-        # register this slug's coordinates so future nearby submissions find it.
-        is_minted_slug = not body.location_id and canonical_id not in loc_by_id
-        if is_minted_slug and body.latitude is not None and body.longitude is not None:
-            nearby_id = tracker.find_nearby_canonical_id(body.latitude, body.longitude, CANONICALIZATION_RADIUS_KM)
-            if nearby_id:
-                logger.debug(
-                    "geo-canonicalization: %s (%s, %s) converged onto existing %s",
-                    canonical_id, body.latitude, body.longitude, nearby_id,
-                )
-                canonical_id = nearby_id
-            else:
-                tracker.add_to_geo_index(canonical_id, body.latitude, body.longitude)
+    tracker.record_selection(canonical_id, uid)
 
-        tracker.record_selection(canonical_id, uid)
+    if canonical_id not in loc_by_id and body.name and not tracker.get_location_metadata(canonical_id):
+        country_code, country_name = _resolve_country_fields(body.country_code, body.country_name)
+        tracker.store_location_metadata(canonical_id, {
+            "id": canonical_id,
+            "slug": canonical_id,
+            "name": body.name,
+            "admin1": body.admin1,
+            "country_name": country_name,
+            "country_code": country_code,
+            "latitude": body.latitude,
+            "longitude": body.longitude,
+        })
 
-        if canonical_id not in loc_by_id and body.name and not tracker.get_location_metadata(canonical_id):
-            country_code, country_name = _resolve_country_fields(body.country_code, body.country_name)
-            tracker.store_location_metadata(canonical_id, {
-                "id": canonical_id,
-                "slug": canonical_id,
-                "name": body.name,
-                "admin1": body.admin1,
-                "country_name": country_name,
-                "country_code": country_code,
-                "latitude": body.latitude,
-                "longitude": body.longitude,
-            })
-
-        display = _build_display_string(body)
-        if display:
-            tracker.store_location_display(canonical_id, display)
+    display = _build_display_string(body)
+    if display:
+        tracker.store_location_display(canonical_id, display)
 
     return Response(status_code=204)
 
@@ -1124,3 +1146,13 @@ async def initialize_locations_data(redis: redis.Redis):
     redis_client = redis
     locations_data, locations_etag, locations_last_modified = await load_locations_data()
     await warm_cache()
+
+    # Seed the geo index with curated coordinates so coordinate-bearing
+    # selections converge onto these canonical IDs instead of minting fragment
+    # slugs. Curated locations are anchors of convenience here — any location
+    # with coordinates can become an anchor once selected (see
+    # record_location_selection); seeding just bootstraps the well-known ones.
+    tracker = get_usage_tracker()
+    if tracker is not None and locations_data:
+        seeded = tracker.seed_geo_index([(loc.id, loc.latitude, loc.longitude) for loc in locations_data])
+        logger.info("Seeded geo index with %d curated location anchors", seeded)

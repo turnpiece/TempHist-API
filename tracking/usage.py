@@ -138,6 +138,29 @@ class LocationUsageTracker:
         except Exception as _e:
             logger.debug("Could not add %s to geo-index: %s", canonical_id, _e)
 
+    def seed_geo_index(self, anchors: List[Tuple[str, float, float]]) -> int:
+        """Seed the geo index with known canonical anchors (id, latitude, longitude).
+
+        Lets coordinate-bearing selections converge onto these IDs instead of
+        minting fragment slugs. Used to register curated locations at startup so
+        e.g. a "Greater London, …" selection with coordinates lands on `london`
+        rather than a new slug. Idempotent — geoadd updates an existing member's
+        position in place, so re-seeding on every boot is safe.
+
+        Returns the number of anchors written.
+        """
+        if not USAGE_TRACKING_ENABLED or not anchors:
+            return 0
+        members: List = []
+        for canonical_id, latitude, longitude in anchors:
+            members.extend([longitude, latitude, canonical_id])
+        try:
+            self.redis_client.geoadd(self.geo_index_key, members)
+            return len(anchors)
+        except Exception as _e:
+            logger.debug("Could not seed geo-index with %d anchors: %s", len(anchors), _e)
+            return 0
+
     def get_location_metadata(self, location_id: str) -> Optional[dict]:
         """Retrieve stored minimal metadata for a location ID, or None."""
         if not USAGE_TRACKING_ENABLED:
