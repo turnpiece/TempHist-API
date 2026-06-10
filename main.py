@@ -1312,12 +1312,6 @@ async def verify_token_middleware(request: Request, call_next):
         # Log service job bypass in non-DEBUG mode (already logged in DEBUG mode above)
         pass
 
-    # Track usage for Visual Crossing API endpoints
-    if USAGE_TRACKING_ENABLED and get_usage_tracker() and is_vc_api_endpoint:
-        location, endpoint = extract_location_from_path(request.url.path)
-        if location:
-            get_usage_tracker().track_location_request(location, endpoint)
-
     if DEBUG:
         logger.debug("[DEBUG] Middleware: Protected path, checking Firebase token...")
     # All other paths require a Firebase token

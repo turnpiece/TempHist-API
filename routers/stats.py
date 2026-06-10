@@ -7,6 +7,7 @@ from config import (
     API_ACCESS_TOKEN,
     MAX_LOCATIONS_PER_HOUR,
     MAX_REQUESTS_PER_HOUR,
+    POPULARITY_WINDOW_DAYS,
     RATE_LIMIT_ENABLED,
     RATE_LIMIT_WINDOW_HOURS,
     USAGE_TRACKING_ENABLED,
@@ -123,16 +124,21 @@ async def get_usage_stats(
     request: Request,
     _admin: bool = Depends(verify_admin_key),
 ):
-    """Get usage tracking statistics (admin endpoint)."""
-    if not USAGE_TRACKING_ENABLED or not get_usage_tracker():
+    """Get usage tracking statistics from the selection signal (admin endpoint).
+
+    Backed by the canonicalized selection sorted sets — the same source that
+    feeds /v1/locations/popular and cache warming.
+    """
+    tracker = get_usage_tracker()
+    if not USAGE_TRACKING_ENABLED or not tracker:
         return {"status": "disabled", "message": "Usage tracking is not enabled"}
 
+    ranked = tracker.get_popular_from_selections(limit=500, days=POPULARITY_WINDOW_DAYS)
     return {
         "enabled": USAGE_TRACKING_ENABLED,
-        "retention_days": None,  # Will be injected from config
-        "popular_locations_24h": get_usage_tracker().get_popular_locations(limit=10, hours=24),
-        "popular_locations_7d": get_usage_tracker().get_popular_locations(limit=10, hours=168),
-        "all_location_stats": get_usage_tracker().get_all_location_stats(),
+        "window_days": POPULARITY_WINDOW_DAYS,
+        "total_selections": tracker.get_total_selections(days=POPULARITY_WINDOW_DAYS),
+        "popular_locations": [{"location_id": loc_id, "selections": count} for loc_id, count in ranked],
     }
 
 
@@ -141,12 +147,19 @@ async def get_location_usage_stats(
     location: str,
     _admin: bool = Depends(verify_admin_key),
 ):
-    """Get usage statistics for a specific location (admin endpoint)."""
-    if not USAGE_TRACKING_ENABLED or not get_usage_tracker():
+    """Get selection statistics for a specific location ID (admin endpoint)."""
+    tracker = get_usage_tracker()
+    if not USAGE_TRACKING_ENABLED or not tracker:
         return {"status": "disabled", "message": "Usage tracking is not enabled"}
 
-    stats = get_usage_tracker().get_location_stats(location)
-    if not stats:
-        return {"status": "not_found", "message": f"No usage data found for location: {location}"}
+    ranked = tracker.get_popular_from_selections(limit=500, days=POPULARITY_WINDOW_DAYS)
+    for rank, (loc_id, count) in enumerate(ranked, start=1):
+        if loc_id == location:
+            return {
+                "location_id": loc_id,
+                "selections": count,
+                "rank": rank,
+                "window_days": POPULARITY_WINDOW_DAYS,
+            }
 
-    return stats
+    return {"status": "not_found", "message": f"No selection data found for location: {location}"}
