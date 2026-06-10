@@ -1,9 +1,10 @@
 """V1 records endpoints."""
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -39,6 +40,7 @@ from cache.keys import (
 from config import (
     CACHE_ENABLED,
     DEBUG,
+    MAX_CONCURRENT_REQUESTS,
 )
 from models import (
     AverageData,
@@ -179,6 +181,62 @@ def _collapse_consecutive_dates(dates: List[date]) -> List[Tuple[date, date]]:
     return ranges
 
 
+def _timeline_days_to_records(timeline_days: List[Dict[str, Any]], range_start: date, range_end: date) -> List[DailyTemperatureRecord]:
+    records_to_store: List[DailyTemperatureRecord] = []
+    for day_payload in timeline_days:
+        dt_raw = day_payload.get("datetime") or day_payload.get("date")
+        if not dt_raw:
+            continue
+        dt_text = str(dt_raw)[:10]
+        try:
+            record_date = datetime.strptime(dt_text, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if record_date < range_start or record_date > range_end:
+            continue
+        temp = _coerce_float(day_payload.get("temp"))
+        temp_max = _coerce_float(day_payload.get("tempmax") or day_payload.get("maxt"))
+        temp_min = _coerce_float(day_payload.get("tempmin") or day_payload.get("mint"))
+        filtered_payload = {
+            "datetime": record_date.isoformat(),
+            "temp": temp,
+            "tempmax": temp_max,
+            "tempmin": temp_min,
+        }
+        records_to_store.append(
+            DailyTemperatureRecord(
+                date=record_date,
+                temp_c=temp,
+                temp_max_c=temp_max,
+                temp_min_c=temp_min,
+                payload=filtered_payload,
+                source="timeline",
+            )
+        )
+    return records_to_store
+
+
+async def _fetch_timeline_ranges(
+    location: str,
+    ranges: List[Tuple[int, date, date]],
+) -> List[Tuple[int, date, date, List[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Exception]]]:
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+    async def fetch_one(
+        year: int,
+        range_start: date,
+        range_end: date,
+    ) -> Tuple[int, date, date, List[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Exception]]:
+        async with semaphore:
+            try:
+                timeline_days, timeline_metadata = await fetch_timeline_days(location, range_start, range_end)
+                return year, range_start, range_end, timeline_days, timeline_metadata, None
+            except Exception as exc:
+                return year, range_start, range_end, [], None, exc
+
+    return await asyncio.gather(*(fetch_one(year, range_start, range_end) for year, range_start, range_end in ranges))
+
+
 WINDOW_DAYS = {
     "weekly": 7,
     "monthly": 31,
@@ -299,6 +357,7 @@ async def _collect_rolling_window_values(
     aggregated: List[float] = []
     missing_years: List[Dict] = []
     coverage_details: List[Dict] = []
+    timeline_failed_years: set[int] = set()
     window_days = WINDOW_DAYS[period]
     current_year_now = datetime.now().year
 
@@ -327,20 +386,17 @@ async def _collect_rolling_window_values(
         )
     cache = await store.fetch(location, list(all_dates_needed))
 
-    # Second pass: process each year using the cached data
+    # Second pass: enqueue backfills and collect all below-threshold ranges before hitting the provider.
+    ranges_to_fetch: List[Tuple[int, date, date]] = []
     for year in years:
         if year not in year_to_date_sequence:
             continue  # Already tracked as missing in first pass
 
         date_sequence = year_to_date_sequence[year]
-        anchor = _resolve_anchor_date(year, month, day)
-
         expected_days = len(date_sequence)
         missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
         available_count = expected_days - len(missing_dates)
         coverage_ok, coverage_ratio = _evaluate_coverage(period, available_count, expected_days, year=year)
-        timeline_failed = False
-        final_missing_dates = missing_dates
 
         # Log current year coverage for monitoring
         if year == current_year_now and missing_dates:
@@ -353,70 +409,52 @@ async def _collect_rolling_window_values(
             await _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year, slug=slug)
 
             if not coverage_ok:
-                for range_start, range_end in _collapse_consecutive_dates(missing_dates):
-                    timeline_metadata = None
-                    try:
-                        timeline_days, timeline_metadata = await fetch_timeline_days(location, range_start, range_end)
-                    except LocationNotFoundError as exc:
-                        logger.warning("Location not found, aborting fetch for %s: %s", location, exc)
-                        raise HTTPException(status_code=422, detail="location_not_found")
-                    except Exception as exc:
-                        error_detail = (
-                            f"❌ timeline fetch failed for {location} "
-                            f"({range_start.strftime('%Y-%m-%d')} to {range_end.strftime('%Y-%m-%d')}): {exc}"
-                        )
-                        logger.error(error_detail)
-                        track_missing_year(missing_years, year, "timeline_error")
-                        timeline_failed = True
-                        break
-                    records_to_store: List[DailyTemperatureRecord] = []
-                    for day_payload in timeline_days:
-                        dt_raw = day_payload.get("datetime") or day_payload.get("date")
-                        if not dt_raw:
-                            continue
-                        dt_text = str(dt_raw)[:10]
-                        try:
-                            record_date = datetime.strptime(dt_text, "%Y-%m-%d").date()
-                        except ValueError:
-                            continue
-                        if record_date < range_start or record_date > range_end:
-                            continue
-                        temp = _coerce_float(day_payload.get("temp"))
-                        temp_max = _coerce_float(day_payload.get("tempmax") or day_payload.get("maxt"))
-                        temp_min = _coerce_float(day_payload.get("tempmin") or day_payload.get("mint"))
-                        filtered_payload = {
-                            "datetime": record_date.isoformat(),
-                            "temp": temp,
-                            "tempmax": temp_max,
-                            "tempmin": temp_min,
-                        }
-                        records_to_store.append(
-                            DailyTemperatureRecord(
-                                date=record_date,
-                                temp_c=temp,
-                                temp_max_c=temp_max,
-                                temp_min_c=temp_min,
-                                payload=filtered_payload,
-                                source="timeline",
-                            )
-                        )
-                    if records_to_store:
-                        await store.upsert(location, records_to_store, metadata=timeline_metadata)
-                        for rec in records_to_store:
-                            cache[rec.date] = rec
+                ranges_to_fetch.extend(
+                    (year, range_start, range_end)
+                    for range_start, range_end in _collapse_consecutive_dates(missing_dates)
+                )
 
-                if timeline_failed:
-                    final_missing_dates = missing_dates
-                    coverage_ok = False
-                else:
-                    final_missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
-                    available_count = expected_days - len(final_missing_dates)
-                    coverage_ok, _ = _evaluate_coverage(period, available_count, expected_days, year=year)
-            else:
-                final_missing_dates = missing_dates
-        else:
-            final_missing_dates = []
-            coverage_ok = True
+    if ranges_to_fetch:
+        fetch_results = await _fetch_timeline_ranges(location, ranges_to_fetch)
+        records_to_store: List[DailyTemperatureRecord] = []
+        upsert_metadata: Optional[Dict[str, Any]] = None
+        for year, range_start, range_end, timeline_days, timeline_metadata, exc in fetch_results:
+            if isinstance(exc, LocationNotFoundError):
+                logger.warning("Location not found, aborting fetch for %s: %s", location, exc)
+                raise HTTPException(status_code=422, detail="location_not_found")
+            if exc is not None:
+                error_detail = (
+                    f"❌ timeline fetch failed for {location} "
+                    f"({range_start.strftime('%Y-%m-%d')} to {range_end.strftime('%Y-%m-%d')}): {exc}"
+                )
+                logger.error(error_detail)
+                track_missing_year(missing_years, year, "timeline_error")
+                timeline_failed_years.add(year)
+                continue
+            if timeline_metadata and upsert_metadata is None:
+                upsert_metadata = timeline_metadata
+            records_to_store.extend(_timeline_days_to_records(timeline_days, range_start, range_end))
+
+        if records_to_store:
+            await store.upsert(location, records_to_store, metadata=upsert_metadata)
+            for rec in records_to_store:
+                cache[rec.date] = rec
+
+    # Final pass: process each year using the original cache plus any freshly fetched timeline data.
+    for year in years:
+        if year not in year_to_date_sequence:
+            continue  # Already tracked as missing in first pass
+
+        date_sequence = year_to_date_sequence[year]
+        anchor = _resolve_anchor_date(year, month, day)
+        expected_days = len(date_sequence)
+        final_missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
+        available_count = expected_days - len(final_missing_dates)
+        coverage_ok, _ = _evaluate_coverage(period, available_count, expected_days, year=year)
+        timeline_failed = year in timeline_failed_years
+
+        if timeline_failed:
+            coverage_ok = False
 
         if final_missing_dates and not coverage_ok:
             if year == current_year_now:
