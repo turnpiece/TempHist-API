@@ -209,3 +209,22 @@ class TestGeoIndex:
 
         # Should not raise
         tracker.add_to_geo_index("chennai", 13.0827, 80.2707)
+
+    def test_seed_geo_index_writes_flat_lon_lat_member_list(self, tracker, mock_redis):
+        seeded = tracker.seed_geo_index([("london", 51.5072, -0.1276), ("dublin", 53.3498, -6.2603)])
+
+        assert seeded == 2
+        mock_redis.geoadd.assert_called_once_with(
+            tracker.geo_index_key,
+            [-0.1276, 51.5072, "london", -6.2603, 53.3498, "dublin"],
+        )
+
+    def test_seed_geo_index_empty_is_noop(self, tracker, mock_redis):
+        assert tracker.seed_geo_index([]) == 0
+        mock_redis.geoadd.assert_not_called()
+
+    def test_seed_geo_index_swallows_redis_error(self, tracker, mock_redis):
+        mock_redis.geoadd.side_effect = Exception("boom")
+
+        # Should not raise; returns 0 on failure
+        assert tracker.seed_geo_index([("london", 51.5072, -0.1276)]) == 0

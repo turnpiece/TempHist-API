@@ -15,29 +15,29 @@ import config  # noqa: E402
 from utils.daily_temperature_store import DailyTemperatureStore  # noqa: E402
 
 
-class TestCanonicalizationRadius:
-    def test_default_radius_is_45km(self):
-        """_find_nearby_location default arg must match CANONICALIZATION_RADIUS_KM (45.0)."""
+class TestSameLocationRadius:
+    def test_default_radius_matches_config(self):
+        """_find_nearby_location defaults to the identity-dedup radius (same point)."""
         sig = inspect.signature(DailyTemperatureStore._find_nearby_location)
         default = sig.parameters["max_distance_km"].default
-        assert default == config.CANONICALIZATION_RADIUS_KM
-        assert default == 45
+        assert default == config.SAME_LOCATION_RADIUS_KM
+        assert default == 2.0
 
-    def test_config_default_is_45(self):
-        assert config.CANONICALIZATION_RADIUS_KM == 45
+    def test_config_default_is_2km(self):
+        assert config.SAME_LOCATION_RADIUS_KM == 2.0
 
     def test_env_var_override(self, monkeypatch):
-        """CANONICALIZATION_RADIUS_KM env var is read by config at import time;
+        """SAME_LOCATION_RADIUS_KM env var is read by config at import time;
         verify the config module reads it correctly when patched."""
         import importlib
 
-        monkeypatch.setenv("CANONICALIZATION_RADIUS_KM", "30")
+        monkeypatch.setenv("SAME_LOCATION_RADIUS_KM", "1.5")
         import config as cfg_module
 
         importlib.reload(cfg_module)
-        assert cfg_module.CANONICALIZATION_RADIUS_KM == 30
+        assert cfg_module.SAME_LOCATION_RADIUS_KM == 1.5
         # Restore
-        monkeypatch.delenv("CANONICALIZATION_RADIUS_KM", raising=False)
+        monkeypatch.delenv("SAME_LOCATION_RADIUS_KM", raising=False)
         importlib.reload(cfg_module)
 
 
@@ -55,19 +55,21 @@ class TestFindNearbyLocation:
         return row
 
     @pytest.mark.asyncio
-    async def test_location_within_45km_is_snapped(self):
+    async def test_location_within_identity_radius_is_snapped(self):
+        """Same point (under the 2 km identity radius) folds onto the existing row."""
         store = self._make_store()
         conn = AsyncMock()
-        conn.fetchrow = AsyncMock(return_value=self._make_row(44.9))
+        conn.fetchrow = AsyncMock(return_value=self._make_row(1.9))
 
         result = await store._find_nearby_location(conn, 51.5, -0.1)
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_location_beyond_45km_is_not_snapped(self):
+    async def test_location_beyond_identity_radius_is_not_snapped(self):
+        """A distinct nearby place (beyond 2 km) keeps its own identity."""
         store = self._make_store()
         conn = AsyncMock()
-        conn.fetchrow = AsyncMock(return_value=self._make_row(45.1))
+        conn.fetchrow = AsyncMock(return_value=self._make_row(2.1))
 
         result = await store._find_nearby_location(conn, 51.5, -0.1)
         assert result is None
@@ -76,7 +78,7 @@ class TestFindNearbyLocation:
     async def test_exact_boundary_is_snapped(self):
         store = self._make_store()
         conn = AsyncMock()
-        conn.fetchrow = AsyncMock(return_value=self._make_row(45.0))
+        conn.fetchrow = AsyncMock(return_value=self._make_row(2.0))
 
         result = await store._find_nearby_location(conn, 51.5, -0.1)
         assert result is not None

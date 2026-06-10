@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import asyncpg  # type: ignore[import-untyped]
 
 from cache.keys import normalize_location_for_cache
-from config import CANONICALIZATION_RADIUS_KM, METRO_CACHE_GRID_DEGREES, METRO_CACHE_SNAP_KM
+from config import METRO_CACHE_GRID_DEGREES, METRO_CACHE_SNAP_KM, SAME_LOCATION_RADIUS_KM
 
 
 def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[bool, bool, bool]:
@@ -1167,10 +1167,15 @@ class DailyTemperatureStore:
         conn: asyncpg.Connection,
         latitude: Optional[float],
         longitude: Optional[float],
-        max_distance_km: float = CANONICALIZATION_RADIUS_KM,
+        max_distance_km: float = SAME_LOCATION_RADIUS_KM,
         exclude_location_id: Optional[int] = None,
     ) -> Optional[asyncpg.Record]:
         """Return closest existing location within max_distance_km km of (lat, lng), or None.
+
+        Defaults to SAME_LOCATION_RADIUS_KM — i.e. only folds a new submission
+        onto an existing row when it is essentially the *same point* (identity
+        dedup). Metro-area data sharing across distinct places is a separate
+        call (_find_nearby_metro_anchor, METRO_CACHE_SNAP_KM).
 
         Uses bounding box pre-filter for performance before calculating exact distance.
         """
