@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, List
 
 import redis
 
@@ -183,12 +183,19 @@ async def get_temperature_series(
     month: int,
     day: int,
     redis_client: redis.Redis,
+    years: List[int] | None = None,
 ) -> Dict:
-    """Get temperature series data for a location and date over multiple years."""
+    """Get temperature series data for a location and date over multiple years.
+
+    When ``years`` is supplied, only those years are fetched and the
+    aggregate series cache is bypassed (read and write), since the result
+    would not represent the full 50-year window.
+    """
     from utils.weather import create_metadata, get_year_range, track_missing_year
 
+    narrow_path = years is not None
     series_cache_key = generate_cache_key("series", location, f"{month:02d}_{day:02d}")
-    if CACHE_ENABLED:
+    if CACHE_ENABLED and not narrow_path:
         cached_series = get_cache_value(series_cache_key, redis_client, "series", location, get_cache_stats())
         if cached_series:
             logger.debug("Cache hit: %s", series_cache_key)
@@ -201,7 +208,8 @@ async def get_temperature_series(
     logger.debug("get_temperature_series for %s on %d/%d", location, day, month)
     today = datetime.now()
     current_year = today.year
-    years = get_year_range(current_year)
+    if years is None:
+        years = get_year_range(current_year)
 
     data = []
     missing_years = []
@@ -275,18 +283,20 @@ async def get_temperature_series(
 
     data_list = sorted(data, key=lambda d: d["x"])
 
-    if data_list:
-        latest_year = data_list[-1]["x"]
-        if isinstance(latest_year, str):
-            try:
-                latest_year = int(latest_year)
-            except ValueError:
-                latest_year = None
-        if latest_year is not None and latest_year != current_year:
-            if not any(entry.get("year") == current_year for entry in missing_years):
-                track_missing_year(missing_years, current_year, "no_data_current_year")
-    elif current_year not in [entry.get("year") for entry in missing_years]:
-        track_missing_year(missing_years, current_year, "no_data_current_year")
+    # Only flag a missing current year when the caller actually asked for it.
+    if current_year in years:
+        if data_list:
+            latest_year = data_list[-1]["x"]
+            if isinstance(latest_year, str):
+                try:
+                    latest_year = int(latest_year)
+                except ValueError:
+                    latest_year = None
+            if latest_year is not None and latest_year != current_year:
+                if not any(entry.get("year") == current_year for entry in missing_years):
+                    track_missing_year(missing_years, current_year, "no_data_current_year")
+        elif current_year not in [entry.get("year") for entry in missing_years]:
+            track_missing_year(missing_years, current_year, "no_data_current_year")
 
     if not data_list:
         logger.warning("No valid temperature data found for %s on %d-%d", location, month, day)
@@ -296,7 +306,7 @@ async def get_temperature_series(
             "error": f"Invalid location: {location}",
         }
 
-    if CACHE_ENABLED:
+    if CACHE_ENABLED and not narrow_path:
         set_cache_value(
             series_cache_key,
             SHORT_CACHE_DURATION,

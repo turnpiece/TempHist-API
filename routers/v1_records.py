@@ -810,6 +810,81 @@ def _extract_per_year_records(full_data: Dict) -> Dict[int, Dict]:
     return per_year
 
 
+async def compute_per_year_records(
+    location: str,
+    period: str,
+    identifier: str,
+    years_to_fetch: List[int],
+    unit_group: str = "celsius",
+    redis_client: redis.Redis = None,
+) -> Tuple[Dict[int, Dict], List[Dict], List[Dict]]:
+    """Compute per-year records for a specific subset of years.
+
+    Narrow-path counterpart to :func:`get_temperature_data_v1` for the
+    partial-cache-miss case: when callers already know which years are
+    missing, this avoids recomputing the full 50-year window. The returned
+    ``per_year_records`` shape matches :func:`_extract_per_year_records`
+    (each value is a ``TemperatureValue.model_dump()`` dict). Anomalies are
+    not populated here — they depend on the full-series mean and are
+    recomputed at bundle assembly by ``_rebuild_full_response_from_values``.
+
+    Returns:
+        (per_year_records, missing_years, coverage_details)
+    """
+    if not years_to_fetch:
+        return {}, [], []
+
+    month, day, _ = parse_identifier(period, identifier)
+    slug = await resolve_location_cache_slug(location)
+
+    per_year: Dict[int, Dict] = {}
+    missing_years: List[Dict] = []
+    coverage_details: List[Dict] = []
+
+    if period == "daily":
+        weather_data = await get_temperature_series(
+            location, month, day, redis_client, years=list(years_to_fetch)
+        )
+        if weather_data and "data" in weather_data:
+            if "metadata" in weather_data and "missing_years" in weather_data["metadata"]:
+                missing_years.extend(weather_data["metadata"]["missing_years"])
+
+            for data_point in weather_data["data"]:
+                year = int(data_point["x"])
+                temp = data_point["y"]
+                if temp is None:
+                    continue
+                converted = _convert_c_to_unit(temp, unit_group)
+                per_year[year] = TemperatureValue(
+                    date=f"{year}-{month:02d}-{day:02d}",
+                    year=year,
+                    temperature=round(converted, 2),
+                ).model_dump()
+    elif period in ("weekly", "monthly", "yearly"):
+        (
+            window_values,
+            _aggregated,
+            window_missing,
+            window_coverage,
+        ) = await _collect_rolling_window_values(
+            location=location,
+            period=period,  # type: ignore[arg-type]
+            month=month,
+            day=day,
+            unit_group=unit_group,
+            years=list(years_to_fetch),
+            slug=slug,
+        )
+        missing_years.extend(window_missing)
+        coverage_details.extend(window_coverage)
+        for value in window_values:
+            per_year[value.year] = value.model_dump()
+    else:
+        raise HTTPException(status_code=400, detail="Invalid period. Must be daily, weekly, monthly, or yearly")
+
+    return per_year, missing_years, coverage_details
+
+
 def _get_ttl_for_current_year(period: str) -> int:
     """Get TTL for current year based on period."""
     if period == "daily":
@@ -900,10 +975,13 @@ async def _get_record_data_internal(
 
         # Handle missing years (simplified - just fetch if needed)
         if missing_past or missing_current:
-            full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
-            per_year_records = _extract_per_year_records(full_data)
-            await _store_per_year_records(redis_client, period, slug, identifier, per_year_records, current_year)
-            year_data = per_year_records
+            years_to_fetch = list(missing_past) + ([current_year] if missing_current else [])
+            new_records, _, _ = await compute_per_year_records(
+                location, period, identifier, years_to_fetch, "celsius", redis_client
+            )
+            if new_records:
+                await _store_per_year_records(redis_client, period, slug, identifier, new_records, current_year)
+                year_data = {**year_data, **new_records}
 
         # Assemble from year_data using helper
         if year_data:
@@ -1210,11 +1288,12 @@ async def get_record(
                 # and there is no stale bundle to serve, we still need to fetch it
                 # inline — otherwise it gets left out of the assembled bundle.
                 if missing_past or missing_current:
-                    full_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
-                    per_year_records = _extract_per_year_records(full_data)
+                    years_to_cache = list(missing_past) + ([current_year] if missing_current else [])
+                    per_year_records, _, _ = await compute_per_year_records(
+                        location, period, identifier, years_to_cache, "celsius", redis_client
+                    )
                     from cache.core import ETagGenerator
 
-                    years_to_cache = list(missing_past) + ([current_year] if missing_current else [])
                     for year in years_to_cache:
                         if year not in per_year_records:
                             continue

@@ -395,6 +395,7 @@ class JobWorker:
             _extract_per_year_records,
             _get_ttl_for_current_year,
             _rebuild_full_response_from_values,
+            compute_per_year_records,
             get_temperature_data_v1,
         )
         from utils.daily_temperature_store import resolve_location_cache_slug
@@ -458,14 +459,13 @@ class JobWorker:
                 except Exception as _pre_err:
                     logger.debug(f"DB pre-check skipped for {location} year {year}: {_pre_err}")
 
-            # Fetch full data (get_temperature_data_v1 fetches all years, but we'll extract just the one we need)
+            # Narrow path: fetch only the requested year, not the full 51-year window.
             try:
-                full_data = await get_temperature_data_v1(location, scope, identifier, "celsius", self.redis)
+                per_year_records, _missing, coverage_details = await compute_per_year_records(
+                    location, scope, identifier, [year], "celsius", self.redis
+                )
             except HTTPException as http_err:
                 raise ValueError(f"{http_err.detail}") from http_err
-
-            # Extract per-year records
-            per_year_records = _extract_per_year_records(full_data)
 
             if year not in per_year_records:
                 logger.warning(f"⏭️ No data available for year {year} at {location}, skipping")
@@ -502,7 +502,6 @@ class JobWorker:
             # the cache with a warm-biased average computed before cold months are backfilled.
             skip_cache = False
             if year == current_year:
-                coverage_details = full_data.get("coverage", {}).get("per_year", [])
                 year_detail = next((d for d in coverage_details if d.get("year") == year), None)
                 if year_detail and year_detail.get("coverage_ratio", 1.0) < 0.8:
                     skip_cache = True
