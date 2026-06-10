@@ -5,26 +5,22 @@ import logging
 import mimetypes
 import os
 import time
-from datetime import date as dt_date
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 # Third-party imports
-import firebase_admin
-import httpx
 import redis
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from firebase_admin import app_check, auth, credentials
-from pydantic import BaseModel, Field
+from firebase_admin import app_check, auth
 from starlette.responses import FileResponse
 
 # Load .env and populate os.environ before routers (see config.DOTENV_PATH).
 import config  # noqa: F401
-from cache.accessors import get_cache_warmer, get_usage_tracker, initialize_cache
+from cache.accessors import get_cache_warmer, initialize_cache
 
 # Import enhanced caching utilities
 from cache.warming import CACHE_WARMING_ENABLED, scheduled_cache_warming
@@ -37,7 +33,6 @@ from config import (
     CORS_ORIGINS,
     DEBUG,
     ENVIRONMENT,
-    HTTP_TIMEOUT,
     IP_BLACKLIST,
     IP_WHITELIST,
     LOG_VERBOSITY,
@@ -48,6 +43,14 @@ from config import (
     SERVICE_TOKEN_RATE_LIMITS,
 )
 from exceptions import register_exception_handlers
+from middleware import (
+    add_security_headers,
+    health_check_cors_middleware,
+    log_requests_middleware,
+    request_id_middleware,
+    request_size_middleware,
+)
+from middleware.cors import get_cors_origin_regex, get_cors_origins
 from rate_limiting import LocationDiversityMonitor, RequestRateMonitor, ServiceTokenRateLimiter
 from routers.analytics import router as analytics_router
 from routers.cache import router as cache_router
@@ -66,8 +69,11 @@ from routers.stats import router as stats_router
 from routers.v1_records import router as v1_records_router
 from routers.weather import router as weather_router
 from utils.admin_auth import admin_key_is_valid, is_admin_path, verify_admin_key
+from utils.firebase import initialize_firebase
 from utils.ip_utils import get_client_ip, is_ip_blacklisted, is_ip_whitelisted
 from utils.path_parsing import extract_location_from_path
+from utils.redis_client import create_redis_client
+from utils.sanitization import sanitize_for_logging, sanitize_url
 
 if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
     logging.getLogger(__name__).warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
@@ -75,84 +81,7 @@ if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 
-# Debug: Log the REDIS_URL value to diagnose connection issues (sanitized)
-import logging as _logging  # noqa: E402
-from urllib.parse import urlparse, urlunparse  # noqa: E402
-
-
-def sanitize_url(url: str) -> str:
-    """Remove credentials and API keys from URL for logging to prevent sensitive data exposure."""
-    try:
-        from urllib.parse import parse_qs, urlencode
-
-        parsed = urlparse(url)
-
-        # Redact password from netloc
-        if parsed.password:
-            username = parsed.username or ""
-            netloc = f"{username}:***@{parsed.hostname}"
-            if parsed.port:
-                netloc += f":{parsed.port}"
-            parsed = parsed._replace(netloc=netloc)
-
-        # Redact API keys from query parameters
-        if parsed.query:
-            query_params = parse_qs(parsed.query, keep_blank_values=True)
-            # Redact sensitive parameters
-            sensitive_params = ["key", "api_key", "apikey", "token", "password", "secret"]
-            for param in sensitive_params:
-                if param in query_params:
-                    query_params[param] = ["[REDACTED]"]
-            # Reconstruct query string
-            sanitized_query = urlencode(query_params, doseq=True)
-            parsed = parsed._replace(query=sanitized_query)
-
-        return urlunparse(parsed)
-    except (ValueError, TypeError) as e:
-        # If parsing fails, return a safe placeholder
-        logger.debug(f"Failed to parse URL for sanitization: {e}")
-        return "[REDACTED_URL]"
-
-
-def sanitize_for_logging(data: str, max_length: int = 100) -> str:
-    """Sanitize user input data before logging to prevent log injection and sensitive data exposure (MED-005).
-
-    Args:
-        data: The input string to sanitize
-        max_length: Maximum length to keep (default 100 chars)
-
-    Returns:
-        Sanitized string safe for logging
-    """
-    if not data or not isinstance(data, str):
-        return str(data)[:max_length] if data else ""
-
-    # Truncate to max length
-    if len(data) > max_length:
-        data = data[:max_length] + "..."
-
-    # Remove or replace control characters that could be used for log injection
-    # Replace newlines, tabs, and other control chars with spaces
-    import re
-
-    data = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f]", " ", data)
-
-    # Remove potential sensitive patterns
-    # Redact bearer tokens
-    data = re.sub(r"Bearer\s+\S+", "Bearer [REDACTED]", data, flags=re.IGNORECASE)
-    # Redact API keys in URLs
-    data = re.sub(r"key=[^&\s]+", "key=[REDACTED]", data, flags=re.IGNORECASE)
-    data = re.sub(r"api_key=[^&\s]+", "api_key=[REDACTED]", data, flags=re.IGNORECASE)
-    # Redact tokens
-    data = re.sub(r"token=[^&\s]+", "token=[REDACTED]", data, flags=re.IGNORECASE)
-
-    # Clean up multiple spaces
-    data = re.sub(r"\s+", " ", data).strip()
-
-    return data
-
-
-_temp_logger = _logging.getLogger(__name__)
+_temp_logger = logging.getLogger(__name__)
 _temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {sanitize_url(REDIS_URL)}")
 
 # LOW-008: Validate debug mode with environment check
@@ -161,8 +90,8 @@ _temp_logger.info(f"🔍 DEBUG: REDIS_URL environment variable = {sanitize_url(R
 # Prevent DEBUG mode in production
 if ENVIRONMENT == "production" and DEBUG:
     # Use basic logging since logger not yet initialized
-    _logging.basicConfig(level=_logging.INFO)
-    _temp_logger = _logging.getLogger(__name__)
+    logging.basicConfig(level=logging.INFO)
+    _temp_logger = logging.getLogger(__name__)
     _temp_logger.error("❌ DEBUG mode cannot be enabled in production environment")
     raise ValueError("DEBUG=true is forbidden in production. Set ENVIRONMENT=production and DEBUG=false")
 
@@ -170,43 +99,6 @@ if ENVIRONMENT == "production" and DEBUG:
 # LOG_VERBOSITY, API_ACCESS_TOKEN, CACHE_CONTROL_HEADER, FILTER_WEATHER_DATA,
 # RATE_LIMIT_ENABLED, MAX_LOCATIONS_PER_HOUR, MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS,
 # IP_WHITELIST, IP_BLACKLIST
-
-
-# Analytics Models
-class ErrorDetail(BaseModel):
-    """Individual error detail."""
-
-    timestamp: str = Field(..., description="Error timestamp in ISO format")
-    error_type: str = Field(..., description="Type of error (network, api, validation, etc.)")
-    message: str = Field(..., description="Error message")
-    location: Optional[str] = Field(None, description="Location where error occurred")
-    endpoint: Optional[str] = Field(None, description="API endpoint that failed")
-    status_code: Optional[int] = Field(None, description="HTTP status code if applicable")
-
-
-class AnalyticsData(BaseModel):
-    """Analytics data from client applications."""
-
-    session_duration: int = Field(..., ge=0, description="Session duration in seconds")
-    api_calls: int = Field(..., ge=0, description="Total number of API calls made")
-    api_failure_rate: str = Field(..., description="API failure rate as percentage (e.g., '0%', '15%')")
-    retry_attempts: int = Field(..., ge=0, description="Number of retry attempts made")
-    location_failures: int = Field(..., ge=0, description="Number of location-related failures")
-    error_count: int = Field(..., ge=0, description="Total number of errors encountered")
-    recent_errors: List[ErrorDetail] = Field(default_factory=list, description="Recent error details")
-    app_version: Optional[str] = Field(None, description="Client application version")
-    platform: Optional[str] = Field(None, description="Platform (web, mobile, desktop)")
-    user_agent: Optional[str] = Field(None, description="User agent string")
-    session_id: Optional[str] = Field(None, description="Unique session identifier")
-
-
-class AnalyticsResponse(BaseModel):
-    """Response for analytics submission."""
-
-    status: str = Field(..., description="Submission status")
-    message: str = Field(..., description="Response message")
-    analytics_id: str = Field(..., description="Unique analytics record ID")
-    timestamp: str = Field(..., description="Submission timestamp")
 
 
 # Configure logging based on verbosity setting
@@ -285,358 +177,6 @@ else:
         logger.info("⚠️  RATE LIMITING DISABLED")
     else:
         logger.info("Rate limiting disabled")
-
-
-def clean_location_string(location: str) -> str:
-    """Clean location string by removing non-printable ASCII characters."""
-    import re
-
-    # Remove any non-printable ASCII characters (keep only printable ASCII + common Unicode)
-    # This removes control characters, zero-width spaces, etc.
-    cleaned = "".join(char for char in location if char.isprintable() or char in [" ", ","])
-    # Remove any multiple spaces
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned.strip()
-
-
-def validate_location_for_ssrf(location: str) -> str:
-    """Validate location string to prevent SSRF attacks.
-
-    Args:
-        location: The location string to validate
-
-    Returns:
-        Validated location string
-
-    Raises:
-        ValueError: If location is invalid or potentially dangerous
-    """
-
-    if not location or not isinstance(location, str):
-        raise ValueError("Location must be a non-empty string")
-
-    # Length validation
-    if len(location) > 200:
-        raise ValueError(f"Location string too long (max 200 characters, got {len(location)})")
-
-    # Check for null bytes
-    if "\x00" in location:
-        raise ValueError("Location contains null bytes")
-
-    # Check for control characters
-    if any(ord(c) < 32 and c not in ["\t", "\n", "\r"] for c in location):
-        raise ValueError("Location contains control characters")
-
-    # Allow printable characters (letters, numbers, spaces, common punctuation)
-    # This includes Unicode letters (accents, non-Latin scripts) which are common in location names
-    # Block only control characters and specific dangerous patterns
-    if not all(c.isprintable() or c in ["\t", "\n", "\r"] for c in location):
-        raise ValueError("Location contains non-printable or control characters")
-
-    # Prevent path traversal attempts
-    dangerous_patterns = ["..", "/", "\\", "//"]
-    for pattern in dangerous_patterns:
-        if pattern in location:
-            raise ValueError(f"Location contains dangerous pattern: {pattern}")
-
-    # Prevent SSRF patterns - block URLs, IP addresses, and special schemes
-    location_lower = location.lower()
-    ssrf_patterns = [
-        "://",  # URL scheme
-        "@",  # URL auth separator
-        "localhost",
-        "127.0.0.1",
-        "0.0.0.0",  # noqa: S104
-        "169.254",  # Link-local
-        "10.",  # Private IP range start
-        "172.16",  # Private IP range start
-        "172.17",
-        "172.18",
-        "172.19",
-        "172.20",
-        "172.21",
-        "172.22",
-        "172.23",
-        "172.24",
-        "172.25",
-        "172.26",
-        "172.27",
-        "172.28",
-        "172.29",
-        "172.30",
-        "172.31",
-        "192.168",  # Private IP range start
-        "[::1]",  # IPv6 localhost
-        "[fc00:",  # IPv6 private range
-        "[fe80:",  # IPv6 link-local
-    ]
-
-    for pattern in ssrf_patterns:
-        if pattern in location_lower:
-            raise ValueError(f"Location contains potentially dangerous SSRF pattern: {pattern}")
-
-    # Additional validation: block URL-encoded dangerous characters
-    # This prevents encoding-based bypasses
-    if "%" in location:
-        # Check for encoded versions of dangerous patterns
-        encoded_patterns = [
-            "%2f",  # /
-            "%5c",  # \
-            "%2e",  # .
-            "%40",  # @
-            "%3a",  # :
-        ]
-        for enc_pattern in encoded_patterns:
-            if enc_pattern in location_lower:
-                raise ValueError(f"Location contains encoded dangerous character: {enc_pattern}")
-
-    return location.strip()
-
-
-def validate_date_format(date: str) -> str:
-    """Validate date format to prevent injection attacks.
-
-    Args:
-        date: Date string in YYYY-MM-DD format
-
-    Returns:
-        Validated date string
-
-    Raises:
-        ValueError: If date format is invalid
-    """
-    import re
-
-    if not date or not isinstance(date, str):
-        raise ValueError("Date must be a non-empty string")
-
-    # Strict date format validation
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
-        raise ValueError(f"Invalid date format. Must be YYYY-MM-DD, got: {date}")
-
-    # Validate date values are reasonable
-    try:
-        year, month, day = map(int, date.split("-"))
-        # Check year range (reasonable bounds)
-        if year < 1800 or year > 2100:
-            raise ValueError(f"Year out of range: {year}")
-        if month < 1 or month > 12:
-            raise ValueError(f"Month out of range: {month}")
-        if day < 1 or day > 31:
-            raise ValueError(f"Day out of range: {day}")
-
-        # Try to create date to validate it's a real date
-        from datetime import datetime
-
-        datetime(year, month, day)
-    except ValueError as e:
-        if "out of range" in str(e):
-            raise
-        raise ValueError(f"Invalid date: {date}")
-
-    return date
-
-
-# Cache durations
-SHORT_CACHE_DURATION = timedelta(hours=1)  # For today's data
-LONG_CACHE_DURATION = timedelta(hours=168)  # 1 week for historical data
-FORECAST_DAY_CACHE_DURATION = timedelta(minutes=30)  # Short cache during active hours (Midnight - 6 PM)
-FORECAST_NIGHT_CACHE_DURATION = timedelta(hours=2)  # Longer cache during stable hours (6 PM - Midnight)
-
-
-# Smart cache headers based on data age
-def set_weather_cache_headers(response: Response, *, req_date: dt_date, key_parts: str):
-    """Set appropriate cache headers based on the age of the weather data."""
-    import hashlib
-    from datetime import timezone
-
-    # Strong long-term cache for any day before (UTC) today - 2 days
-    today_utc = datetime.now(timezone.utc).date()
-    if req_date <= today_utc - timedelta(days=2):
-        # Historical data - very unlikely to change
-        response.headers["Cache-Control"] = (
-            "public, max-age=31536000, s-maxage=31536000, immutable, stale-if-error=604800"
-        )
-    else:
-        # Safer policy for the last ~48h (recent data might be revised)
-        response.headers["Cache-Control"] = "public, max-age=21600, stale-while-revalidate=86400, stale-if-error=86400"
-
-    # Deterministic weak ETag: location|date|unit_group|schema_version
-    etag = hashlib.sha256(key_parts.encode("utf-8")).hexdigest()[:16]
-    response.headers["ETag"] = f'W/"{etag}"'
-
-    # Use the requested calendar day as Last-Modified (UTC midnight)
-    response.headers["Last-Modified"] = f"{req_date.isoformat()}T00:00:00Z"
-
-
-class AnalyticsStorage:
-    """Store and manage client analytics data."""
-
-    def __init__(self):
-        self.analytics_prefix = "analytics_"
-        self.retention_seconds = 7 * 24 * 3600  # 7 days retention
-        self.max_errors_per_session = 50  # Limit errors per session
-
-    def store_analytics(self, analytics_data: AnalyticsData, client_ip: str) -> str:
-        """Store analytics data and return unique ID."""
-        analytics_id = f"analytics_{int(time.time() * 1000)}_{hash(client_ip) % 10000}"
-
-        # Prepare data for storage
-        analytics_record = {
-            "id": analytics_id,
-            "timestamp": datetime.now().isoformat(),
-            "client_ip": client_ip,
-            "session_duration": analytics_data.session_duration,
-            "api_calls": analytics_data.api_calls,
-            "api_failure_rate": analytics_data.api_failure_rate,
-            "retry_attempts": analytics_data.retry_attempts,
-            "location_failures": analytics_data.location_failures,
-            "error_count": analytics_data.error_count,
-            "recent_errors": [
-                error.model_dump() for error in analytics_data.recent_errors[: self.max_errors_per_session]
-            ],
-            "app_version": analytics_data.app_version,
-            "platform": analytics_data.platform,
-            "user_agent": analytics_data.user_agent,
-            "session_id": analytics_data.session_id,
-        }
-
-        try:
-            # Store in Redis with expiration
-            redis_client.setex(
-                f"{self.analytics_prefix}{analytics_id}", self.retention_seconds, json.dumps(analytics_record)
-            )
-
-            # Add to analytics index for easy retrieval
-            redis_client.lpush("analytics_index", analytics_id)
-            redis_client.expire("analytics_index", self.retention_seconds)
-
-            # Update analytics summary stats
-            self._update_analytics_summary(analytics_record)
-
-            if DEBUG:
-                logger.debug(
-                    f"📊 ANALYTICS STORED: {analytics_id} | Errors: {analytics_data.error_count} | Duration: {analytics_data.session_duration}s"
-                )
-
-            return analytics_id
-
-        except (redis.RedisError, redis.ConnectionError) as redis_error:
-            logger.error(f"Redis error storing analytics data: {redis_error}")
-            raise HTTPException(status_code=503, detail="Storage service unavailable")
-        except (json.JSONEncodeError, TypeError) as encode_error:
-            logger.error(f"Invalid analytics data: {encode_error}")
-            raise HTTPException(status_code=400, detail="Invalid analytics data format")
-
-    def _update_analytics_summary(self, analytics_record: dict):
-        """Update analytics summary statistics."""
-        try:
-            # Get current summary
-            summary_key = "analytics_summary"
-            summary = redis_client.get(summary_key)
-            if summary:
-                summary_data = json.loads(summary)
-            else:
-                summary_data = {
-                    "total_sessions": 0,
-                    "total_api_calls": 0,
-                    "total_errors": 0,
-                    "avg_session_duration": 0,
-                    "avg_failure_rate": 0,
-                    "platforms": {},
-                    "error_types": {},
-                    "last_updated": datetime.now().isoformat(),
-                }
-
-            # Update counters
-            summary_data["total_sessions"] += 1
-            summary_data["total_api_calls"] += analytics_record["api_calls"]
-            summary_data["total_errors"] += analytics_record["error_count"]
-
-            # Update averages
-            total_sessions = summary_data["total_sessions"]
-            summary_data["avg_session_duration"] = (
-                summary_data["avg_session_duration"] * (total_sessions - 1) + analytics_record["session_duration"]
-            ) / total_sessions
-
-            # Update platform stats
-            platform = analytics_record.get("platform", "unknown")
-            summary_data["platforms"][platform] = summary_data["platforms"].get(platform, 0) + 1
-
-            # Update error type stats
-            for error in analytics_record["recent_errors"]:
-                error_type = error.get("error_type", "unknown")
-                summary_data["error_types"][error_type] = summary_data["error_types"].get(error_type, 0) + 1
-
-            # Store updated summary
-            redis_client.setex(summary_key, self.retention_seconds, json.dumps(summary_data))
-
-        except (redis.RedisError, redis.ConnectionError) as redis_error:
-            logger.error(f"Redis error updating analytics summary: {redis_error}")
-        except (json.JSONEncodeError, json.JSONDecodeError) as json_error:
-            logger.error(f"JSON error updating analytics summary: {json_error}")
-        except (KeyError, ValueError) as data_error:
-            logger.error(f"Data error updating analytics summary: {data_error}")
-
-    def get_analytics_summary(self) -> dict:
-        """Get analytics summary statistics."""
-        try:
-            summary_key = "analytics_summary"
-            summary = redis_client.get(summary_key)
-            if summary:
-                return json.loads(summary)
-            else:
-                return {
-                    "total_sessions": 0,
-                    "total_api_calls": 0,
-                    "total_errors": 0,
-                    "avg_session_duration": 0,
-                    "avg_failure_rate": 0,
-                    "platforms": {},
-                    "error_types": {},
-                    "last_updated": datetime.now().isoformat(),
-                }
-        except (redis.RedisError, redis.ConnectionError) as redis_error:
-            logger.error(f"Redis error getting analytics summary: {redis_error}")
-            return {"error": "Storage service unavailable"}
-        except (json.JSONDecodeError, ValueError) as decode_error:
-            logger.error(f"Data error getting analytics summary: {decode_error}")
-            return {"error": "Failed to parse analytics summary"}
-
-    def get_recent_analytics(self, limit: int = 100) -> List[dict]:
-        """Get recent analytics records."""
-        try:
-            # Get recent analytics IDs
-            analytics_ids = redis_client.lrange("analytics_index", 0, limit - 1)
-            analytics_records = []
-
-            for analytics_id in analytics_ids:
-                analytics_id = analytics_id.decode("utf-8")
-                record = redis_client.get(f"{self.analytics_prefix}{analytics_id}")
-                if record:
-                    analytics_records.append(json.loads(record))
-
-            return analytics_records
-
-        except Exception as e:
-            logger.error(f"Failed to get recent analytics: {e}")
-            return []
-
-    def get_analytics_by_session(self, session_id: str) -> List[dict]:
-        """Get analytics records for a specific session."""
-        try:
-            # This would require a more sophisticated indexing system
-            # For now, we'll search through recent analytics
-            recent_analytics = self.get_recent_analytics(1000)  # Get more records
-            session_analytics = [record for record in recent_analytics if record.get("session_id") == session_id]
-            return session_analytics
-
-        except (redis.RedisError, redis.ConnectionError) as redis_error:
-            logger.error(f"Redis error getting analytics by session: {redis_error}")
-            return []
-        except (json.JSONDecodeError, KeyError, ValueError) as data_error:
-            logger.error(f"Data error getting analytics by session: {data_error}")
-            return []
 
 
 # Lifespan event handler for startup and shutdown
@@ -840,46 +380,6 @@ else:
     logger.warning(f"⚠️  Data directory not found at {data_dir}")
 
 
-# Initialize Redis with security validation
-def create_redis_client(url: str):
-    """Create Redis client with security validation."""
-    from urllib.parse import urlparse
-
-    parsed = urlparse(url)
-    env = ENVIRONMENT  # Use ENVIRONMENT imported from config
-
-    # Enforce password in production
-    if env == "production" and not parsed.password:
-        logger.error("❌ Redis password required in production")
-        raise ValueError("Redis password required in production environment")
-
-    # Enforce SSL in production
-    # Note: redis.from_url handles SSL automatically for rediss:// URLs
-    if parsed.scheme != "rediss" and env == "production":
-        logger.warning(
-            "⚠️  Redis not using SSL (rediss://) in production! Consider using rediss:// for encrypted connections."
-        )
-        # In production, warn but don't fail (some providers handle SSL at network level)
-
-    # Create Redis client with SSL if needed
-    # Note: from_url handles SSL automatically when using rediss:// scheme
-    client = redis.from_url(url, decode_responses=True)
-
-    # Test connection
-    try:
-        client.ping()
-        if DEBUG:
-            logger.info("✅ Redis connection validated successfully")
-    except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as redis_error:
-        logger.error(f"❌ Redis connection failed: {redis_error}")
-        raise
-    except redis.AuthenticationError as auth_error:
-        logger.error(f"❌ Redis authentication failed - check password: {auth_error}")
-        raise
-
-    return client
-
-
 redis_client = create_redis_client(REDIS_URL)
 
 # Note: initialize_cache() is called in the lifespan handler (line 614)
@@ -889,71 +389,7 @@ redis_client = create_redis_client(REDIS_URL)
 # This provides better isolation, scaling, and eliminates event loop conflicts
 logger.debug("ℹ️  Background worker runs as separate service - no in-process worker needed")
 
-# Initialize analytics storage
-analytics_storage = AnalyticsStorage()
-if DEBUG:
-    logger.debug("📊 ANALYTICS STORAGE INITIALIZED: 7 days retention, 50 errors per session limit")
-
-# HTTP client configuration
-# LOW-004: Extract magic numbers to named constants
-# HTTP Request Timeouts (imported from config)
-
-
-# HTTP client for external API calls
-async def get_http_client():
-    """Get configured httpx client."""
-    return httpx.AsyncClient(timeout=HTTP_TIMEOUT)
-
-
-# check Firebase credentials
-try:
-    # Try to load from environment variable first (for Railway/production)
-    firebase_creds_json = os.getenv("FIREBASE_SERVICE_ACCOUNT") or os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
-    if firebase_creds_json:
-        import json
-
-        firebase_creds = json.loads(firebase_creds_json)
-        cred = credentials.Certificate(firebase_creds)
-    else:
-        # Fall back to file (for local development)
-        if os.path.exists("firebase-service-account.json"):
-            cred = credentials.Certificate("firebase-service-account.json")
-        else:
-            logger.warning("⚠️ No Firebase credentials found - Firebase features will be disabled")
-            cred = None
-
-    if cred:
-        firebase_admin.initialize_app(cred)
-        logger.info("✅ Firebase initialized successfully")
-except ValueError:
-    # Firebase app already initialized, skip
-    logger.info("Firebase app already initialized")
-except FileNotFoundError as file_error:
-    logger.error(f"❌ Firebase credentials file not found: {file_error}")
-    # Continue without Firebase - the app can still work without it
-except json.JSONDecodeError as json_error:
-    logger.error(f"❌ Invalid Firebase credentials JSON: {json_error}")
-    # Continue without Firebase - the app can still work without it
-except (IOError, PermissionError) as io_error:
-    logger.error(f"❌ Cannot read Firebase credentials: {io_error}")
-    # Continue without Firebase - the app can still work without it
-except Exception as e:
-    logger.error(f"❌ Unexpected error initializing Firebase: {e}")
-    # Continue without Firebase - the app can still work without it
-
-
-def verify_firebase_token(request: Request):
-    """Verify Firebase authentication token."""
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
-
-    id_token = auth_header.split(" ")[1]
-    try:
-        decoded_token = auth.verify_id_token(id_token)
-        return decoded_token  # Can use user ID, etc.
-    except Exception:
-        raise HTTPException(status_code=403, detail="Invalid token")
+initialize_firebase()
 
 
 # Middleware to fix Content-Type for static image files
@@ -989,19 +425,7 @@ async def fix_image_content_type_middleware(request: Request, call_next):
     return response
 
 
-# LOW-003: Request ID middleware for distributed tracing
-@app.middleware("http")
-async def request_id_middleware(request: Request, call_next):
-    """Add request ID for distributed tracing (LOW-003)."""
-    import uuid
-
-    request_id = str(uuid.uuid4())
-    request.state.request_id = request_id
-
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-
-    return response
+app.middleware("http")(request_id_middleware)
 
 
 @app.middleware("http")
@@ -1040,131 +464,9 @@ async def x_cache_header_middleware(request: Request, call_next):
     return response
 
 
-@app.middleware("http")
-async def log_requests_middleware(request: Request, call_next):
-    """Log all requests when DEBUG is enabled or verbosity is verbose."""
-    if DEBUG or LOG_VERBOSITY == "verbose":
-        start_time = time.time()
-        client_ip = get_client_ip(request)
-
-        # Log request details (only for non-public paths to reduce noise)
-        if request.url.path not in ["/", "/docs", "/openapi.json", "/redoc", "/health", "/rate-limit-status"]:
-            user_agent = request.headers.get("user-agent", "Unknown")
-            logger.debug(
-                f"🌐 REQUEST: {request.method} {request.url.path} | IP: {client_ip} | User-Agent: {sanitize_for_logging(user_agent, max_length=150)}"
-            )
-
-        # Process request
-        response = await call_next(request)
-
-        # Log response details (only for non-public paths to reduce noise)
-        process_time = time.time() - start_time
-        if request.url.path not in ["/", "/docs", "/openapi.json", "/redoc", "/health", "/rate-limit-status"]:
-            logger.debug(
-                f"✅ RESPONSE: {response.status_code} | {request.method} {request.url.path} | {process_time:.3f}s | IP: {client_ip}"
-            )
-
-        return response
-    else:
-        # Skip logging in production
-        return await call_next(request)
-
-
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    """Add security headers to all responses to prevent various attacks."""
-    # Enforce HTTPS in production (MED-001)
-    env = ENVIRONMENT  # Use ENVIRONMENT imported from config
-    if env == "production" and request.url.scheme != "https":
-        return JSONResponse(
-            status_code=400,
-            content={"error": "HTTPS required in production"},
-            headers={"Location": f"https://{request.url.netloc}{request.url.path}"},
-        )
-
-    response = await call_next(request)
-
-    # Prevent clickjacking
-    response.headers["X-Frame-Options"] = "DENY"
-
-    # Prevent MIME sniffing
-    response.headers["X-Content-Type-Options"] = "nosniff"
-
-    # XSS protection (legacy browsers)
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-
-    # Content Security Policy
-    # Note: Adjust based on your frontend requirements
-    csp_policy = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "img-src 'self' data: https:; "
-        "font-src 'self'; "
-        "connect-src 'self' https://weather.visualcrossing.com; "
-        "frame-ancestors 'none';"
-    )
-    response.headers["Content-Security-Policy"] = csp_policy
-
-    # HSTS (only if using HTTPS)
-    if request.url.scheme == "https":
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
-
-    # Referrer policy
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-
-    # Permissions policy (disable unnecessary browser features)
-    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-
-    return response
-
-
-@app.middleware("http")
-async def request_size_middleware(request: Request, call_next):
-    """Middleware to enforce request size limits and validate content types."""
-    client_ip = get_client_ip(request)
-
-    # Only apply to POST/PUT/PATCH requests with bodies
-    if request.method in ["POST", "PUT", "PATCH"]:
-        content_type = request.headers.get("content-type", "")
-        content_length = request.headers.get("content-length", "unknown")
-
-        # Check content type for JSON endpoints
-        if request.url.path.startswith("/analytics") and not content_type.startswith("application/json"):
-            logger.warning(f"⚠️  INVALID CONTENT-TYPE: {content_type} | IP={client_ip} | Path={request.url.path}")
-            return JSONResponse(
-                status_code=415,
-                content={
-                    "error": "Unsupported Media Type",
-                    "message": "Content-Type must be application/json for this endpoint",
-                    "path": request.url.path,
-                },
-            )
-
-        # Check content length
-        max_size = 1024 * 1024  # 1MB default limit
-        if content_length != "unknown":
-            try:
-                content_length_int = int(content_length)
-                if content_length_int > max_size:
-                    logger.warning(
-                        f"⚠️  REQUEST TOO LARGE: {content_length_int} bytes | IP={client_ip} | Path={request.url.path}"
-                    )
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "error": "Payload Too Large",
-                            "message": f"Request body too large. Maximum size is {max_size} bytes",
-                            "path": request.url.path,
-                        },
-                    )
-            except ValueError:
-                logger.warning(
-                    f"⚠️  INVALID CONTENT-LENGTH: {content_length} | IP={client_ip} | Path={request.url.path}"
-                )
-
-    response = await call_next(request)
-    return response
+app.middleware("http")(log_requests_middleware)
+app.middleware("http")(add_security_headers)
+app.middleware("http")(request_size_middleware)
 
 
 @app.middleware("http")
@@ -1385,55 +687,13 @@ async def verify_token_middleware(request: Request, call_next):
     return response
 
 
-@app.middleware("http")
-async def health_check_cors_middleware(request: Request, call_next):
-    """Custom middleware to handle CORS for health check requests from Render."""
-    # Check if this is a health check request
-    if request.url.path == "/health":
-        # Add CORS headers for health check requests
-        response = await call_next(request)
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "authorization, content-type, accept, x-requested-with"
-        response.headers["Access-Control-Max-Age"] = "600"
-        return response
-
-    # For all other requests, proceed normally
-    return await call_next(request)
-
-
-# Configure CORS
-def get_cors_origins():
-    """Parse CORS origins from environment variable or use defaults."""
-    if CORS_ORIGINS:
-        # Split by comma and strip whitespace
-        origins = [origin.strip() for origin in CORS_ORIGINS.split(",") if origin.strip()]
-        return origins
-    else:
-        # Default origins for development
-        default_origins = [
-            "http://localhost:3000",  # Local development
-            "http://localhost:5173",  # Vite default port
-            "https://temphist-develop.up.railway.app",  # development site on Railway
-            "https://temphist-api-staging.up.railway.app",  # staging site on Railway
-        ]
-        return default_origins
-
-
-def get_cors_origin_regex():
-    """Parse CORS origin regex from environment variable or use default."""
-    if CORS_ORIGIN_REGEX:
-        return CORS_ORIGIN_REGEX
-    else:
-        # Default regex for temphist.com and all its subdomains
-        default_regex = r"^https://(.*\.)?temphist\.com$"
-        return default_regex
+app.middleware("http")(health_check_cors_middleware)
 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_cors_origins(),
-    allow_origin_regex=get_cors_origin_regex(),
+    allow_origins=get_cors_origins(CORS_ORIGINS),
+    allow_origin_regex=get_cors_origin_regex(CORS_ORIGIN_REGEX),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=[
