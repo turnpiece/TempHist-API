@@ -23,7 +23,7 @@ def is_admin_path(path: str, method: str) -> bool:
         return True
     if path == "/cache/info":
         return True
-    if path == "/cache-warm" and method == "POST":
+    if path.startswith("/cache-warm"):
         return True
     return False
 

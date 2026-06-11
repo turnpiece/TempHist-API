@@ -60,7 +60,7 @@ IP_BLACKLIST = [ip.strip() for ip in os.getenv("IP_BLACKLIST", "").split(",") if
 # Usage Tracking Configuration
 USAGE_TRACKING_ENABLED = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", "7"))
-POPULARITY_WINDOW_DAYS = int(os.getenv("POPULARITY_WINDOW_DAYS", "30"))
+POPULARITY_WINDOW_DAYS = int(os.getenv("POPULARITY_WINDOW_DAYS", "90"))
 # Default limit when the popular endpoint is called without ?limit=.
 # Set high — clients that need fewer should pass ?limit=N explicitly.
 # The hard cap MAX_LIMIT=500 in the router is the real safety net.

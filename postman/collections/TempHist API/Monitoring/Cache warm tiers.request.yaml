@@ -1,0 +1,11 @@
+$kind: http-request
+name: Cache warm tiers
+url: "{{baseURL}}/cache-warm/tiers"
+method: GET
+headers:
+  - key: ""
+    value: ""
+    disabled: true
+  - key: X-Admin-Key
+    value: "{{ADMIN_API_KEY}}"
+order: 5820

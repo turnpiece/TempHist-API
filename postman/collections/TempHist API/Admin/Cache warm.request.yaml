@@ -1,0 +1,7 @@
+$kind: http-request
+name: Cache warm
+url: "{{baseURL}}/cache-warm"
+method: POST
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
+order: 3307701295924157

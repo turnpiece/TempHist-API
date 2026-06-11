@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, Query
 
 from cache.accessors import get_cache_invalidator, get_cache_stats, get_cache_warmer, get_job_manager
 from cache.core import CACHE_INVALIDATION_ENABLED
-from cache.warming import CACHE_STATS_ENABLED, CACHE_WARMING_ENABLED, CACHE_WARMING_INTERVAL_HOURS
+from cache.warming import (
+    CACHE_STATS_ENABLED,
+    CACHE_WARMING_ENABLED,
+    CACHE_WARMING_INTERVAL_HOURS,
+    CACHE_WARMING_TIER1_SIZE,
+    CACHE_WARMING_TIER2_MAX,
+)
 from utils.admin_auth import verify_admin_key
 
 logger = logging.getLogger(__name__)
@@ -65,6 +71,39 @@ async def get_locations_to_warm():
         "locations": get_cache_warmer().get_locations_to_warm(),
         "dates": get_cache_warmer().get_dates_to_warm(),
         "month_days": get_cache_warmer().get_month_days_to_warm(),
+    }
+
+
+@router.get("/cache-warm/tiers")
+async def get_cache_warming_tiers():
+    """Inspect current Tier 1 and Tier 2 prewarm sets.
+
+    Tier 1 ranks locations by a recency-weighted score over 7/30/90-day windows
+    (weights 0.5/0.3/0.2). Tier 2 catches locations seen in the last 24 hours
+    that didn't make Tier 1, ensuring "yesterday's" locations don't go fully
+    cold.
+
+    Refreshes the snapshot if it hasn't been computed yet this process.
+    """
+    if not CACHE_WARMING_ENABLED or not get_cache_warmer():
+        return {"status": "disabled", "message": "Cache warming is not enabled"}
+
+    warmer = get_cache_warmer()
+    if not warmer.last_tier1 and not warmer.last_tier2:
+        warmer.get_locations_to_warm()
+
+    return {
+        "tier1": {
+            "size": len(warmer.last_tier1),
+            "max": CACHE_WARMING_TIER1_SIZE,
+            "locations": warmer.last_tier1,
+        },
+        "tier2": {
+            "size": len(warmer.last_tier2),
+            "max": CACHE_WARMING_TIER2_MAX,
+            "locations": warmer.last_tier2,
+        },
+        "window_days": {"tier1_scoring": [7, 30, 90], "tier2_ttl_hours": 24},
     }
 
 

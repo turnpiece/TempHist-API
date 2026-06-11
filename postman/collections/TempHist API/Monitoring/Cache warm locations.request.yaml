@@ -1,0 +1,10 @@
+$kind: http-request
+url: "{{baseURL}}/cache-warm/locations"
+method: GET
+headers:
+  - key: ""
+    value: ""
+    disabled: true
+  - key: X-Admin-Key
+    value: "{{ADMIN_API_KEY}}"
+order: 5885

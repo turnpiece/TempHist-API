@@ -1,4 +1,7 @@
 $kind: http-request
+name: Cache warm status
 url: "{{baseURL}}/cache-warm/status"
 method: GET
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 order: 5000

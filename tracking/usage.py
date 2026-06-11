@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
@@ -8,6 +9,12 @@ import redis
 from config import POPULARITY_WINDOW_DAYS, USAGE_TRACKING_ENABLED
 
 logger = logging.getLogger(__name__)
+
+# Sorted set tracking locations seen in roughly the last 24 hours. Score is the
+# epoch-second timestamp of the most recent selection; entries are pruned by
+# ZREMRANGEBYSCORE on each read, so no Redis TTL is needed.
+RECENT_24H_KEY = "recent_selections:24h"
+RECENT_24H_SECONDS = 24 * 3600
 
 
 class LocationUsageTracker:
@@ -35,6 +42,14 @@ class LocationUsageTracker:
         daily_key = f"selections:{today}"
         self.redis_client.zincrby(daily_key, 1, location_id)
         self.redis_client.expire(daily_key, (POPULARITY_WINDOW_DAYS + 5) * 86400)
+
+        # Tier 2 (24h) recency set — score is current epoch seconds, so a more
+        # recent selection always overwrites an older one. Pruned lazily on read.
+        try:
+            self.redis_client.zadd(RECENT_24H_KEY, {location_id: int(time.time())})
+        except Exception as _e:
+            logger.debug("Could not update 24h recency set for %s: %s", location_id, _e)
+
         logger.debug("selection recorded: uid=%s location=%s dedup_key=%s", user_uid, location_id, dedup_key)
 
     def get_popular_from_selections(self, limit: int = 20, days: int = 30) -> List[Tuple[str, int]]:
@@ -57,6 +72,104 @@ class LocationUsageTracker:
         self.redis_client.delete(tmp_key)
 
         return [(item.decode() if isinstance(item, bytes) else item, int(score)) for item, score in raw]
+
+    def get_weighted_popular(self, limit: int = 150) -> List[Tuple[str, float]]:
+        """Return ranked location IDs scored by recency-weighted selection counts.
+
+        score = 0.5 * selections_last_7d
+              + 0.3 * selections_last_30d
+              + 0.2 * selections_last_90d
+
+        Windows are cumulative (90d includes 30d includes 7d) to match the
+        spec on issue #52 — recent activity is weighted strongly without
+        eliminating long-tail signal.
+        """
+        if limit <= 0:
+            return []
+
+        windows = [(7, 0.5), (30, 0.3), (90, 0.2)]
+        weighted_keys: dict = {}
+        tmp_keys: List[str] = []
+
+        try:
+            for days, weight in windows:
+                daily_keys = []
+                for i in range(days):
+                    date = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y%m%d")
+                    key = f"selections:{date}"
+                    if self.redis_client.exists(key):
+                        daily_keys.append(key)
+                if not daily_keys:
+                    continue
+                tmp_key = f"selections:weighted:window:{days}d:tmp"
+                self.redis_client.zunionstore(tmp_key, daily_keys, aggregate="SUM")
+                self.redis_client.expire(tmp_key, 60)
+                weighted_keys[tmp_key] = weight
+                tmp_keys.append(tmp_key)
+
+            if not weighted_keys:
+                return []
+
+            # redis-py applies per-key weights when `keys` is a {key: weight} dict.
+            final_key = "selections:weighted:tmp"
+            self.redis_client.zunionstore(final_key, weighted_keys, aggregate="SUM")
+            self.redis_client.expire(final_key, 60)
+            tmp_keys.append(final_key)
+
+            raw = self.redis_client.zrevrange(final_key, 0, limit - 1, withscores=True)
+        finally:
+            if tmp_keys:
+                self.redis_client.delete(*tmp_keys)
+
+        return [
+            (item.decode() if isinstance(item, bytes) else item, float(score))
+            for item, score in raw
+        ]
+
+    def get_weighted_popular_display_strings(self, limit: int = 150) -> List[Tuple[str, str, float]]:
+        """Return (location_id, display_string, score) for top weighted-popular locations.
+
+        IDs without a stored display string are skipped (same behaviour as
+        get_popular_display_strings).
+        """
+        ranked = self.get_weighted_popular(limit=limit * 2)
+        results: List[Tuple[str, str, float]] = []
+        for location_id, score in ranked:
+            raw = self.redis_client.get(f"loc_display:{location_id}")
+            if raw:
+                display = raw.decode() if isinstance(raw, bytes) else raw
+                results.append((location_id, display, score))
+            if len(results) >= limit:
+                break
+        return results
+
+    def prune_recent_active(self) -> None:
+        """Drop entries from the 24h recency set older than now - 24h."""
+        if not USAGE_TRACKING_ENABLED:
+            return
+        try:
+            cutoff = int(time.time()) - RECENT_24H_SECONDS
+            self.redis_client.zremrangebyscore(RECENT_24H_KEY, "-inf", cutoff)
+        except Exception as _e:
+            logger.debug("Could not prune 24h recency set: %s", _e)
+
+    def get_recent_active_locations(self) -> List[Tuple[str, int]]:
+        """Return (location_id, last_seen_epoch) for locations active in last 24h.
+
+        Prunes stale entries first so callers don't see anything older than 24h.
+        """
+        if not USAGE_TRACKING_ENABLED:
+            return []
+        self.prune_recent_active()
+        try:
+            raw = self.redis_client.zrevrange(RECENT_24H_KEY, 0, -1, withscores=True)
+        except Exception as _e:
+            logger.debug("Could not read 24h recency set: %s", _e)
+            return []
+        return [
+            (item.decode() if isinstance(item, bytes) else item, int(score))
+            for item, score in raw
+        ]
 
     def store_location_display(self, location_id: str, display_string: str) -> None:
         """Persist a human-readable display string for a location ID.

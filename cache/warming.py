@@ -23,7 +23,6 @@ from config import (
     API_ACCESS_TOKEN,
     BASE_URL,
     DEBUG,
-    POPULARITY_WINDOW_DAYS,
     USAGE_TRACKING_ENABLED,
 )
 
@@ -37,7 +36,19 @@ CACHE_WARMING_ENABLED = os.getenv("CACHE_WARMING_ENABLED", "true").lower() == "t
 CACHE_WARMING_INTERVAL_HOURS = int(os.getenv("CACHE_WARMING_INTERVAL_HOURS", "4"))
 CACHE_WARMING_DAYS_BACK = int(os.getenv("CACHE_WARMING_DAYS_BACK", "7"))
 CACHE_WARMING_CONCURRENT_REQUESTS = int(os.getenv("CACHE_WARMING_CONCURRENT_REQUESTS", "3"))
-CACHE_WARMING_MAX_LOCATIONS = int(os.getenv("CACHE_WARMING_MAX_LOCATIONS", "200"))
+
+# Tier 1: top locations by recency-weighted score (7d/30d/90d), warmed every
+# cycle. CACHE_WARMING_MAX_LOCATIONS is preserved as a back-compat alias so
+# existing env overrides keep working.
+CACHE_WARMING_TIER1_SIZE = int(
+    os.getenv("CACHE_WARMING_TIER1_SIZE", os.getenv("CACHE_WARMING_MAX_LOCATIONS", "150"))
+)
+# Tier 2: locations seen in the last 24h that didn't make Tier 1. Cap prevents
+# a traffic spike from blowing up cycle duration.
+CACHE_WARMING_TIER2_MAX = int(os.getenv("CACHE_WARMING_TIER2_MAX", "100"))
+
+# Back-compat alias — some imports still reference this name.
+CACHE_WARMING_MAX_LOCATIONS = CACHE_WARMING_TIER1_SIZE
 
 # ---------------------------------------------------------------------------
 # Cache statistics configuration
@@ -67,45 +78,109 @@ class CacheWarmer:
             "failed_warmed": 0,
             "last_warming_duration": 0,
         }
+        # Populated by get_locations_to_warm so /cache-warm/tiers can report
+        # the current tier composition without recomputing.
+        self.last_tier1: List[Dict] = []
+        self.last_tier2: List[Dict] = []
 
     def get_locations_to_warm(self) -> List[str]:
         locations: List[str] = []
         seen_normalized: set = set()
+        tier1_records: List[Dict] = []
+        tier2_records: List[Dict] = []
+        tier1_ids: set = set()
 
-        def add_location(candidate: str) -> None:
+        def add_location(candidate: str) -> bool:
             if not candidate:
-                return
+                return False
             normalized = normalize_location_for_cache(candidate)
             if normalized in seen_normalized:
-                return
+                return False
             seen_normalized.add(normalized)
             locations.append(candidate)
+            return True
 
-        # Primary source: selections-based popular list (includes non-preapproved
-        # locations; ranked most-selected first).  Only used when there is enough
-        # signal to trust the ranking.
+        # ------------------------------------------------------------------
+        # Tier 1 — top locations by recency-weighted score (7d/30d/90d)
+        # ------------------------------------------------------------------
         if self.usage_tracker and USAGE_TRACKING_ENABLED:
-            strings = self.usage_tracker.get_popular_display_strings(
-                limit=CACHE_WARMING_MAX_LOCATIONS * 2,
-                days=POPULARITY_WINDOW_DAYS,
+            weighted = self.usage_tracker.get_weighted_popular_display_strings(
+                limit=CACHE_WARMING_TIER1_SIZE
             )
-            for loc in strings:
-                add_location(loc)
-            if DEBUG and strings:
-                logger.info(f"🔥 CACHE WARMING: {len(locations)} locations from selections signal")
+            for location_id, display, score in weighted:
+                if add_location(display):
+                    tier1_ids.add(location_id)
+                    tier1_records.append({"id": location_id, "display": display, "score": score})
+            if DEBUG and weighted:
+                logger.info(f"🔥 CACHE WARMING: {len(tier1_records)} Tier 1 locations from weighted signal")
 
-        # Pad with preapproved list when signal is absent or insufficient.
-        if len(locations) < CACHE_WARMING_MAX_LOCATIONS:
+        # Pad Tier 1 with preapproved list when signal is sparse — preserves
+        # the safety net the old code provided.
+        if len(locations) < CACHE_WARMING_TIER1_SIZE:
             preapproved = self.get_preapproved_locations()
             for loc in preapproved:
-                add_location(loc)
+                if len(locations) >= CACHE_WARMING_TIER1_SIZE:
+                    break
+                if add_location(loc):
+                    tier1_records.append({"id": None, "display": loc, "score": None, "source": "preapproved"})
             if DEBUG:
-                logger.info(f"🔥 CACHE WARMING: padded to {len(locations)} with preapproved list")
+                logger.info(f"🔥 CACHE WARMING: padded Tier 1 to {len(locations)} with preapproved list")
 
-        final_locations = locations[:CACHE_WARMING_MAX_LOCATIONS]
+        # Trim Tier 1 to its budget (in case weighted signal overflowed).
+        if len(locations) > CACHE_WARMING_TIER1_SIZE:
+            locations = locations[:CACHE_WARMING_TIER1_SIZE]
+            tier1_records = tier1_records[:CACHE_WARMING_TIER1_SIZE]
+            seen_normalized = {normalize_location_for_cache(loc) for loc in locations}
+
+        # ------------------------------------------------------------------
+        # Tier 2 — locations seen in the last 24h that didn't make Tier 1
+        # ------------------------------------------------------------------
+        if self.usage_tracker and USAGE_TRACKING_ENABLED and CACHE_WARMING_TIER2_MAX > 0:
+            recent = self.usage_tracker.get_recent_active_locations()
+            for location_id, last_seen in recent:
+                if location_id in tier1_ids:
+                    continue
+                raw_display = self.redis_client.get(f"loc_display:{location_id}") if self.redis_client else None
+                if not raw_display:
+                    continue
+                display = raw_display.decode() if isinstance(raw_display, bytes) else raw_display
+                if add_location(display):
+                    tier2_records.append({"id": location_id, "display": display, "last_seen": last_seen})
+                if len(tier2_records) >= CACHE_WARMING_TIER2_MAX:
+                    break
+            if DEBUG and tier2_records:
+                logger.info(f"🔥 CACHE WARMING: {len(tier2_records)} Tier 2 locations from 24h recency")
+
+        # Snapshot tiers for inspection endpoints.
+        self.last_tier1 = tier1_records
+        self.last_tier2 = tier2_records
+
         if DEBUG:
-            logger.info(f"🔥 CACHE WARMING: warming {len(final_locations)} locations total")
-        return final_locations
+            logger.info(
+                f"🔥 CACHE WARMING: warming {len(locations)} locations total "
+                f"(tier1={len(tier1_records)}, tier2={len(tier2_records)})"
+            )
+        return locations
+
+    def classify_location_tier(self, location: str) -> str:
+        """Return 'tier1', 'tier2', or 'cold' for a display-string location.
+
+        Matches against the snapshot taken on the last get_locations_to_warm
+        call, normalised via normalize_location_for_cache so trivial spelling
+        differences don't matter. Returns 'cold' if no snapshot exists yet.
+        """
+        if not location:
+            return "cold"
+        normalized = normalize_location_for_cache(location)
+        for record in self.last_tier1:
+            display = record.get("display")
+            if display and normalize_location_for_cache(display) == normalized:
+                return "tier1"
+        for record in self.last_tier2:
+            display = record.get("display")
+            if display and normalize_location_for_cache(display) == normalized:
+                return "tier2"
+        return "cold"
 
     def get_preapproved_locations(self) -> List[str]:
         try:
@@ -402,7 +477,10 @@ class CacheWarmer:
                 "interval_hours": CACHE_WARMING_INTERVAL_HOURS,
                 "days_back": CACHE_WARMING_DAYS_BACK,
                 "concurrent_requests": CACHE_WARMING_CONCURRENT_REQUESTS,
-                "max_locations": CACHE_WARMING_MAX_LOCATIONS,
+                "tier1_size": CACHE_WARMING_TIER1_SIZE,
+                "tier2_max": CACHE_WARMING_TIER2_MAX,
+                # Back-compat: keep old key name pointing at the new Tier 1 budget.
+                "max_locations": CACHE_WARMING_TIER1_SIZE,
             },
         }
 

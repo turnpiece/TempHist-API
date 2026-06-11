@@ -14,6 +14,28 @@ from models import AnalyticsData
 
 _RT_MAX_SAMPLES = 10_000  # cap per Redis list
 _SELECTION_METHODS = ("own_location", "carousel", "recent", "popular", "search")
+_LOCATION_TIERS = ("tier1", "tier2", "cold")
+
+
+def _classify_location_tier(location: str | None) -> str:
+    """Return tier1/tier2/cold for a canonical location string.
+
+    Uses the cache warmer's last-known tier snapshot. Returns 'cold' when no
+    warmer is available, no snapshot exists, or the location isn't in either
+    tier — i.e. it would be a cold-cache request.
+    """
+    if not location:
+        return "cold"
+    try:
+        # Imported lazily to avoid a circular import at module load.
+        from cache.accessors import get_cache_warmer
+
+        warmer = get_cache_warmer()
+        if warmer is None:
+            return "cold"
+        return warmer.classify_location_tier(location)
+    except Exception:
+        return "cold"
 
 
 def _compute_percentiles(values: List[int]) -> dict:
@@ -77,6 +99,7 @@ class AnalyticsStorage:
             "canonical_location": analytics_data.canonical_location,
             "requested_location": analytics_data.requested_location,
             "selection_method": analytics_data.selection_method,
+            "location_tier": _classify_location_tier(analytics_data.canonical_location),
         }
 
         try:
@@ -154,6 +177,12 @@ class AnalyticsStorage:
             platform = analytics_record.get("platform", "unknown")
             summary_data["platforms"][platform] = summary_data["platforms"].get(platform, 0) + 1
 
+            # Update location-tier stats
+            tier = analytics_record.get("location_tier", "cold")
+            if "location_tiers" not in summary_data:
+                summary_data["location_tiers"] = {}
+            summary_data["location_tiers"][tier] = summary_data["location_tiers"].get(tier, 0) + 1
+
             # Update error type stats
             for error in analytics_record["recent_errors"]:
                 error_type = error.get("error_type", "unknown")
@@ -180,6 +209,10 @@ class AnalyticsStorage:
                         self._push_rt("analytics:rt:cache:hit", rt_int)
                     elif cache_hit is False:
                         self._push_rt("analytics:rt:cache:miss", rt_int)
+
+                    tier = analytics_record.get("location_tier")
+                    if tier in _LOCATION_TIERS:
+                        self._push_rt(f"analytics:rt:tier:{tier}", rt_int)
                 except (TypeError, ValueError):
                     pass
 
@@ -251,6 +284,12 @@ class AnalyticsStorage:
                 if stats["sample_size"] > 0:
                     by_method[method] = stats
 
+            by_tier = {}
+            for tier in _LOCATION_TIERS:
+                stats = self._load_rt_percentiles(f"analytics:rt:tier:{tier}")
+                if stats["sample_size"] > 0:
+                    by_tier[tier] = stats
+
             summary_data["response_times"] = {
                 "overall": self._load_rt_percentiles("analytics:rt:all"),
                 "by_selection_method": by_method,
@@ -258,6 +297,7 @@ class AnalyticsStorage:
                     "hit": self._load_rt_percentiles("analytics:rt:cache:hit"),
                     "miss": self._load_rt_percentiles("analytics:rt:cache:miss"),
                 },
+                "by_location_tier": by_tier,
             }
 
             return summary_data

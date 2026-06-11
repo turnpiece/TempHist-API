@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tracking.usage import LocationUsageTracker
+from tracking.usage import RECENT_24H_KEY, LocationUsageTracker
 
 
 @pytest.fixture
@@ -228,3 +228,132 @@ class TestGeoIndex:
 
         # Should not raise; returns 0 on failure
         assert tracker.seed_geo_index([("london", 51.5072, -0.1276)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Weighted popular scoring + 24h recency set (issue #52)
+# ---------------------------------------------------------------------------
+
+
+class TestGetWeightedPopular:
+    def test_returns_empty_when_no_keys(self, tracker, mock_redis):
+        mock_redis.exists.return_value = 0  # no daily keys for any window
+
+        result = tracker.get_weighted_popular(limit=10)
+
+        assert result == []
+        mock_redis.zunionstore.assert_not_called()
+
+    def test_uses_recency_weights(self, tracker, mock_redis):
+        """Final zunionstore must apply weights [0.5, 0.3, 0.2] via a {key: weight} dict."""
+        mock_redis.exists.return_value = 1
+        mock_redis.zrevrange.return_value = []
+
+        tracker.get_weighted_popular(limit=10)
+
+        # The final call is the one whose second arg is a dict (weighted union).
+        weighted_call = next(
+            call for call in mock_redis.zunionstore.call_args_list if isinstance(call.args[1], dict)
+        )
+        weights_by_window = {k: v for k, v in weighted_call.args[1].items()}
+        assert sorted(weights_by_window.values()) == [0.2, 0.3, 0.5]
+        assert weighted_call.kwargs["aggregate"] == "SUM"
+
+    def test_ranks_by_weighted_score(self, tracker, mock_redis):
+        mock_redis.exists.return_value = 1
+        mock_redis.zrevrange.return_value = [
+            (b"london", 50.0),
+            (b"paris", 20.0),
+        ]
+
+        result = tracker.get_weighted_popular(limit=2)
+
+        assert result[0] == ("london", 50.0)
+        assert result[1] == ("paris", 20.0)
+
+    def test_cleans_up_tmp_keys(self, tracker, mock_redis):
+        mock_redis.exists.return_value = 1
+        mock_redis.zrevrange.return_value = []
+
+        tracker.get_weighted_popular(limit=5)
+
+        # All four tmp keys should be deleted (3 window unions + final weighted union).
+        mock_redis.delete.assert_called_once()
+        deleted_keys = mock_redis.delete.call_args[0]
+        assert "selections:weighted:tmp" in deleted_keys
+        assert any("window:7d" in k for k in deleted_keys)
+        assert any("window:30d" in k for k in deleted_keys)
+        assert any("window:90d" in k for k in deleted_keys)
+
+    def test_zero_limit_short_circuits(self, tracker, mock_redis):
+        result = tracker.get_weighted_popular(limit=0)
+
+        assert result == []
+        mock_redis.zunionstore.assert_not_called()
+
+
+class TestRecent24hSet:
+    def test_record_selection_updates_24h_set(self, tracker, mock_redis):
+        mock_redis.exists.return_value = 0
+
+        tracker.record_selection("london", "user1")
+
+        # zadd call shape: zadd(key, {member: score})
+        mock_redis.zadd.assert_called_once()
+        args, _ = mock_redis.zadd.call_args
+        assert args[0] == RECENT_24H_KEY
+        assert "london" in args[1]
+        # Score should be epoch seconds — a positive int reasonably close to now.
+        assert isinstance(args[1]["london"], int)
+        assert args[1]["london"] > 0
+
+    def test_record_selection_swallows_zadd_error(self, tracker, mock_redis):
+        mock_redis.exists.return_value = 0
+        mock_redis.zadd.side_effect = Exception("boom")
+
+        # Must not raise — the primary ZINCRBY still succeeded.
+        tracker.record_selection("london", "user1")
+
+    def test_get_recent_active_locations_prunes_first(self, tracker, mock_redis):
+        mock_redis.zrevrange.return_value = [(b"london", 1700000000.0)]
+
+        tracker.get_recent_active_locations()
+
+        mock_redis.zremrangebyscore.assert_called_once()
+        args = mock_redis.zremrangebyscore.call_args[0]
+        assert args[0] == RECENT_24H_KEY
+        assert args[1] == "-inf"
+        # cutoff is now - 24h, so a sensible positive number.
+        assert args[2] > 0
+
+    def test_get_recent_active_locations_returns_id_and_ts(self, tracker, mock_redis):
+        mock_redis.zrevrange.return_value = [
+            (b"london", 1700000000.0),
+            ("paris", 1699999000.0),  # already a str — also supported
+        ]
+
+        result = tracker.get_recent_active_locations()
+
+        assert result == [("london", 1700000000), ("paris", 1699999000)]
+
+    def test_get_recent_active_locations_swallows_redis_error(self, tracker, mock_redis):
+        mock_redis.zrevrange.side_effect = Exception("boom")
+
+        result = tracker.get_recent_active_locations()
+
+        assert result == []
+
+
+class TestGetWeightedPopularDisplayStrings:
+    def test_returns_id_display_score_tuples(self, tracker, mock_redis):
+        mock_redis.exists.return_value = 1
+        mock_redis.zrevrange.return_value = [
+            (b"london", 50.0),
+            (b"paris", 20.0),
+        ]
+        # loc_display:london present, loc_display:paris missing → paris skipped
+        mock_redis.get.side_effect = lambda key: b"London, England, UK" if key == "loc_display:london" else None
+
+        result = tracker.get_weighted_popular_display_strings(limit=10)
+
+        assert result == [("london", "London, England, UK", 50.0)]
