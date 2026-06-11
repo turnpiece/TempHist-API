@@ -113,6 +113,7 @@ async def test_get_temperature_series_success():
 
     mock_redis = MagicMock()
     mock_redis.get.return_value = None
+    mock_redis.mget.side_effect = lambda keys: [None] * len(keys)
     with patch("utils.weather_data.fetch_weather_batch", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = {"2024-06-02": mock_weather_data}
         result = await get_temperature_series("London", 6, 2, mock_redis)
@@ -134,6 +135,7 @@ async def test_get_temperature_series_partial_failures():
 
     mock_redis = MagicMock()
     mock_redis.get.return_value = None
+    mock_redis.mget.side_effect = lambda keys: [None] * len(keys)
     with patch("utils.weather_data.fetch_weather_batch", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = mock_weather_data
         result = await get_temperature_series("London", 6, 2, mock_redis)

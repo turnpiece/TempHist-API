@@ -9,7 +9,7 @@ from typing import Dict, List
 import redis
 
 from cache.accessors import get_cache_stats
-from cache.core import get_cache_value, set_cache_value
+from cache.core import get_cache_value, mget_cache_values, set_cache_value
 from cache.keys import generate_cache_key, get_weather_cache_key
 from config import (
     CACHE_ENABLED,
@@ -216,41 +216,43 @@ async def get_temperature_series(
     uncached_years = []
     uncached_date_strs = []
     year_to_date_str = {}
-    for year in years:
-        logger.debug("get_temperature_series year: %d", year)
-        date_str = f"{year}-{month:02d}-{day:02d}"
-        cache_key = generate_cache_key("weather", location, date_str)
+    date_strs = [f"{year}-{month:02d}-{day:02d}" for year in years]
+    cache_keys = [generate_cache_key("weather", location, date_str) for date_str in date_strs]
+    for year, date_str in zip(years, date_strs):
         year_to_date_str[year] = date_str
 
-        if CACHE_ENABLED:
-            cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
-            if cached_data:
-                if DEBUG:
-                    logger.debug(
-                        "✅ SERVING CACHED TEMPERATURE: %s | Location: %s | Year: %d",
-                        cache_key,
-                        location,
-                        year,
-                    )
-                data_str = cached_data.decode("utf-8") if isinstance(cached_data, bytes) else cached_data
+    if CACHE_ENABLED:
+        cached_values = mget_cache_values(
+            cache_keys, redis_client, "weather", location, get_cache_stats()
+        )
+    else:
+        cached_values = [None] * len(years)
+
+    for year, date_str, cache_key, cached_data in zip(years, date_strs, cache_keys, cached_values):
+        logger.debug("get_temperature_series year: %d", year)
+        if cached_data:
+            if DEBUG:
+                logger.debug(
+                    "✅ SERVING CACHED TEMPERATURE: %s | Location: %s | Year: %d",
+                    cache_key,
+                    location,
+                    year,
+                )
+            data_str = cached_data.decode("utf-8") if isinstance(cached_data, bytes) else cached_data
+            try:
                 weather = json.loads(data_str)
-                try:
-                    temp = weather["days"][0]["temp"]
-                    if temp is not None:
-                        data.append({"x": year, "y": temp})
-                    else:
-                        logger.debug("Temperature is None for %d, marking as missing.", year)
-                        track_missing_year(missing_years, year, "no_temperature_data")
-                except (KeyError, IndexError, TypeError) as e:
-                    logger.error("Error processing cached data for %s: %s", date_str, e)
-                    track_missing_year(missing_years, year, "data_processing_error")
-                continue
-            else:
-                uncached_years.append(year)
-                uncached_date_strs.append(date_str)
-        else:
-            uncached_years.append(year)
-            uncached_date_strs.append(date_str)
+                temp = weather["days"][0]["temp"]
+                if temp is not None:
+                    data.append({"x": year, "y": temp})
+                else:
+                    logger.debug("Temperature is None for %d, marking as missing.", year)
+                    track_missing_year(missing_years, year, "no_temperature_data")
+            except (KeyError, IndexError, TypeError) as e:
+                logger.error("Error processing cached data for %s: %s", date_str, e)
+                track_missing_year(missing_years, year, "data_processing_error")
+            continue
+        uncached_years.append(year)
+        uncached_date_strs.append(date_str)
 
     if uncached_date_strs:
         batch_results = await fetch_weather_batch(location, uncached_date_strs, redis_client)

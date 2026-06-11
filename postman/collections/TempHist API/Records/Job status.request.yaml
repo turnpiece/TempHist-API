@@ -1,4 +1,5 @@
 $kind: http-request
+name: Job status
 url: "{{baseURL}}/v1/jobs/record_computation_REPLACE_WITH_JOB_ID"
 method: GET
 order: 10000

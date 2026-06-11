@@ -621,15 +621,19 @@ class CacheInvalidator:
                 "v1_records_trend": "records:*:trend",
                 "v1_records_summary": "records:*:summary",
             }
+            max_keys_per_pattern = 10000
+            scan_count_hint = 500
             pattern_counts = {}
             for name, pattern in patterns.items():
                 try:
                     matching_keys = []
                     cursor = 0
                     while cursor != 0 or len(matching_keys) == 0:
-                        cursor, keys = self.redis_client.scan(cursor, match=pattern, count=100)
+                        cursor, keys = self.redis_client.scan(
+                            cursor, match=pattern, count=scan_count_hint
+                        )
                         matching_keys.extend(keys)
-                        if len(matching_keys) > 10000 or cursor == 0:
+                        if len(matching_keys) > max_keys_per_pattern or cursor == 0:
                             break
                     pattern_counts[name] = len(matching_keys)
                 except Exception as e:
@@ -648,6 +652,10 @@ class CacheInvalidator:
                 },
                 "key_counts": pattern_counts,
                 "total_keys": info.get("db0", {}).get("keys", 0) if "db0" in info else 0,
+                "scan_limits": {
+                    "max_keys_per_pattern": max_keys_per_pattern,
+                    "scan_count_hint": scan_count_hint,
+                },
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -714,6 +722,40 @@ def get_cache_value(
         if DEBUG:
             logger.error(f"❌ CACHE ERROR: {cache_key} - {e}")
         return None
+
+
+def mget_cache_values(
+    cache_keys: List[str],
+    redis_client: redis.Redis,
+    endpoint: str = None,
+    location: str = None,
+    cache_stats=None,
+) -> List[Optional[Any]]:
+    """Get multiple cache values in a single round trip.
+
+    Returns a list of raw redis values aligned with ``cache_keys`` (None for
+    misses). Records one cache-stats event per key, matching the per-key
+    hit/miss tracking that ``get_cache_value`` does. On any Redis error all
+    entries are reported as misses with ``error=True``.
+    """
+    if not cache_keys:
+        return []
+    try:
+        results = redis_client.mget(cache_keys)
+        if cache_stats:
+            for cache_key, result in zip(cache_keys, results):
+                cache_stats.track_cache_request(cache_key, result is not None, endpoint, location)
+        if DEBUG:
+            for cache_key, result in zip(cache_keys, results):
+                logger.debug(f"{'✅ CACHE HIT' if result is not None else '❌ CACHE MISS'}: {cache_key}")
+        return results
+    except Exception as e:
+        if cache_stats:
+            for cache_key in cache_keys:
+                cache_stats.track_cache_request(cache_key, False, endpoint, location, error=True)
+        if DEBUG:
+            logger.error(f"❌ CACHE MGET ERROR for {len(cache_keys)} keys: {e}")
+        return [None] * len(cache_keys)
 
 
 def set_cache_value(cache_key, lifetime, value, redis_client: redis.Redis):

@@ -311,11 +311,18 @@ class AnalyticsStorage:
         try:
             # Get recent analytics IDs
             analytics_ids = self.redis.lrange("analytics_index", 0, limit - 1)
-            analytics_records = []
+            if not analytics_ids:
+                return []
 
-            for analytics_id in analytics_ids:
-                analytics_id = analytics_id.decode("utf-8") if isinstance(analytics_id, bytes) else analytics_id
-                record = self.redis.get(f"{self.analytics_prefix}{analytics_id}")
+            keys = [
+                f"{self.analytics_prefix}"
+                f"{aid.decode('utf-8') if isinstance(aid, bytes) else aid}"
+                for aid in analytics_ids
+            ]
+            records = self.redis.mget(keys)
+
+            analytics_records = []
+            for record in records:
                 if record:
                     record_str = record.decode("utf-8") if isinstance(record, bytes) else record
                     analytics_records.append(json.loads(record_str))

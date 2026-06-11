@@ -18,6 +18,28 @@ def tracker(mock_redis):
     return LocationUsageTracker(mock_redis)
 
 
+def _install_pipeline(mock_redis, execute_returns):
+    """Wire mock_redis.pipeline() so successive .execute() calls return the
+    queued lists from ``execute_returns`` in order. Each .pipeline() call
+    returns a fresh MagicMock whose .execute() pops the next return.
+    """
+    queue = list(execute_returns)
+    pipes = []
+
+    def _make_pipeline():
+        pipe = MagicMock()
+
+        def _execute():
+            return queue.pop(0) if queue else []
+
+        pipe.execute.side_effect = _execute
+        pipes.append(pipe)
+        return pipe
+
+    mock_redis.pipeline.side_effect = _make_pipeline
+    return pipes
+
+
 def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d")
 
@@ -79,20 +101,22 @@ class TestRecordSelection:
 
 class TestGetPopularFromSelections:
     def test_returns_empty_when_no_keys(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 0  # no daily keys
+        # First (and only) pipeline call: all 30 exists() return 0
+        _install_pipeline(mock_redis, [[0] * 30])
 
         result = tracker.get_popular_from_selections(limit=10, days=30)
 
         assert result == []
-        mock_redis.zunionstore.assert_not_called()
 
     def test_ranks_correctly(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1  # every key present
-        mock_redis.zrevrange.return_value = [
+        ranked = [
             (b"london", 50.0),
             (b"paris", 30.0),
             (b"new_york", 10.0),
         ]
+        # 1st pipeline: 1 exists() → key present.
+        # 2nd pipeline: zunionstore, expire, zrevrange, delete.
+        _install_pipeline(mock_redis, [[1], [None, None, ranked, None]])
 
         result = tracker.get_popular_from_selections(limit=3, days=1)
 
@@ -100,22 +124,26 @@ class TestGetPopularFromSelections:
         assert result[1] == ("paris", 30)
         assert result[2] == ("new_york", 10)
 
-    def test_cleans_up_tmp_key(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1
-        mock_redis.zrevrange.return_value = []
+    def test_uses_single_pipeline_for_exists(self, tracker, mock_redis):
+        """Regression: 30-day EXISTS must be one round trip, not 30."""
+        _install_pipeline(mock_redis, [[0] * 30])
 
-        tracker.get_popular_from_selections(limit=5, days=1)
+        tracker.get_popular_from_selections(limit=5, days=30)
 
-        mock_redis.delete.assert_called_once_with("selections:union:tmp")
+        # Exactly one pipeline opened for the EXISTS batch (no daily_keys, so
+        # we short-circuit before the second pipeline).
+        assert mock_redis.pipeline.call_count == 1
+        # And no direct .exists() calls on the client itself.
+        mock_redis.exists.assert_not_called()
 
     def test_spans_multiple_days(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1
-        mock_redis.zrevrange.return_value = []
+        pipes = _install_pipeline(mock_redis, [[1, 1, 1], [None, None, [], None]])
 
         tracker.get_popular_from_selections(limit=5, days=3)
 
-        # 3 daily keys should be passed to zunionstore
-        args, kwargs = mock_redis.zunionstore.call_args
+        # 3 daily keys should be passed to zunionstore on the 2nd pipeline.
+        ops_pipe = pipes[1]
+        args, kwargs = ops_pipe.zunionstore.call_args
         assert len(args[1]) == 3
 
 
@@ -126,30 +154,29 @@ class TestGetPopularFromSelections:
 
 class TestGetTotalSelections:
     def test_returns_zero_when_no_keys(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 0
+        _install_pipeline(mock_redis, [[0] * 30])
 
         total = tracker.get_total_selections(days=30)
 
         assert total == 0
 
     def test_sums_scores(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1
-        mock_redis.zrange.return_value = [
+        scored = [
             (b"london", 50.0),
             (b"paris", 30.0),
         ]
+        _install_pipeline(mock_redis, [[1], [None, None, scored, None]])
 
         total = tracker.get_total_selections(days=1)
 
         assert total == 80
 
     def test_cleans_up_tmp_key(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1
-        mock_redis.zrange.return_value = []
+        pipes = _install_pipeline(mock_redis, [[1], [None, None, [], None]])
 
         tracker.get_total_selections(days=1)
 
-        mock_redis.delete.assert_called_once_with("selections:total:tmp")
+        pipes[1].delete.assert_called_once_with("selections:total:tmp")
 
 
 # ---------------------------------------------------------------------------
@@ -237,21 +264,31 @@ class TestGeoIndex:
 
 class TestGetWeightedPopular:
     def test_returns_empty_when_no_keys(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 0  # no daily keys for any window
+        # 90 candidate keys for the widest window, none exist.
+        _install_pipeline(mock_redis, [[0] * 90])
+        mock_redis.zrevrange.return_value = []
 
         result = tracker.get_weighted_popular(limit=10)
 
         assert result == []
         mock_redis.zunionstore.assert_not_called()
 
+    def test_single_pipeline_for_all_window_exists(self, tracker, mock_redis):
+        """Regression: 7+30+90 EXISTS must collapse into a single 90-key pipeline."""
+        _install_pipeline(mock_redis, [[0] * 90])
+
+        tracker.get_weighted_popular(limit=10)
+
+        assert mock_redis.pipeline.call_count == 1
+        mock_redis.exists.assert_not_called()
+
     def test_uses_recency_weights(self, tracker, mock_redis):
         """Final zunionstore must apply weights [0.5, 0.3, 0.2] via a {key: weight} dict."""
-        mock_redis.exists.return_value = 1
+        _install_pipeline(mock_redis, [[1] * 90])
         mock_redis.zrevrange.return_value = []
 
         tracker.get_weighted_popular(limit=10)
 
-        # The final call is the one whose second arg is a dict (weighted union).
         weighted_call = next(
             call for call in mock_redis.zunionstore.call_args_list if isinstance(call.args[1], dict)
         )
@@ -260,7 +297,7 @@ class TestGetWeightedPopular:
         assert weighted_call.kwargs["aggregate"] == "SUM"
 
     def test_ranks_by_weighted_score(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1
+        _install_pipeline(mock_redis, [[1] * 90])
         mock_redis.zrevrange.return_value = [
             (b"london", 50.0),
             (b"paris", 20.0),
@@ -272,7 +309,7 @@ class TestGetWeightedPopular:
         assert result[1] == ("paris", 20.0)
 
     def test_cleans_up_tmp_keys(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1
+        _install_pipeline(mock_redis, [[1] * 90])
         mock_redis.zrevrange.return_value = []
 
         tracker.get_weighted_popular(limit=5)
@@ -290,6 +327,7 @@ class TestGetWeightedPopular:
 
         assert result == []
         mock_redis.zunionstore.assert_not_called()
+        mock_redis.pipeline.assert_not_called()
 
 
 class TestRecent24hSet:
@@ -346,7 +384,7 @@ class TestRecent24hSet:
 
 class TestGetWeightedPopularDisplayStrings:
     def test_returns_id_display_score_tuples(self, tracker, mock_redis):
-        mock_redis.exists.return_value = 1
+        _install_pipeline(mock_redis, [[1] * 90])
         mock_redis.zrevrange.return_value = [
             (b"london", 50.0),
             (b"paris", 20.0),

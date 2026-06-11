@@ -604,13 +604,27 @@ class JobWorker:
     async def process_cache_warming_job(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Process a cache warming job."""
         from cache.accessors import get_cache_warmer
+        from cache.warming import CACHE_WARMING_ENABLED
 
         logger.info(f"🔥 Processing cache warming job with params: {params}")
 
-        # Get cache warmer instance
+        # If warming was disabled after this job was enqueued, drop it quietly
+        # rather than failing — the queue is durable, so a flipped flag must not
+        # produce ongoing error noise from stale jobs.
         cache_warmer = get_cache_warmer()
-        if not cache_warmer:
-            raise ValueError("Cache warmer not available")
+        if not CACHE_WARMING_ENABLED or not cache_warmer:
+            logger.info(
+                "⏭️  Skipping cache_warming job — warming disabled "
+                "(CACHE_WARMING_ENABLED=%s, warmer=%s)",
+                CACHE_WARMING_ENABLED,
+                bool(cache_warmer),
+            )
+            return {
+                "job_type": "cache_warming",
+                "skipped": True,
+                "reason": "cache warming disabled",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
 
         # Determine warming scope
         locations = params.get("locations", [])

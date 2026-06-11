@@ -54,22 +54,27 @@ class LocationUsageTracker:
 
     def get_popular_from_selections(self, limit: int = 20, days: int = 30) -> List[Tuple[str, int]]:
         """Return ranked location IDs from the rolling selection window."""
-        daily_keys = []
-        for i in range(days):
-            date = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y%m%d")
-            key = f"selections:{date}"
-            if self.redis_client.exists(key):
-                daily_keys.append(key)
+        now = datetime.now(timezone.utc)
+        candidate_keys = [
+            f"selections:{(now - timedelta(days=i)).strftime('%Y%m%d')}" for i in range(days)
+        ]
+
+        pipe = self.redis_client.pipeline()
+        for key in candidate_keys:
+            pipe.exists(key)
+        exists_results = pipe.execute()
+        daily_keys = [k for k, ex in zip(candidate_keys, exists_results) if ex]
 
         if not daily_keys:
             return []
 
         tmp_key = "selections:union:tmp"
-        self.redis_client.zunionstore(tmp_key, daily_keys, aggregate="SUM")
-        self.redis_client.expire(tmp_key, 60)
-
-        raw = self.redis_client.zrevrange(tmp_key, 0, limit - 1, withscores=True)
-        self.redis_client.delete(tmp_key)
+        pipe = self.redis_client.pipeline()
+        pipe.zunionstore(tmp_key, daily_keys, aggregate="SUM")
+        pipe.expire(tmp_key, 60)
+        pipe.zrevrange(tmp_key, 0, limit - 1, withscores=True)
+        pipe.delete(tmp_key)
+        _, _, raw, _ = pipe.execute()
 
         return [(item.decode() if isinstance(item, bytes) else item, int(score)) for item, score in raw]
 
@@ -92,13 +97,21 @@ class LocationUsageTracker:
         tmp_keys: List[str] = []
 
         try:
+            now = datetime.now(timezone.utc)
+            max_days = max(days for days, _ in windows)
+            all_candidate_keys = [
+                f"selections:{(now - timedelta(days=i)).strftime('%Y%m%d')}" for i in range(max_days)
+            ]
+            pipe = self.redis_client.pipeline()
+            for key in all_candidate_keys:
+                pipe.exists(key)
+            exists_results = pipe.execute()
+            exists_by_key = dict(zip(all_candidate_keys, exists_results))
+
             for days, weight in windows:
-                daily_keys = []
-                for i in range(days):
-                    date = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y%m%d")
-                    key = f"selections:{date}"
-                    if self.redis_client.exists(key):
-                        daily_keys.append(key)
+                daily_keys = [
+                    k for k in all_candidate_keys[:days] if exists_by_key.get(k)
+                ]
                 if not daily_keys:
                     continue
                 tmp_key = f"selections:weighted:window:{days}d:tmp"
@@ -310,20 +323,26 @@ class LocationUsageTracker:
 
     def get_total_selections(self, days: int = 30) -> int:
         """Return total number of selections recorded in the rolling window."""
-        daily_keys = []
-        for i in range(days):
-            date = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y%m%d")
-            key = f"selections:{date}"
-            if self.redis_client.exists(key):
-                daily_keys.append(key)
+        now = datetime.now(timezone.utc)
+        candidate_keys = [
+            f"selections:{(now - timedelta(days=i)).strftime('%Y%m%d')}" for i in range(days)
+        ]
+
+        pipe = self.redis_client.pipeline()
+        for key in candidate_keys:
+            pipe.exists(key)
+        exists_results = pipe.execute()
+        daily_keys = [k for k, ex in zip(candidate_keys, exists_results) if ex]
 
         if not daily_keys:
             return 0
 
         tmp_key = "selections:total:tmp"
-        self.redis_client.zunionstore(tmp_key, daily_keys, aggregate="SUM")
-        self.redis_client.expire(tmp_key, 60)
+        pipe = self.redis_client.pipeline()
+        pipe.zunionstore(tmp_key, daily_keys, aggregate="SUM")
+        pipe.expire(tmp_key, 60)
+        pipe.zrange(tmp_key, 0, -1, withscores=True)
+        pipe.delete(tmp_key)
+        _, _, raw, _ = pipe.execute()
 
-        total = sum(int(score) for _, score in self.redis_client.zrange(tmp_key, 0, -1, withscores=True))
-        self.redis_client.delete(tmp_key)
-        return total
+        return sum(int(score) for _, score in raw)
