@@ -238,6 +238,7 @@ async def _fetch_timeline_ranges(
 
 
 WINDOW_DAYS = {
+    "daily": 1,
     "weekly": 7,
     "monthly": 31,
     "yearly": 365,
@@ -344,7 +345,7 @@ async def _enqueue_backfill_job(
 
 async def _collect_rolling_window_values(
     location: str,
-    period: Literal["weekly", "monthly", "yearly"],
+    period: Literal["daily", "weekly", "monthly", "yearly"],
     month: int,
     day: int,
     unit_group: str,
@@ -539,24 +540,7 @@ async def get_temperature_data_v1(
     missing_years = []
     coverage_details: List[Dict] = []
 
-    if period == "daily":
-        # For daily, get data for just the specific day across all years
-        weather_data = await get_temperature_series(location, month, day, redis_client)
-        if weather_data and "data" in weather_data:
-            # Extract missing years from the series metadata
-            if "metadata" in weather_data and "missing_years" in weather_data["metadata"]:
-                missing_years.extend(weather_data["metadata"]["missing_years"])
-
-            for data_point in weather_data["data"]:
-                year = int(data_point["x"])
-                temp = data_point["y"]
-                if temp is not None:
-                    all_temps.append(temp)
-                    values.append(
-                        TemperatureValue(date=f"{year}-{month:02d}-{day:02d}", year=year, temperature=round(temp, 2))
-                    )
-
-    elif period in ["weekly", "monthly", "yearly"]:
+    if period in ["daily", "weekly", "monthly", "yearly"]:
         (
             window_values,
             aggregated_values,
