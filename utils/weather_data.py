@@ -10,7 +10,7 @@ import redis
 
 from cache.accessors import get_cache_stats
 from cache.core import get_cache_value, mget_cache_values, set_cache_value
-from cache.keys import generate_cache_key, get_weather_cache_key
+from cache.keys import generate_cache_key
 from config import (
     CACHE_ENABLED,
     DEBUG,
@@ -42,7 +42,7 @@ async def get_weather_for_date(
 ) -> dict:
     """Fetch and cache weather data for a specific date via the configured weather provider."""
     logger.debug("get_weather_for_date for %s on %s", sanitize_for_logging(location), date_str)
-    cache_key = get_weather_cache_key(location, date_str)
+    cache_key = generate_cache_key("weather", location, date_str)
     if CACHE_ENABLED:
         cached_data = get_cache_value(cache_key, redis_client, "weather", location, get_cache_stats())
         if cached_data:
@@ -255,6 +255,8 @@ async def get_temperature_series(
         uncached_date_strs.append(date_str)
 
     if uncached_date_strs:
+        # fetch_weather_batch → get_weather_for_date already writes each per-date
+        # value to the same `weather_*` cache key, so no second SETEX here.
         batch_results = await fetch_weather_batch(location, uncached_date_strs, redis_client)
         for year, date_str in zip(uncached_years, uncached_date_strs):
             weather = batch_results.get(date_str)
@@ -264,12 +266,6 @@ async def get_temperature_series(
                     logger.debug("Got %d temperature = %s", year, temp)
                     if temp is not None:
                         data.append({"x": year, "y": temp})
-                        if CACHE_ENABLED:
-                            cache_key = generate_cache_key("weather", location, date_str)
-                            target_date = datetime(year, month, day).date()
-                            days_diff = (target_date - today.date()).days
-                            cache_duration = SHORT_CACHE_DURATION if -7 <= days_diff <= 365 else LONG_CACHE_DURATION
-                            set_cache_value(cache_key, cache_duration, json.dumps(weather), redis_client)
                     else:
                         logger.debug("Temperature is None for %d, marking as missing.", year)
                         track_missing_year(missing_years, year, "no_temperature_data")

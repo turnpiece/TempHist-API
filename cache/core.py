@@ -762,7 +762,9 @@ def set_cache_value(cache_key, lifetime, value, redis_client: redis.Redis):
     """Set a value in the cache with specified lifetime."""
     if DEBUG:
         logger.debug(f"💾 CACHE SET: {cache_key} | TTL: {lifetime}")
-    redis_client.setex(cache_key, lifetime, value)
+    # SET EX supersedes the deprecated SETEX (Redis 2.6.12+). lifetime may be
+    # an int seconds or a datetime.timedelta; redis-py accepts either via ex=.
+    redis_client.set(cache_key, value, ex=lifetime)
 
 
 async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis) -> Optional[datetime]:
