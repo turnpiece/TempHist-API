@@ -247,78 +247,52 @@ class CacheWarmer:
             month_days.append(f"{d.month:02d}-{d.day:02d}")
         return month_days
 
-    async def warm_location_data(self, location: str) -> Dict:
+    def _create_warming_session(self, auth_token: str) -> aiohttp.ClientSession:
+        """Build a shared aiohttp session for one warming run.
+
+        Pooled connector + a single Authorization header keep us at one session
+        per run instead of one per URL.
+        """
+        connector_limit = max(CACHE_WARMING_CONCURRENT_REQUESTS * 4, 8)
+        return aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=connector_limit, limit_per_host=connector_limit),
+            timeout=aiohttp.ClientTimeout(total=15),
+            headers={"Authorization": f"Bearer {auth_token}"},
+        )
+
+    async def warm_location_data(self, location: str, session: aiohttp.ClientSession) -> Dict:
         if DEBUG:
             logger.info(f"🔥 WARMING LOCATION: {location}")
 
         results: Dict = {"location": location, "warmed_endpoints": [], "errors": []}
 
-        try:
+        async def fetch(url_path: str, label: str) -> None:
             try:
-                auth_token = API_ACCESS_TOKEN
-                if not auth_token:
-                    results["errors"].append("forecast: No authentication token available")
-                else:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(
-                            f"{BASE_URL}/forecast/{location}",
-                            headers={"Authorization": f"Bearer {auth_token}"},
-                        ) as resp:
-                            if resp.status == 200:
-                                results["warmed_endpoints"].append("forecast")
-                            else:
-                                results["errors"].append(f"forecast: {resp.status}")
+                async with session.get(f"{BASE_URL}{url_path}") as resp:
+                    if resp.status == 200:
+                        results["warmed_endpoints"].append(label)
+                    else:
+                        results["errors"].append(f"{label}: {resp.status}")
             except (aiohttp.ClientError, aiohttp.ClientConnectorError) as e:
-                results["errors"].append(f"forecast: HTTP error - {e}")
+                results["errors"].append(f"{label}: HTTP error - {e}")
             except asyncio.TimeoutError:
-                results["errors"].append("forecast: Request timeout")
+                results["errors"].append(f"{label}: Request timeout")
 
+        try:
+            await fetch(f"/forecast/{location}", "forecast")
+
+            # Warm only the base record endpoint per (period, month_day). The
+            # average/trend/summary subresources read from the same per-year and
+            # bundle caches this call populates, so warming them separately just
+            # rebuilds the response three extra times without filling any new key.
             month_days = self.get_month_days_to_warm()
             for month_day in month_days:
                 for period in ["daily", "weekly", "monthly"]:
-                    for sub in [None, "average", "trend", "summary"]:
-                        url_path = f"/v1/records/{period}/{location}/{month_day}"
-                        if sub:
-                            url_path += f"/{sub}"
-                        label = url_path.lstrip("/")
-                        try:
-                            auth_token = API_ACCESS_TOKEN
-                            if not auth_token:
-                                results["errors"].append(f"{label}: No authentication token available")
-                            else:
-                                async with aiohttp.ClientSession() as session:
-                                    async with session.get(
-                                        f"{BASE_URL}{url_path}",
-                                        headers={"Authorization": f"Bearer {auth_token}"},
-                                    ) as resp:
-                                        if resp.status == 200:
-                                            results["warmed_endpoints"].append(label)
-                                        else:
-                                            results["errors"].append(f"{label}: {resp.status}")
-                        except (aiohttp.ClientError, aiohttp.ClientConnectorError) as e:
-                            results["errors"].append(f"{label}: HTTP error - {e}")
-                        except asyncio.TimeoutError:
-                            results["errors"].append(f"{label}: Request timeout")
+                    url_path = f"/v1/records/{period}/{location}/{month_day}"
+                    await fetch(url_path, url_path.lstrip("/"))
 
             for date in self.get_dates_to_warm()[:5]:
-                try:
-                    auth_token = API_ACCESS_TOKEN
-                    if not auth_token:
-                        results["errors"].append(f"weather/{date}: No authentication token available")
-                    else:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(
-                                f"{BASE_URL}/weather/{location}/{date}",
-                                headers={"Authorization": f"Bearer {auth_token}"},
-                            ) as resp:
-                                if resp.status == 200:
-                                    results["warmed_endpoints"].append(f"weather/{date}")
-                                else:
-                                    results["errors"].append(f"weather/{date}: {resp.status}")
-                except (aiohttp.ClientError, aiohttp.ClientConnectorError) as e:
-                    results["errors"].append(f"weather/{date}: HTTP error - {e}")
-                except asyncio.TimeoutError:
-                    results["errors"].append(f"weather/{date}: Request timeout")
+                await fetch(f"/weather/{location}/{date}", f"weather/{date}")
 
         except (aiohttp.ClientError, aiohttp.ClientConnectorError) as e:
             results["errors"].append(f"location_warming: HTTP error - {e}")
@@ -352,39 +326,43 @@ class CacheWarmer:
                 logger.info(f"🔥 STARTING CACHE WARMING: {len(locations)} locations")
                 logger.info(f"🏙️  LOCATIONS: {', '.join(locations)}")
 
-            try:
-                auth_token = API_ACCESS_TOKEN
-                if auth_token:
-                    timeout = aiohttp.ClientTimeout(total=10)
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(
-                            f"{BASE_URL}/v1/locations/preapproved",
-                            headers={"Authorization": f"Bearer {auth_token}"},
-                        ) as resp:
-                            if DEBUG:
-                                msg = (
-                                    "✅ PREAPPROVED ENDPOINT: Warmed successfully"
-                                    if resp.status == 200
-                                    else f"⚠️  PREAPPROVED ENDPOINT: HTTP {resp.status}"
-                                )
-                                logger.info(msg)
-                else:
-                    logger.warning("⚠️  PREAPPROVED ENDPOINT: No authentication token available")
-            except aiohttp.ClientConnectorError as e:
-                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Cannot connect to {BASE_URL} - {e}")
-                logger.info("💡  TIP: Set BASE_URL environment variable to your API server URL")
-            except asyncio.TimeoutError:
-                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Request timeout to {BASE_URL}")
-            except Exception as e:
-                logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {e}")
+            auth_token = API_ACCESS_TOKEN
+            if not auth_token:
+                logger.warning("⚠️  CACHE WARMING: No authentication token available; skipping run")
+                return {
+                    "status": "skipped",
+                    "message": "No authentication token available",
+                    "locations_processed": 0,
+                    "duration_seconds": time.time() - start_time,
+                }
 
-            semaphore = asyncio.Semaphore(CACHE_WARMING_CONCURRENT_REQUESTS)
+            async with self._create_warming_session(auth_token) as session:
+                try:
+                    async with session.get(f"{BASE_URL}/v1/locations/preapproved") as resp:
+                        if DEBUG:
+                            msg = (
+                                "✅ PREAPPROVED ENDPOINT: Warmed successfully"
+                                if resp.status == 200
+                                else f"⚠️  PREAPPROVED ENDPOINT: HTTP {resp.status}"
+                            )
+                            logger.info(msg)
+                except aiohttp.ClientConnectorError as e:
+                    logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Cannot connect to {BASE_URL} - {e}")
+                    logger.info("💡  TIP: Set BASE_URL environment variable to your API server URL")
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Request timeout to {BASE_URL}")
+                except Exception as e:
+                    logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {e}")
 
-            async def warm_with_semaphore(loc):
-                async with semaphore:
-                    return await self.warm_location_data(loc)
+                semaphore = asyncio.Semaphore(CACHE_WARMING_CONCURRENT_REQUESTS)
 
-            results = await asyncio.gather(*[warm_with_semaphore(loc) for loc in locations], return_exceptions=True)
+                async def warm_with_semaphore(loc):
+                    async with semaphore:
+                        return await self.warm_location_data(loc, session)
+
+                results = await asyncio.gather(
+                    *[warm_with_semaphore(loc) for loc in locations], return_exceptions=True
+                )
 
             successful_locations = 0
             total_endpoints = 0

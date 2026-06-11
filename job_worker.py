@@ -649,9 +649,13 @@ class JobWorker:
                 # Warm only popular locations (from usage tracking)
                 logger.info("🔥 Warming popular locations...")
                 popular_locations = cache_warmer.get_locations_to_warm()
-                for location in popular_locations:
-                    location_result = await cache_warmer.warm_location_data(location)
-                    results["results"][location] = location_result
+                auth_token = os.getenv("API_ACCESS_TOKEN")
+                if not auth_token:
+                    raise RuntimeError("API_ACCESS_TOKEN not set; cannot warm locations")
+                async with cache_warmer._create_warming_session(auth_token) as session:
+                    for location in popular_locations:
+                        location_result = await cache_warmer.warm_location_data(location, session)
+                        results["results"][location] = location_result
 
             elif warming_type == "specific":
                 # Warm specific locations
@@ -659,9 +663,13 @@ class JobWorker:
                     raise ValueError("No locations specified for specific warming")
 
                 logger.info(f"🔥 Warming specific locations: {locations}")
-                for location in locations:
-                    location_result = await cache_warmer.warm_location_data(location)
-                    results["results"][location] = location_result
+                auth_token = os.getenv("API_ACCESS_TOKEN")
+                if not auth_token:
+                    raise RuntimeError("API_ACCESS_TOKEN not set; cannot warm locations")
+                async with cache_warmer._create_warming_session(auth_token) as session:
+                    for location in locations:
+                        location_result = await cache_warmer.warm_location_data(location, session)
+                        results["results"][location] = location_result
             else:
                 raise ValueError(f"Unknown warming type: {warming_type}")
 
