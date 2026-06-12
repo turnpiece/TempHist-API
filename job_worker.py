@@ -751,7 +751,7 @@ async def start_background_worker():
 def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown."""
 
-    def signal_handler(signum, frame):
+    def signal_handler(signum, _frame):
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         if worker:
             worker.stop()

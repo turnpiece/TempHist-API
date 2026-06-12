@@ -1370,9 +1370,6 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 The API includes comprehensive performance monitoring:
 
 ```bash
-# Run performance tests
-python performance_test.py
-
 # Profile specific functions (historical average lives in utils, not main)
 python -c "
 import cProfile
@@ -1380,6 +1377,8 @@ from utils.temperature import calculate_historical_average
 cProfile.run('calculate_historical_average([{\"x\": 2020, \"y\": 15.5}])')
 "
 ```
+
+See `benchmarks/compare_apis.py` for end-to-end benchmark scripts.
 
 ### Performance Metrics
 
@@ -1808,7 +1807,7 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for help with:
 ```
 main.py              # Main FastAPI application
 test_main.py         # Comprehensive test suite
-performance_test.py  # Performance testing utilities
+benchmarks/          # End-to-end benchmark scripts
 requirements.txt     # Python dependencies
 render.yaml         # Render deployment configuration
 ```
@@ -1817,7 +1816,7 @@ render.yaml         # Render deployment configuration
 
 1. **Make changes** to the code
 2. **Run tests** with `pytest`
-3. **Check performance** with `python performance_test.py`
+3. **Check performance** with `benchmarks/compare_apis.py`
 4. **Test rate limiting** with manual requests
 5. **Deploy** to Render
 

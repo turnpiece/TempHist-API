@@ -166,7 +166,13 @@ def store_location_timezone(
     redis_client: Optional[redis.Redis] = None,
     ttl: int = 604800,
 ) -> None:
-    """Store timezone for a location in Redis cache."""
+    """Store timezone for a location in Redis cache.
+
+    Intended to be called from the location-resolution path (e.g. after Mapbox
+    or Open-Meteo geocoding returns a timezone for a non-preapproved location).
+    Until that wiring exists, the cache stays empty and `_get_location_timezone`
+    falls through to the preapproved-locations JSON.
+    """
     try:
         if redis_client is None:
             try:
@@ -218,23 +224,6 @@ def _get_location_timezone_from_preapproved(location: str) -> Optional[str]:
 def _get_location_timezone(location: str, redis_client: Optional[redis.Redis] = None) -> Optional[str]:
     tz = _get_location_timezone_from_cache(location, redis_client)
     return tz if tz else _get_location_timezone_from_preapproved(location)
-
-
-def _is_today_in_location_timezone(
-    date: dt_date,
-    location: Optional[str] = None,
-    redis_client: Optional[redis.Redis] = None,
-) -> bool:
-    if location and ZoneInfo:
-        timezone_str = _get_location_timezone(location, redis_client)
-        if timezone_str:
-            try:
-                tz = ZoneInfo(timezone_str)
-                return date == datetime.now(tz).date()
-            except Exception as e:
-                if DEBUG:
-                    logger.debug(f"Error using timezone {timezone_str} for '{location}': {e}")
-    return date == datetime.now(timezone.utc).date()
 
 
 def get_local_today(

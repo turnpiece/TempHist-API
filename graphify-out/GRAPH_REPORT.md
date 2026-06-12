@@ -1,668 +1,700 @@
-# Graph Report - .  (2026-06-10)
+# Graph Report - .  (2026-06-12)
 
 ## Corpus Check
-- 186 files · ~125,360 words
+- 40 files · ~126,457 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2047 nodes · 3450 edges · 162 communities (115 shown, 47 thin omitted)
-- Extraction: 79% EXTRACTED · 21% INFERRED · 0% AMBIGUOUS · INFERRED: 731 edges (avg confidence: 0.77)
+- 2174 nodes · 3709 edges · 171 communities (120 shown, 51 thin omitted)
+- Extraction: 80% EXTRACTED · 20% INFERRED · 0% AMBIGUOUS · INFERRED: 750 edges (avg confidence: 0.77)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- [[_COMMUNITY_Records Temphist Guide|Records Temphist Guide]]
-- [[_COMMUNITY_City Photo Glasgow|City Photo Glasgow]]
-- [[_COMMUNITY_Weather Cache Date|Weather Cache Date]]
-- [[_COMMUNITY_Admin Key Path|Admin Key Path]]
-- [[_COMMUNITY_Rate Limit Location|Rate Limit Location]]
-- [[_COMMUNITY_Job Dedup Key|Job Dedup Key]]
-- [[_COMMUNITY_Location Locations Table|Location Locations Table]]
-- [[_COMMUNITY_Invalid Location Analytics|Invalid Location Analytics]]
-- [[_COMMUNITY_Record Selection Name|Record Selection Name]]
-- [[_COMMUNITY_Job Rolling Bundle|Job Rolling Bundle]]
-- [[_COMMUNITY_Cache Invalidate Keys|Cache Invalidate Keys]]
-- [[_COMMUNITY_Parameter Location Query|Parameter Location Query]]
-- [[_COMMUNITY_Middleware Security Logging|Middleware Security Logging]]
-- [[_COMMUNITY_Url Run Date|Url Run Date]]
-- [[_COMMUNITY_Cache Key Metrics|Cache Key Metrics]]
-- [[_COMMUNITY_Cors Location Validate|Cors Location Validate]]
-- [[_COMMUNITY_Locations Limit Preapproved|Locations Limit Preapproved]]
-- [[_COMMUNITY_Key Temporal Date|Key Temporal Date]]
-- [[_COMMUNITY_Cache Ttl Etag|Cache Ttl Etag]]
-- [[_COMMUNITY_Year Per Args|Year Per Args]]
-- [[_COMMUNITY_Cache Canonical Compress|Cache Canonical Compress]]
-- [[_COMMUNITY_Version Current Function|Version Current Function]]
-- [[_COMMUNITY_Dates Date Values|Dates Date Values]]
-- [[_COMMUNITY_Location Timezone Cache|Location Timezone Cache]]
-- [[_COMMUNITY_Analytics Endpoint Fields|Analytics Endpoint Fields]]
-- [[_COMMUNITY_Location Canonical Usage|Location Canonical Usage]]
-- [[_COMMUNITY_Legacy Slug Canonical|Legacy Slug Canonical]]
-- [[_COMMUNITY_Rate Endpoint Limiting|Rate Endpoint Limiting]]
-- [[_COMMUNITY_Return Bar Image|Return Bar Image]]
-- [[_COMMUNITY_Singapore Hong Kong|Singapore Hong Kong]]
-- [[_COMMUNITY_Share Shares Ensure|Share Shares Ensure]]
-- [[_COMMUNITY_Weather Provider Location|Weather Provider Location]]
-- [[_COMMUNITY_Location Snapped Radius|Location Snapped Radius]]
-- [[_COMMUNITY_Location Canonical Canonicalize|Location Canonical Canonicalize]]
-- [[_COMMUNITY_Locations Endpoint Location|Locations Endpoint Location]]
-- [[_COMMUNITY_Fetch Location Geocode|Fetch Location Geocode]]
-- [[_COMMUNITY_Cache Warming Locations|Cache Warming Locations]]
-- [[_COMMUNITY_Slope Trend Error|Slope Trend Error]]
-- [[_COMMUNITY_Warming Warm Cache|Warming Warm Cache]]
-- [[_COMMUNITY_Job Queue Worker|Job Queue Worker]]
-- [[_COMMUNITY_Analytics Endpoints Records|Analytics Endpoints Records]]
-- [[_COMMUNITY_Shares Null Not|Shares Null Not]]
-- [[_COMMUNITY_Cache Stats Rate|Cache Stats Rate]]
-- [[_COMMUNITY_Run Load Make|Run Load Make]]
-- [[_COMMUNITY_Location Resolve Canonical|Location Resolve Canonical]]
-- [[_COMMUNITY_London City Belfast|London City Belfast]]
-- [[_COMMUNITY_Usage Firebase Statistics|Usage Firebase Statistics]]
-- [[_COMMUNITY_Temperature Insert Location|Temperature Insert Location]]
-- [[_COMMUNITY_Locations Initialize Mock|Locations Initialize Mock]]
-- [[_COMMUNITY_Cape Town San|Cape Town San]]
-- [[_COMMUNITY_Analytics Recent Records|Analytics Recent Records]]
-- [[_COMMUNITY_Client Getting Header|Client Getting Header]]
-- [[_COMMUNITY_Same Key Redis|Same Key Redis]]
-- [[_COMMUNITY_Geo Index Exception|Geo Index Exception]]
-- [[_COMMUNITY_Initialize Args Redis|Initialize Args Redis]]
-- [[_COMMUNITY_Filter Locations Resolve|Filter Locations Resolve]]
-- [[_COMMUNITY_Record Location Invalid|Record Location Invalid]]
-- [[_COMMUNITY_Bundle Slug Key|Bundle Slug Key]]
-- [[_COMMUNITY_Analytics Summary List|Analytics Summary List]]
-- [[_COMMUNITY_Share Identifier Store|Share Identifier Store]]
-- [[_COMMUNITY_Image Records Redis|Image Records Redis]]
-- [[_COMMUNITY_New York City|New York City]]
-- [[_COMMUNITY_Job Async Redis|Job Async Redis]]
-- [[_COMMUNITY_Cache Stats Track|Cache Stats Track]]
-- [[_COMMUNITY_Popular Locations Limit|Popular Locations Limit]]
-- [[_COMMUNITY_Temperature Values Returns|Temperature Values Returns]]
-- [[_COMMUNITY_Year Average Than|Year Average Than]]
-- [[_COMMUNITY_Location Handling Rate|Location Handling Rate]]
-- [[_COMMUNITY_Share Cache Redis|Share Cache Redis]]
-- [[_COMMUNITY_Monitor Dependencies Dependency|Monitor Dependencies Dependency]]
-- [[_COMMUNITY_Token Enforcement When|Token Enforcement When]]
-- [[_COMMUNITY_Normalization Stats Separate|Normalization Stats Separate]]
-- [[_COMMUNITY_Endpoint Removed Legacy|Endpoint Removed Legacy]]
-- [[_COMMUNITY_Preapproved Location Rate|Preapproved Location Rate]]
-- [[_COMMUNITY_Rate That Whitelist|Rate That Whitelist]]
-- [[_COMMUNITY_Status Endpoint Locations|Status Endpoint Locations]]
-- [[_COMMUNITY_Location Locations Item|Location Locations Item]]
-- [[_COMMUNITY_London Firebase Shares|London Firebase Shares]]
-- [[_COMMUNITY_List Shares Period|List Shares Period]]
-- [[_COMMUNITY_Metro Grid Slug|Metro Grid Slug]]
-- [[_COMMUNITY_Profile Performance Functions|Profile Performance Functions]]
-- [[_COMMUNITY_Preapproved Load Locations|Preapproved Load Locations]]
-- [[_COMMUNITY_Worker Job Background|Worker Job Background]]
-- [[_COMMUNITY_Prewarm Popular Locations|Prewarm Popular Locations]]
-- [[_COMMUNITY_Endpoints That Removed|Endpoints That Removed]]
-- [[_COMMUNITY_Chicago Continental Urban|Chicago Continental Urban]]
-- [[_COMMUNITY_Toronto City Photo|Toronto City Photo]]
-- [[_COMMUNITY_Redis Client Cache|Redis Client Cache]]
-- [[_COMMUNITY_Average Temperature Historical|Average Temperature Historical]]
-- [[_COMMUNITY_Modified Behavior Not|Modified Behavior Not]]
-- [[_COMMUNITY_Analytics Recent Endpoint|Analytics Recent Endpoint]]
-- [[_COMMUNITY_Los Angeles City|Los Angeles City]]
-- [[_COMMUNITY_Vancouver British Columbia|Vancouver British Columbia]]
-- [[_COMMUNITY_Session Analytics Yaml|Session Analytics Yaml]]
-- [[_COMMUNITY_Health Endpoint Detailed|Health Endpoint Detailed]]
-- [[_COMMUNITY_Clear Queue Admin|Clear Queue Admin]]
-- [[_COMMUNITY_Selection Method Fields|Selection Method Fields]]
-- [[_COMMUNITY_Auckland Location New|Auckland Location New]]
-- [[_COMMUNITY_Dublin Bridge City|Dublin Bridge City]]
-- [[_COMMUNITY_Default Radius Config|Default Radius Config]]
-- [[_COMMUNITY_Jobs Clear All|Jobs Clear All]]
-- [[_COMMUNITY_Root Endpoint Cors|Root Endpoint Cors]]
-- [[_COMMUNITY_Popular Display Strings|Popular Display Strings]]
-- [[_COMMUNITY_Testgetpopularfromselections Ranks Correctly|Testgetpopularfromselections Ranks Correctly]]
-- [[_COMMUNITY_Forecast Yaml Location|Forecast Yaml Location]]
-- [[_COMMUNITY_Endpoint Cache Stats|Endpoint Cache Stats]]
-- [[_COMMUNITY_Urls Image Convert|Urls Image Convert]]
-- [[_COMMUNITY_Gradient Factor Friendly|Gradient Factor Friendly]]
-- [[_COMMUNITY_Handling Redis Unavailable|Handling Redis Unavailable]]
-- [[_COMMUNITY_Client Convert Weather|Client Convert Weather]]
-- [[_COMMUNITY_Preapproved Slug Cache|Preapproved Slug Cache]]
-- [[_COMMUNITY_Exact Tolerance Testtemporaltoleranceconfig|Exact Tolerance Testtemporaltoleranceconfig]]
-- [[_COMMUNITY_Validate Environment Worker|Validate Environment Worker]]
-- [[_COMMUNITY_Country Code Validate|Country Code Validate]]
-- [[_COMMUNITY_Staticfiles Content Type|Staticfiles Content Type]]
-- [[_COMMUNITY_Popular Cache Key|Popular Cache Key]]
-- [[_COMMUNITY_Normalise Array Based|Normalise Array Based]]
-- [[_COMMUNITY_Configuration Validate Cors|Configuration Validate Cors]]
-- [[_COMMUNITY_Analytics Recent Yaml|Analytics Recent Yaml]]
+- [[_COMMUNITY_Readme Postman Temphist Collections|Readme Postman Temphist Collections]]
+- [[_COMMUNITY_Daily Temperature Store Location|Daily Temperature Store Location]]
+- [[_COMMUNITY_Temporal App Key Canonical|Temporal App Key Canonical]]
+- [[_COMMUNITY_Keys Location Year Records|Keys Location Year Records]]
+- [[_COMMUNITY_Records Temperature Year Main|Records Temperature Year Main]]
+- [[_COMMUNITY_Jpg City Locations Processed|Jpg City Locations Processed]]
+- [[_COMMUNITY_Invalidate Warming All Keys|Invalidate Warming All Keys]]
+- [[_COMMUNITY_Worker Job Year Narrow|Worker Job Year Narrow]]
+- [[_COMMUNITY_Job Dedup Jobs Manager|Job Dedup Jobs Manager]]
+- [[_COMMUNITY_Main Analytics Invalid Location|Main Analytics Invalid Location]]
+- [[_COMMUNITY_Locations Record Selection Name|Locations Record Selection Name]]
+- [[_COMMUNITY_Records Agg Jobs Job|Records Agg Jobs Job]]
+- [[_COMMUNITY_Postman Collections Temphist Locations|Postman Collections Temphist Locations]]
+- [[_COMMUNITY_Compare Apis Benchmarks Url|Compare Apis Benchmarks Url]]
+- [[_COMMUNITY_Main Cors Location Middleware|Main Cors Location Middleware]]
+- [[_COMMUNITY_Weather Main Date Forecast|Weather Main Date Forecast]]
+- [[_COMMUNITY_Stats Warming Statistics Rate|Stats Warming Statistics Rate]]
+- [[_COMMUNITY_Main Temperature Rate Endpoint|Main Temperature Rate Endpoint]]
+- [[_COMMUNITY_Locations Limit Preapproved Country|Locations Limit Preapproved Country]]
+- [[_COMMUNITY_Analytics Storage Summary Main|Analytics Storage Summary Main]]
+- [[_COMMUNITY_Async Jobs Integration Job|Async Jobs Integration Job]]
+- [[_COMMUNITY_Temperature Calculations Average Year|Temperature Calculations Average Year]]
+- [[_COMMUNITY_Analytics Endpoint Fields Error|Analytics Endpoint Fields Error]]
+- [[_COMMUNITY_Client Open Meteo Weather|Client Open Meteo Weather]]
+- [[_COMMUNITY_Middleware Main Logging Redis|Middleware Main Logging Redis]]
+- [[_COMMUNITY_Image Return Bar Chart|Image Return Bar Chart]]
+- [[_COMMUNITY_Hong Kong Singapore Skyline|Hong Kong Singapore Skyline]]
+- [[_COMMUNITY_Main Rate Whitelist Environment|Main Rate Whitelist Environment]]
+- [[_COMMUNITY_Usage Tracking Geo Index|Usage Tracking Geo Index]]
+- [[_COMMUNITY_Core Key Etag Timestamp|Core Key Etag Timestamp]]
+- [[_COMMUNITY_Usage Tracking Location Popular|Usage Tracking Location Popular]]
+- [[_COMMUNITY_Share Shares Store Ensure|Share Shares Store Ensure]]
+- [[_COMMUNITY_Locations Endpoint Location Country|Locations Endpoint Location Country]]
+- [[_COMMUNITY_Warming Warm Dates All|Warming Warm Dates All]]
+- [[_COMMUNITY_Tracking Usage Pipeline Exists|Tracking Usage Pipeline Exists]]
+- [[_COMMUNITY_Temperature Calculations Slope Trend|Temperature Calculations Slope Trend]]
+- [[_COMMUNITY_Initialize Args Load Redis|Initialize Args Load Redis]]
+- [[_COMMUNITY_Weather Provider Visual Crossing|Weather Provider Visual Crossing]]
+- [[_COMMUNITY_Main Location Diversity Limit|Main Location Diversity Limit]]
+- [[_COMMUNITY_Analytics Records Agg Main|Analytics Records Agg Main]]
+- [[_COMMUNITY_Dependencies Dependency Location Monitor|Dependencies Dependency Location Monitor]]
+- [[_COMMUNITY_Shares Null Not Deduplication|Shares Null Not Deduplication]]
+- [[_COMMUNITY_Locations Location Resolve Canonical|Locations Location Resolve Canonical]]
+- [[_COMMUNITY_London Belfast City Hall|London Belfast City Hall]]
+- [[_COMMUNITY_Warming Sessions Cachewarmer Warm|Warming Sessions Cachewarmer Warm]]
+- [[_COMMUNITY_Shares List Firebase Auth|Shares List Firebase Auth]]
+- [[_COMMUNITY_Main Location Record Records|Main Location Record Records]]
+- [[_COMMUNITY_Admin Auth Security Key|Admin Auth Security Key]]
+- [[_COMMUNITY_Main Client Getting Header|Main Client Getting Header]]
+- [[_COMMUNITY_Cape Town San Francisco|Cape Town San Francisco]]
+- [[_COMMUNITY_Core Ttl Endpoint Etag|Core Ttl Endpoint Etag]]
+- [[_COMMUNITY_Slug Resolve Identity Alias|Slug Resolve Identity Alias]]
+- [[_COMMUNITY_Main Location Handling Rate|Main Location Handling Rate]]
+- [[_COMMUNITY_Shares Share Create Identifier|Shares Share Create Identifier]]
+- [[_COMMUNITY_Shares Image Records Redis|Shares Image Records Redis]]
+- [[_COMMUNITY_Locations Initialize App Warm|Locations Initialize App Warm]]
+- [[_COMMUNITY_Locations Urls Etag Image|Locations Urls Etag Image]]
+- [[_COMMUNITY_New York Locations Processed|New York Locations Processed]]
+- [[_COMMUNITY_Location Canonicalization Snapped Radius|Location Canonicalization Snapped Radius]]
+- [[_COMMUNITY_Legacy Slug Fallback When|Legacy Slug Fallback When]]
+- [[_COMMUNITY_Prewarm Preapproved Load Locations|Prewarm Preapproved Load Locations]]
+- [[_COMMUNITY_Shares Share Redis Postgres|Shares Share Redis Postgres]]
+- [[_COMMUNITY_Locations Popular Resolve Code|Locations Popular Resolve Code]]
+- [[_COMMUNITY_Stats Usage Statistics Accessors|Stats Usage Statistics Accessors]]
+- [[_COMMUNITY_App Check Token Enforcement|App Check Token Enforcement]]
+- [[_COMMUNITY_Warming Tiers Tier1 Tier2|Warming Tiers Tier1 Tier2]]
+- [[_COMMUNITY_Usage Tracking Same Key|Usage Tracking Same Key]]
+- [[_COMMUNITY_Tracking Usage Active Recent|Tracking Usage Active Recent]]
+- [[_COMMUNITY_Main Rate That Whitelist|Main Rate That Whitelist]]
+- [[_COMMUNITY_Legacy Endpoint Removed Has|Legacy Endpoint Removed Has]]
+- [[_COMMUNITY_Locations Status Endpoint Popular|Locations Status Endpoint Popular]]
+- [[_COMMUNITY_Locations Location Item Mock|Locations Location Item Mock]]
+- [[_COMMUNITY_Stats Normalization Separate Cachestats|Stats Normalization Separate Cachestats]]
+- [[_COMMUNITY_Metro Snap Grid Slug|Metro Snap Grid Slug]]
+- [[_COMMUNITY_Analytics Storage Batched Recent|Analytics Storage Batched Recent]]
+- [[_COMMUNITY_Root Endpoint Redis Cors|Root Endpoint Redis Cors]]
+- [[_COMMUNITY_Version Bump Update Current|Version Bump Update Current]]
+- [[_COMMUNITY_Prewarm Popular Locations Build|Prewarm Popular Locations Build]]
+- [[_COMMUNITY_Performance Profile Functions Function|Performance Profile Functions Function]]
+- [[_COMMUNITY_Records Agg Endpoints That|Records Agg Endpoints That]]
+- [[_COMMUNITY_Chicago Jpg Continental Urban|Chicago Jpg Continental Urban]]
+- [[_COMMUNITY_Toronto City Photo Jpg|Toronto City Photo Jpg]]
+- [[_COMMUNITY_Jobs Manager Compute Benchmarks|Jobs Manager Compute Benchmarks]]
+- [[_COMMUNITY_Admin Auth Endpoints Key|Admin Auth Endpoints Key]]
+- [[_COMMUNITY_Analytics Warming Location Storage|Analytics Warming Location Storage]]
+- [[_COMMUNITY_Load Script Run Make|Load Script Run Make]]
+- [[_COMMUNITY_Locations Modified Behavior Not|Locations Modified Behavior Not]]
+- [[_COMMUNITY_Analytics Recent Endpoint Limit|Analytics Recent Endpoint Limit]]
+- [[_COMMUNITY_Los Angeles City Photo|Los Angeles City Photo]]
+- [[_COMMUNITY_Vancouver British Columbia Canada|Vancouver British Columbia Canada]]
+- [[_COMMUNITY_Analytics Session Postman Collections|Analytics Session Postman Collections]]
+- [[_COMMUNITY_Locations Usage Tracking Rate|Locations Usage Tracking Rate]]
+- [[_COMMUNITY_Rate Limiting Check Returns|Rate Limiting Check Returns]]
+- [[_COMMUNITY_Analytics Selection Method Fields|Analytics Selection Method Fields]]
+- [[_COMMUNITY_Auckland Location New Zealand|Auckland Location New Zealand]]
+- [[_COMMUNITY_Dublin Bridge City Photo|Dublin Bridge City Photo]]
+- [[_COMMUNITY_Canonicalization Location Default Radius|Canonicalization Location Default Radius]]
+- [[_COMMUNITY_Rate Limiting Stats Prewarm|Rate Limiting Stats Prewarm]]
+- [[_COMMUNITY_Jobs Diagnose Clear All|Jobs Diagnose Clear All]]
+- [[_COMMUNITY_Shares London Share Store|Shares London Share Store]]
+- [[_COMMUNITY_Locations Preapproved Name Find|Locations Preapproved Name Find]]
+- [[_COMMUNITY_Weather Postman Collections Temphist|Weather Postman Collections Temphist]]
+- [[_COMMUNITY_Path Parsing Location Extract|Path Parsing Location Extract]]
+- [[_COMMUNITY_Main Rate Check Limit|Main Rate Check Limit]]
+- [[_COMMUNITY_Clear Queue Admin Job|Clear Queue Admin Job]]
+- [[_COMMUNITY_Locations Handling Redis Unavailable|Locations Handling Redis Unavailable]]
+- [[_COMMUNITY_Stats Admin Postman Collections|Stats Admin Postman Collections]]
+- [[_COMMUNITY_Series Mget Temperature Reads|Series Mget Temperature Reads]]
+- [[_COMMUNITY_Main Performance Rapid Requests|Main Performance Rapid Requests]]
+- [[_COMMUNITY_Locations Popular Key Generate|Locations Popular Key Generate]]
+- [[_COMMUNITY_Firebase Verify Authentication Token|Firebase Verify Authentication Token]]
+- [[_COMMUNITY_Country Code Locations Validate|Country Code Locations Validate]]
+- [[_COMMUNITY_Locations Cached Redis Warm|Locations Cached Redis Warm]]
+- [[_COMMUNITY_Batch Fetch Performance That|Batch Fetch Performance That]]
+- [[_COMMUNITY_Health Check Status Endpoints|Health Check Status Endpoints]]
+- [[_COMMUNITY_Locations Filter Based Criteria|Locations Filter Based Criteria]]
+- [[_COMMUNITY_Limit Locations Validate Parameter|Limit Locations Validate Parameter]]
+- [[_COMMUNITY_Size Middleware Main Enforce|Size Middleware Main Enforce]]
+- [[_COMMUNITY_Core Value Optional Statistics|Core Value Optional Statistics]]
+- [[_COMMUNITY_Updated Timestamp Core Last|Updated Timestamp Core Last]]
+- [[_COMMUNITY_Config Configuration Validate Cors|Config Configuration Validate Cors]]
+- [[_COMMUNITY_Country Name Code Locations|Country Name Code Locations]]
+- [[_COMMUNITY_Metrics Key Entry Performance|Metrics Key Entry Performance]]
+- [[_COMMUNITY_Analytics Recent Postman Collections|Analytics Recent Postman Collections]]
+- [[_COMMUNITY_Conftest Module Close Http|Conftest Module Close Http]]
 - [[_COMMUNITY_Version Information Temphist|Version Information Temphist]]
-- [[_COMMUNITY_Jobs Are Being|Jobs Are Being]]
+- [[_COMMUNITY_Check Worker Status Jobs|Check Worker Status Jobs]]
 - [[_COMMUNITY_Constants Shared Temphist|Constants Shared Temphist]]
 - [[_COMMUNITY_Visual Crossing Directly|Visual Crossing Directly]]
-- [[_COMMUNITY_Analytics Maximum Error|Analytics Maximum Error]]
-- [[_COMMUNITY_Normalize Query Parameters|Normalize Query Parameters]]
-- [[_COMMUNITY_Build Canonical Cache|Build Canonical Cache]]
-- [[_COMMUNITY_Generate Etag Using|Generate Etag Using]]
-- [[_COMMUNITY_Parse Etag None|Parse Etag None]]
-- [[_COMMUNITY_Etag Matches|Etag Matches]]
-- [[_COMMUNITY_Comprehensive Cache Headers|Comprehensive Cache Headers]]
-- [[_COMMUNITY_Has Conditional Headers|Has Conditional Headers]]
-- [[_COMMUNITY_Validate Country Code|Validate Country Code]]
-- [[_COMMUNITY_Rate Limit Stats|Rate Limit Stats]]
-- [[_COMMUNITY_That Rate Limiting|That Rate Limiting]]
-- [[_COMMUNITY_When Rate Limit|When Rate Limit]]
-- [[_COMMUNITY_When Location Diversity|When Location Diversity]]
-- [[_COMMUNITY_Basic Rate Limiting|Basic Rate Limiting]]
-- [[_COMMUNITY_First Backfill Should|First Backfill Should]]
-- [[_COMMUNITY_Repeated Backfill Within|Repeated Backfill Within]]
-- [[_COMMUNITY_Cooldown Key Should|Cooldown Key Should]]
-- [[_COMMUNITY_Job Manager Unavailable|Job Manager Unavailable]]
+- [[_COMMUNITY_Normalize Query Parameters Consistent|Normalize Query Parameters Consistent]]
+- [[_COMMUNITY_Build Canonical Key Endpoint|Build Canonical Key Endpoint]]
+- [[_COMMUNITY_Generate Etag Using Sha256|Generate Etag Using Sha256]]
+- [[_COMMUNITY_Parse Etag None Match|Parse Etag None Match]]
+- [[_COMMUNITY_Etag Check Matches|Etag Check Matches]]
+- [[_COMMUNITY_Comprehensive Headers|Comprehensive Headers]]
+- [[_COMMUNITY_Check Has Conditional Headers|Check Has Conditional Headers]]
+- [[_COMMUNITY_Validate Country Code Format|Validate Country Code Format]]
+- [[_COMMUNITY_Rate Limit Stats Endpoint|Rate Limit Stats Endpoint]]
+- [[_COMMUNITY_That Rate Limiting Applied|That Rate Limiting Applied]]
+- [[_COMMUNITY_When Rate Limit Exceeded|When Rate Limit Exceeded]]
+- [[_COMMUNITY_When Location Diversity Limit|When Location Diversity Limit]]
+- [[_COMMUNITY_Basic Rate Limiting Flow|Basic Rate Limiting Flow]]
+- [[_COMMUNITY_Job First Backfill Should|Job First Backfill Should]]
+- [[_COMMUNITY_Repeated Backfill Within Cooldown|Repeated Backfill Within Cooldown]]
+- [[_COMMUNITY_Cooldown Key Should Encode|Cooldown Key Should Encode]]
+- [[_COMMUNITY_Job Manager Unavailable Should|Job Manager Unavailable Should]]
 - [[_COMMUNITY_Locations Initialization|Locations Initialization]]
-- [[_COMMUNITY_Initialization Missing File|Initialization Missing File]]
-- [[_COMMUNITY_Initialization Invalid Json|Initialization Invalid Json]]
-- [[_COMMUNITY_Records Endpoint Various|Records Endpoint Various]]
-- [[_COMMUNITY_Actual Http Calls|Actual Http Calls]]
-- [[_COMMUNITY_Analytics Endpoint Actual|Analytics Endpoint Actual]]
-- [[_COMMUNITY_Build Parameter Tuple|Build Parameter Tuple]]
-- [[_COMMUNITY_Extract String Value|Extract String Value]]
-- [[_COMMUNITY_Extract Numeric Value|Extract Numeric Value]]
-- [[_COMMUNITY_Pydantic|Pydantic]]
-- [[_COMMUNITY_Httpx|Httpx]]
-- [[_COMMUNITY_Skip Marker Exists|Skip Marker Exists]]
-- [[_COMMUNITY_Backfill Skip Marker|Backfill Skip Marker]]
-- [[_COMMUNITY_Locations Initialization Stores|Locations Initialization Stores]]
-- [[_COMMUNITY_Initialization Propagates Httpexception|Initialization Propagates Httpexception]]
-- [[_COMMUNITY_Initialization Propagates Httpexception|Initialization Propagates Httpexception]]
-- [[_COMMUNITY_Force Preapproved Fallback|Force Preapproved Fallback]]
-- [[_COMMUNITY_Pure Http Time|Pure Http Time]]
-- [[_COMMUNITY_Pytest|Pytest]]
-- [[_COMMUNITY_Same Point Under|Same Point Under]]
-- [[_COMMUNITY_Distinct Nearby Place|Distinct Nearby Place]]
+- [[_COMMUNITY_Initialization Missing File Locations|Initialization Missing File Locations]]
+- [[_COMMUNITY_Initialization Invalid Json Locations|Initialization Invalid Json Locations]]
+- [[_COMMUNITY_Records Endpoint Various Inputs|Records Endpoint Various Inputs]]
+- [[_COMMUNITY_Actual Http Calls Integration|Actual Http Calls Integration]]
+- [[_COMMUNITY_Analytics Endpoint Actual Http|Analytics Endpoint Actual Http]]
+- [[_COMMUNITY_Temperature Build Parameter Tuple|Temperature Build Parameter Tuple]]
+- [[_COMMUNITY_Extract String Value Metadata|Extract String Value Metadata]]
+- [[_COMMUNITY_Extract Numeric Value Metadata|Extract Numeric Value Metadata]]
+- [[_COMMUNITY_Pydantic Requirements Txt|Pydantic Requirements Txt]]
+- [[_COMMUNITY_Httpx Requirements Txt|Httpx Requirements Txt]]
+- [[_COMMUNITY_Job Skip Marker Exists|Job Skip Marker Exists]]
+- [[_COMMUNITY_Backfill Skip Marker Pre|Backfill Skip Marker Pre]]
+- [[_COMMUNITY_Locations Initialization Stores Warms|Locations Initialization Stores Warms]]
+- [[_COMMUNITY_Initialization Propagates Httpexception When|Initialization Propagates Httpexception When]]
+- [[_COMMUNITY_Initialization Propagates Httpexception Invalid|Initialization Propagates Httpexception Invalid]]
+- [[_COMMUNITY_Force Preapproved Fallback Path|Force Preapproved Fallback Path]]
+- [[_COMMUNITY_Compare Pure Http Time|Compare Pure Http Time]]
+- [[_COMMUNITY_Pytest Requirements Txt|Pytest Requirements Txt]]
+- [[_COMMUNITY_Same Point Under Identity|Same Point Under Identity]]
+- [[_COMMUNITY_Distinct Nearby Place Beyond|Distinct Nearby Place Beyond]]
+- [[_COMMUNITY_Narrow Helper Must Hand|Narrow Helper Must Hand]]
+- [[_COMMUNITY_Daily Branch Must Forward|Daily Branch Must Forward]]
+- [[_COMMUNITY_Rate Servicetokenratelimiter Check Limiting|Rate Servicetokenratelimiter Check Limiting]]
+- [[_COMMUNITY_Servicetokenratelimiter Check Location Diversity|Servicetokenratelimiter Check Location Diversity]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `main()` - 42 edges
-2. `TempHist API` - 36 edges
-3. `Location Usage Tracking` - 33 edges
-4. `LocationDiversityMonitor` - 32 edges
-5. `get_records()` - 29 edges
-6. `RequestRateMonitor` - 26 edges
+2. `LocationUsageTracker` - 42 edges
+3. `TempHist API` - 38 edges
+4. `LocationDiversityMonitor` - 33 edges
+5. `get_records` - 33 edges
+6. `RequestRateMonitor` - 27 edges
 7. `LocationItem` - 26 edges
-8. `get_temperature_data_v1()` - 24 edges
-9. `InvalidLocationCache` - 23 edges
-10. `get_preapproved_locations()` - 23 edges
+8. `normalize_location_for_cache()` - 25 edges
+9. `_collect_rolling_window_values` - 25 edges
+10. `get_temperature_data_v1()` - 24 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `tracker()` --calls--> `Location Usage Tracking`  [INFERRED]
-  tests/tracking/test_usage.py → README.md
+- `LocationUsageTracker` --conceptually_related_to--> `Usage Stats Endpoint`  [INFERRED]
+  tracking/usage.py → postman/collections/TempHist API/Monitoring/Usage stats.request.yaml
 - `main()` --calls--> `Job Worker`  [INFERRED]
   prewarm.py → AGENTS.md
-- `Cache Stats Endpoint` --conceptually_related_to--> `CacheWarmer`  [INFERRED]
-  postman/collections/TempHist API/Monitoring/Cache stats.request.yaml → cache/warming.py
-- `Job Worker` --uses--> `ETagGenerator`  [INFERRED]
-  AGENTS.md → cache/core.py
-- `TestRecordSelection` --uses--> `Location Usage Tracking`  [INFERRED]
-  tests/tracking/test_usage.py → README.md
+- `Cache Prewarming` --conceptually_related_to--> `CacheWarmer.warm_all_locations`  [INFERRED]
+  api/README.md → cache/warming.py
+- `Job Worker` --uses--> `JobStatus`  [INFERRED]
+  AGENTS.md → jobs/manager.py
+- `POST /v1/locations/selections` --conceptually_related_to--> `record_selection`  [INFERRED]
+  README.md → tracking/usage.py
 
 ## Hyperedges (group relationships)
-- **V1 Records Period Endpoints** — monthly_request_monthly_records_endpoint, weekly_request_weekly_records_endpoint, yearly_request_yearly_records_endpoint, monthly_request_v1_records_api [EXTRACTED 1.00]
-- **Admin And Monitoring Auth Flow** — reset_cache_stats_request_reset_cache_stats_endpoint, clear_cache_request_clear_cache_endpoint, cache_stats_request_cache_stats_endpoint, usage_stats_request_usage_stats_endpoint, reset_cache_stats_request_x_admin_key_header, agents_admin_api_key [EXTRACTED 1.00]
-- **Location Usage Tracking Flow** — query_20260609_151820_why_does_location_usage_tracking_connect_rate_limi_location_usage_tracking, query_20260609_151820_why_does_location_usage_tracking_connect_rate_limi_locationusagetracker, query_20260609_151820_why_does_location_usage_tracking_connect_rate_limi_initialize_cache, query_20260609_151820_why_does_location_usage_tracking_connect_rate_limi_get_popular_locations, query_20260609_151820_why_does_location_usage_tracking_connect_rate_limi_check_rate_limit, query_20260609_151820_why_does_location_usage_tracking_connect_rate_limi_cachewarmer [EXTRACTED 1.00]
+- **Per-Year Records Cache Flow** — v1_records_get_record, keys_get_records, v1_records_compute_per_year_records, keys_assemble_and_cache, job_worker_process_record_job [EXTRACTED 1.00]
+- **Cache Warming Job Flow** — main_lifespan, cache_trigger_cache_warming_job, warming_scheduled_cache_warming, job_worker_process_cache_warming_job, warming_warm_all_locations [EXTRACTED 1.00]
+- **Redis Singleton Initialization** — main_lifespan, worker_service_main, accessors_initialize_cache, accessors_get_job_manager, accessors_get_cache_warmer [EXTRACTED 1.00]
+- **Location Selection Cache Warming Flow** — usage_record_selection, usage_get_weighted_popular, usage_get_weighted_popular_display_strings, warming_get_locations_to_warm, readme_cache_prewarming [INFERRED 0.85]
+- **Admin Cache Warm Monitoring Endpoints** — admin_auth_is_admin_path, cache_warm_request_cache_warm, cache_warm_locations_request_cache_warm_locations, cache_warm_tiers_request_cache_warm_tiers, cache_warm_status_request_cache_warm_status [EXTRACTED 1.00]
+- **Temperature Series Batched Cache Flow** — weather_data_get_temperature_series, core_mget_cache_values, weather_data_fetch_weather_batch, test_get_temperature_series_mget_test_get_temperature_series_issues_single_mget, test_get_temperature_series_mget_test_get_temperature_series_uses_cached_values_from_mget [INFERRED 0.95]
 
-## Communities (162 total, 47 thin omitted)
+## Communities (171 total, 51 thin omitted)
 
-### Community 0 - "Records Temphist Guide"
+### Community 0 - "Readme Postman Temphist Collections"
+Cohesion: 0.05
+Nodes (78): Local Dev Flags, TempHist API Developer Guide (AGENTS.md), PostgreSQL, start.sh, Rate limiting classes and monitoring., Initialize rate limiting monitors., Cache warm locations, Cache warm status (+70 more)
+
+### Community 1 - "Daily Temperature Store Location"
+Cohesion: 0.05
+Nodes (47): Get preapproved locations in the exact format the web app requests them., TestBuildLookupSlugs, get_preapproved_locations(), Get preapproved locations with optional filtering.          Returns a curated li, test_cold_cache_fetches_are_persisted_for_later_calls(), test_cold_cache_timeline_error_marks_only_failed_year(), test_cold_cache_fetches_missing_years_with_bounded_concurrency, _build_insert_params() (+39 more)
+
+### Community 2 - "Temporal App Key Canonical"
+Cohesion: 0.05
+Nodes (39): cache_get(), cache_set(), canonicalize_location(), _decode_temporal_entry(), _ensure_date_str(), _epoch(), _migrate_temporal_entry(), _preferred_canonical_name() (+31 more)
+
+### Community 3 - "Keys Location Year Records"
+Cohesion: 0.07
+Nodes (55): Enhanced caching utilities for Cloudflare-friendly API responses.  This module p, Normalize location string for consistent cache keys.          Args:         loca, Generate cache key for weather data., Get timezone for a location from Redis cache (stored from Visual Crossing API re, Get timezone for a location from preapproved locations data (fallback)., Check if a date is today in the location's timezone, or UTC if location not foun, Generate standardized cache keys.          Args:         prefix: Cache key prefi, Generate cache key for a per-year record.          Args:         scope: Period s (+47 more)
+
+### Community 4 - "Records Temperature Year Main"
 Cohesion: 0.06
-Nodes (66): Local Dev Flags, TempHist API Developer Guide (AGENTS.md), PostgreSQL, Enhanced Caching System, TempHist API Changelog, MIGRATION_GUIDE.md, Railway Deployment Fixes, Social Sharing & OG Images Feature (v1.1.5) (+58 more)
+Nodes (53): Get timezone for a location, trying multiple sources in order:     1. Redis cach, Process a record computation job with per-year granularity., create_metadata(), get_temperature_series(), get_year_range(), Get a list of years for historical data analysis., Create standardized metadata for temperature data responses., Add a missing year entry to the missing_years list. (+45 more)
 
-### Community 1 - "City Photo Glasgow"
+### Community 5 - "Jpg City Locations Processed"
 Cohesion: 0.07
 Nodes (54): Australia, BT Tower Birmingham, Birmingham, UK, Birmingham City Centre, Birmingham City Photo (JPG), Birmingham City Photo (WebP), Cardiff Castle Norman Keep, Cardiff (+46 more)
 
-### Community 2 - "Weather Cache Date"
+### Community 6 - "Invalidate Warming All Keys"
 Cohesion: 0.06
-Nodes (46): get_cache_stats(), Generate standardized cache keys.          Args:         prefix: Cache key prefi, Get the global cache stats instance., create_metadata(), fetch_weather_batch(), get_forecast_cache_duration(), get_forecast_data(), get_temperature_series() (+38 more)
+Nodes (50): get_cache_warmer, get_cache_invalidator(), Invalidate cache keys matching a pattern (MED-010: Add DoS protection)., Invalidate all forecast data (since it changes frequently)., Invalidate all data for today (since it includes forecasts)., Invalidate keys that have expired (TTL = 0 or negative)., Get the global cache warmer instance., Get the global cache invalidator instance. (+42 more)
 
-### Community 3 - "Admin Key Path"
-Cohesion: 0.05
-Nodes (31): Middleware to verify Firebase tokens and apply rate limiting for protected route, verify_token_middleware(), get_rate_limit_stats(), Get rate limiting status for the current client IP, including service token rate, Get overall rate limiting statistics (admin endpoint)., Tests for admin authentication on operational endpoints., test_is_admin_path(), Test IP whitelist and blacklist functionality. (+23 more)
-
-### Community 4 - "Rate Limit Location"
+### Community 7 - "Worker Job Year Narrow"
 Cohesion: 0.06
-Nodes (32): Get current statistics., LocationDiversityMonitor, Rate limiting classes and monitoring., Monitor and limit location diversity per IP address to prevent API abuse., Clean up old entries to prevent memory bloat., Check if IP is requesting too many different locations.                  Returns, Check if an IP has been flagged as suspicious., Get rate limiting stats for an IP address. (+24 more)
+Nodes (36): FastAPI Dev Server, Job Worker, get_worker(), Background job worker for processing async API requests.  This worker processes, Process pending jobs from the queue., Get list of pending job IDs from the job queue.          Also cleans up orphaned, Deep scan the queue and remove orphaned/completed entries.          Called perio, Process a single job. (+28 more)
 
-### Community 5 - "Job Dedup Key"
+### Community 8 - "Job Dedup Jobs Manager"
 Cohesion: 0.07
 Nodes (33): JobManager, JobQueueFullError, JobStatus, Update job status and optionally store result., Raised when the job queue exceeds MAX_JOB_QUEUE_SIZE., Clean up expired jobs (Redis TTL handles this automatically)., Manage async job processing with Redis storage., Create a new job and return job ID.         Implements deduplication — if an ide (+25 more)
 
-### Community 6 - "Location Locations Table"
-Cohesion: 0.08
-Nodes (25): Get preapproved locations in the exact format the web app requests them., get_preapproved_locations(), Get preapproved locations with optional filtering.          Returns a curated li, _extract_numeric_metadata(), Return the nearest *other* location within METRO_CACHE_SNAP_KM for shared cache, Get preapproved location info for a normalized location name.      Args:, Persistent cache for daily temperature data backed by Postgres., Resolve a location string to canonical Redis slug and display name. (+17 more)
-
-### Community 7 - "Invalid Location Analytics"
+### Community 9 - "Main Analytics Invalid Location"
 Cohesion: 0.1
-Nodes (35): Analytics storage and management., AnalyticsData, AnalyticsResponse, AverageData, DateRange, ErrorDetail, InvalidLocationCache, lifespan() (+27 more)
+Nodes (37): Analytics storage and management., AnalyticsData, AnalyticsResponse, AverageData, DateRange, ErrorDetail, InvalidLocationCache, Cache for invalid locations to avoid repeated API calls. (+29 more)
 
-### Community 8 - "Record Selection Name"
+### Community 10 - "Locations Record Selection Name"
 Cohesion: 0.06
-Nodes (22): LocationItem, Individual location item., A freshly-minted slug with coordinates near an existing canonical ID converges o, A freshly-minted slug with coordinates and no nearby match registers itself in t, No lat/lon supplied → geo-canonicalization is skipped entirely., Explicit location_id is trusted as-is — geo-canonicalization never runs for it., Name matching a preapproved location is trusted as-is — geo-canonicalization nev, Converging onto an existing canonical ID must not clobber its stored metadata. (+14 more)
+Nodes (20): LocationItem, Individual location item., A freshly-minted slug with coordinates near an existing canonical ID converges o, A freshly-minted slug with coordinates and no nearby match registers itself in t, No lat/lon supplied → geo-canonicalization is skipped entirely., Explicit location_id is trusted as-is — geo-canonicalization never runs for it., Name matching a preapproved location is trusted as-is — geo-canonicalization nev, Converging onto an existing canonical ID must not clobber its stored metadata. (+12 more)
 
-### Community 9 - "Job Rolling Bundle"
+### Community 11 - "Records Agg Jobs Job"
 Cohesion: 0.07
-Nodes (34): get_job_manager(), Get the global job manager instance., Get job status and result if ready., get_cache_warming_job_status(), Get status of a cache warming job., create_record_job(), create_rolling_bundle_job(), debug_jobs_endpoint() (+26 more)
+Nodes (34): get_job_manager, Get the global job manager instance., Get job status and result if ready., get_cache_warming_job_status(), Get status of a cache warming job., create_record_job(), create_rolling_bundle_job(), debug_jobs_endpoint() (+26 more)
 
-### Community 10 - "Cache Invalidate Keys"
-Cohesion: 0.1
-Nodes (34): get_cache_invalidator(), Invalidate cache keys matching a pattern (MED-010: Add DoS protection)., Invalidate all forecast data (since it changes frequently)., Invalidate all data for today (since it includes forecasts)., Invalidate keys that have expired (TTL = 0 or negative)., Get the global cache invalidator instance., Invalidate cached data for a specific location and aggregation.      Args:, CacheInvalidator (+26 more)
-
-### Community 11 - "Parameter Location Query"
+### Community 12 - "Postman Collections Temphist Locations"
 Cohesion: 0.07
 Nodes (34): Async daily record computation via background job queue, DELETE /cache/clear, POST /admin/clear-job-queue, Postman folder: Admin, Postman folder: Locations, Postman folder: Records, POST /v1/records/daily/{location}/{identifier}/async, GET /v1/records/daily/{location}/{identifier}?unit_group=fahrenheit (+26 more)
 
-### Community 12 - "Middleware Security Logging"
-Cohesion: 0.06
-Nodes (25): add_security_headers(), create_redis_client(), log_requests_middleware(), Log all requests when DEBUG is enabled or verbosity is verbose., Sanitize user input data before logging to prevent log injection and sensitive d, Add security headers to all responses to prevent various attacks., Middleware to enforce request size limits and validate content types., Validate that the response contains meaningful data.     Returns (is_valid, erro (+17 more)
+### Community 13 - "Compare Apis Benchmarks Url"
+Cohesion: 0.11
+Nodes (30): BenchmarkResult, _count_valid(), _fetch_om(), _fetch_om_batch(), _fetch_vc(), _geocode(), _mapbox_url(), _print_table() (+22 more)
 
-### Community 13 - "Url Run Date"
+### Community 14 - "Main Cors Location Middleware"
+Cohesion: 0.08
+Nodes (30): Get test summary statistics., build_visual_crossing_url(), clean_location_string(), fix_image_content_type_middleware(), get_cors_origin_regex(), get_cors_origins(), get_http_client(), get_summary() (+22 more)
+
+### Community 15 - "Weather Main Date Forecast"
+Cohesion: 0.08
+Nodes (30): get_cache_stats(), Get the global cache stats instance., fetch_weather_batch(), get_forecast_cache_duration(), get_forecast_data(), is_today(), is_today_or_future(), Check if the given date is today. (+22 more)
+
+### Community 16 - "Stats Warming Statistics Rate"
 Cohesion: 0.1
-Nodes (30): _average_runs(), BenchmarkResult, _count_valid(), _fetch_om(), _fetch_vc(), _geocode(), _mapbox_url(), _print_summary() (+22 more)
+Nodes (20): initialize_cache, Track a cache request (hit, miss, or error)., Store current stats in Redis for persistence., Load stats from Redis on startup., Calculate overall cache hit rate., Calculate cache error rate., Get comprehensive cache statistics., Reset all cache statistics. (+12 more)
 
-### Community 14 - "Cache Key Metrics"
-Cohesion: 0.1
-Nodes (19): get_cache(), Get the global cache instance., Get full cache key with prefix., Get ETag key for cache entry., Get metrics key for cache entry., Get cached value with ETag and Last-Modified timestamp., Get the last updated timestamp for a cache key without fetching the full data., Set cached value with ETag and metadata. (+11 more)
+### Community 17 - "Main Temperature Rate Endpoint"
+Cohesion: 0.08
+Nodes (24): Test rate limiting integration with the endpoint., Test successful temperature series retrieval, Test temperature series retrieval with partial failures, Test that average temperature and current temperature comparison is accurate, Test that summary text accurately reflects temperature differences, Test rate limiting integration with FastAPI, Test the rate limit status endpoint, # TODO: Check actual response and update assertions (+16 more)
 
-### Community 15 - "Cors Location Validate"
-Cohesion: 0.09
-Nodes (26): build_visual_crossing_url(), clean_location_string(), fix_image_content_type_middleware(), get_cors_origin_regex(), get_cors_origins(), get_http_client(), health_check_cors_middleware(), is_valid_location() (+18 more)
-
-### Community 16 - "Locations Limit Preapproved"
+### Community 18 - "Locations Limit Preapproved Country"
 Cohesion: 0.1
 Nodes (16): Test the main preapproved locations endpoint., Test getting all locations., Test filtering by country code., Test filtering by tier., Test combined filters., Test limit parameter., Test invalid limit (too low)., Test invalid limit (too high). (+8 more)
 
-### Community 17 - "Key Temporal Date"
-Cohesion: 0.11
-Nodes (18): cache_get(), _decode_temporal_entry(), _ensure_date_str(), _epoch(), _migrate_temporal_entry(), Copy a temporal cache entry from a legacy canonical key to the preferred key., Retrieve cached data with temporal tolerance support.      Args:         r: Redi, Convert date to Unix timestamp (seconds since epoch). (+10 more)
-
-### Community 18 - "Cache Ttl Etag"
-Cohesion: 0.11
-Nodes (23): cached_endpoint_response(), Enhanced caching utilities for Cloudflare-friendly API responses.  This module p, Helper function to add caching to any endpoint.          Args:         request:, Get appropriate cache TTL based on how old the data is.      Args:         year:, Improved caching utilities for TempHist API with canonicalized location keys and, Wrap any endpoint with cache get-or-compute logic., check_conditional_headers(), ETagGenerator (+15 more)
-
-### Community 19 - "Year Per Args"
-Cohesion: 0.11
-Nodes (24): Generate cache key for a per-year record.          Args:         scope: Period s, Generate cache key for per-year ETag.          Args:         scope: Period scope, Get per-year records from cache using MGET.          Args:         redis_client:, Assemble final payload from per-year records and cache bundle with ETag., Compute bundle ETag from ordered list of per-year ETags.          Args:, Get ETags for all years using MGET.          Args:         redis_client: Redis c, Process a record computation job with per-year granularity., assemble_and_cache() (+16 more)
-
-### Community 20 - "Cache Canonical Compress"
-Cohesion: 0.16
-Nodes (11): cache_set(), _compress(), _make_redis_mock(), Tests for app/cache_utils.py — canonicalization, temporal tolerance, and metadat, Daily has zero tolerance — should not try temporal index., Create a MagicMock that behaves like redis.Redis., Gzip-compress a dict (same as cache_set internals)., Gzip-compress a dict and base64-encode it (same as cache_set internals). (+3 more)
-
-### Community 21 - "Version Current Function"
-Cohesion: 0.11
-Nodes (19): get_current_version(), git_commit_and_tag(), Get current version from version.py, Bump version based on type (patch, minor, major), Update version.py with new version, Update pyproject.toml with new version, Commit changes and create git tag, update_pyproject_toml() (+11 more)
-
-### Community 22 - "Dates Date Values"
-Cohesion: 0.11
-Nodes (21): Resolve date, adjusting Feb 29 → Feb 28 in non-leap years., _coerce_float(), _collapse_consecutive_dates(), _collect_rolling_window_values(), _convert_c_to_unit(), _convert_unit_group_for_vc(), _evaluate_coverage(), V1 records endpoints. (+13 more)
-
-### Community 23 - "Location Timezone Cache"
-Cohesion: 0.11
-Nodes (22): Normalize location string for consistent cache keys.          Args:         loca, Generate cache key for weather data., Get timezone for a location from Redis cache (stored from Visual Crossing API re, Get timezone for a location from preapproved locations data (fallback)., Get timezone for a location, trying multiple sources in order:     1. Redis cach, Check if a date is today in the location's timezone, or UTC if location not foun, build_cache_key(), CacheKeyBuilder (+14 more)
-
-### Community 24 - "Analytics Endpoint Fields"
+### Community 19 - "Analytics Storage Summary Main"
 Cohesion: 0.09
-Nodes (12): Test analytics endpoint with missing required fields, Test analytics endpoint with invalid data types, Test analytics endpoint with wrong content type, Test analytics endpoint with empty body, Test analytics endpoint with negative values (should fail validation), Test analytics endpoint with invalid error details structure, Test analytics endpoint with only required fields (optional fields omitted), Test analytics endpoint with boundary values (+4 more)
+Nodes (22): _compute_percentiles(), Append a response time sample to a capped Redis list., Load a response-time list from Redis and return percentile stats., Return p50/p95/p99 and sample_size for a list of integers., Update analytics summary statistics.          Args:             analytics_record, Store analytics data and return unique ID., Update analytics summary statistics., Get analytics summary statistics. (+14 more)
 
-### Community 25 - "Location Canonical Usage"
-Cohesion: 0.09
-Nodes (13): Shares, Location Usage Tracking, GET /v1/locations/popular, Get stats for all tracked locations., Seed the geo index with known canonical anchors (id, latitude, longitude)., Track location usage patterns for analytics and cache warming., Return the closest canonical ID already registered within radius_km, or None., Record a location selection from a user (for popularity ranking). (+5 more)
-
-### Community 26 - "Legacy Slug Canonical"
-Cohesion: 0.11
-Nodes (15): Tests for Phase 4 legacy slug fallback and lazy migration., A legacy lexical temporal key is found when canonical_name is supplied., TestBuildLookupSlugs, TestBundleSlugFallback, TestLocationCacheIdentityLookupSlugs, TestTemporalLegacyFallback, _build_lookup_slugs(), LocationCacheIdentity (+7 more)
-
-### Community 27 - "Rate Endpoint Limiting"
+### Community 20 - "Async Jobs Integration Job"
 Cohesion: 0.1
-Nodes (17): Test rate limiting integration with the endpoint., Test successful temperature series retrieval, Test temperature series retrieval with partial failures, Fahrenheit summaries should say 'about average' when the rounded diff is 0°F., Test rate limiting integration with FastAPI, Test the rate limit status endpoint, # TODO: Check actual response and update assertions, # TODO: Rewrite this test to match current endpoint structure (+9 more)
+Nodes (18): Main function to run the job worker., Main load testing function., main(), Main prewarming function., check_indexes(), check_pool_connections(), Main verification routine., Check if all required indexes exist. (+10 more)
 
-### Community 28 - "Return Bar Image"
+### Community 21 - "Temperature Calculations Average Year"
+Cohesion: 0.14
+Nodes (11): Fahrenheit summaries should say 'about average' when the rounded diff is 0°F., test_generate_summary_fahrenheit_about_average(), calculate_standard_deviation(), generate_summary(), Calculate population standard deviation of a list of temperature values., Generate a summary text for temperature data in the requested unit.      Args:, Unit tests for temperature calculation functions: mean, std dev, trend slope, sl, generate_summary uses warm framing when above average, cold when below. (+3 more)
+
+### Community 22 - "Analytics Endpoint Fields Error"
+Cohesion: 0.08
+Nodes (13): Test analytics endpoint with missing required fields, Test analytics endpoint with invalid data types, Test analytics endpoint with wrong content type, Test analytics endpoint with empty body, Test analytics endpoint with negative values (should fail validation), Test analytics endpoint with invalid error details structure, Test analytics endpoint with only required fields (optional fields omitted), Test analytics endpoint with boundary values (+5 more)
+
+### Community 23 - "Client Open Meteo Weather"
+Cohesion: 0.13
+Nodes (23): _f_to_c(), Convert °F to °C — matches weather_data._f_to_c., _geocode_mapbox(), Call the Mapbox Geocoding v5 API and return a list of dicts with keys:       nam, close_client(), fetch_days(), fetch_timeline_for_location(), geocode_location() (+15 more)
+
+### Community 24 - "Middleware Main Logging Redis"
+Cohesion: 0.09
+Nodes (18): create_redis_client(), log_requests_middleware(), Log all requests when DEBUG is enabled or verbosity is verbose., Sanitize user input data before logging to prevent log injection and sensitive d, Create Redis client with security validation., Add request ID for distributed tracing (LOW-003)., request_id_middleware(), sanitize_for_logging() (+10 more)
+
+### Community 25 - "Image Return Bar Chart"
 Cohesion: 0.14
 Nodes (21): _bar_color_for_z_score(), _celsius_to_fahrenheit(), _compute_bar_colors(), _fetch_records_live(), _format_period_heading(), _lerp_color(), _make_gradient_array(), og_image() (+13 more)
 
-### Community 29 - "Singapore Hong Kong"
+### Community 26 - "Hong Kong Singapore Skyline"
 Cohesion: 0.16
 Nodes (22): Dense Urban Skyline, East Asia, Green Hillside Vegetation, High-Rise Buildings, Hong Kong, Hong Kong City Photo (JPG), Hong Kong City Photo (WebP), Hong Kong Island Skyline (+14 more)
 
-### Community 30 - "Share Shares Ensure"
-Cohesion: 0.15
-Nodes (16): _lookup_share(), Return share record from Redis cache or Postgres, or None if not found., create_share(), get_share(), list_shares(), Social share endpoints — POST /v1/shares and GET /v1/shares/{id}., Create a share record and return a short URL. Requires Firebase auth., List recent share records, deduplicated by location+period+identifier. Public — (+8 more)
+### Community 27 - "Main Rate Whitelist Environment"
+Cohesion: 0.11
+Nodes (15): get_rate_limit_stats(), Get rate limiting status for the current client IP, including service token rate, Get overall rate limiting statistics (admin endpoint)., Test IP whitelist and blacklist functionality., Test IP whitelist helper function., Test IP blacklist helper function., Test whitelist with empty environment variable., Test blacklist with empty environment variable. (+7 more)
 
-### Community 31 - "Weather Provider Location"
-Cohesion: 0.13
-Nodes (19): Open-Meteo, Visual Crossing, Weather Provider, get_invalid_location_cache(), Dependency to get invalid location cache., RuntimeError, _build_timeline_url(), Raised when Visual Crossing rejects a location as unresolvable (HTTP 400).     N (+11 more)
+### Community 28 - "Usage Tracking Geo Index"
+Cohesion: 0.11
+Nodes (12): Exception handlers for standardized error responses., Register all exception handlers with the FastAPI app., register_exception_handlers(), Exception, Location Canonical Usage, TestGeoIndex, Seed the geo index with known canonical anchors (id, latitude, longitude)., Return the closest canonical ID already registered within radius_km, or None. (+4 more)
 
-### Community 32 - "Location Snapped Radius"
-Cohesion: 0.17
-Nodes (17): Tests for location canonicalization radius in DailyTemperatureStore., Unit tests for DailyTemperatureStore._find_nearby_location., test_custom_radius_respected(), test_exact_boundary_is_snapped(), test_location_beyond_45km_is_not_snapped(), test_location_beyond_identity_radius_is_not_snapped(), test_location_within_45km_is_snapped(), test_location_within_identity_radius_is_snapped() (+9 more)
-
-### Community 33 - "Location Canonical Canonicalize"
+### Community 29 - "Core Key Etag Timestamp"
 Cohesion: 0.16
-Nodes (9): canonicalize_location(), _preferred_canonical_name(), Canonicalize location string for consistent caching.      Prefer VC's resolvedAd, Return the preferred canonical location label for key generation., Canonicalize location string for consistent temporal cache keys.      Prefer a r, Store data in cache with canonicalized location key and temporal index.      Arg, _temporal_lookup_canonicals(), Different user inputs for the same location produce the same canonical key (+1 more)
+Nodes (12): get_cache(), Get the global cache instance., Get full cache key with prefix., Get ETag key for cache entry., Get cached value with ETag and Last-Modified timestamp., Get the last updated timestamp for a cache key without fetching the full data., Set cached value with ETag and metadata., Set multiple cache values using Redis pipeline for better performance. (+4 more)
 
-### Community 34 - "Locations Endpoint Location"
+### Community 30 - "Usage Tracking Location Popular"
+Cohesion: 0.13
+Nodes (16): Shares, GET /v1/locations/popular/display-strings, GET /v1/locations/popular, TestGetWeightedPopularDisplayStrings, Return (location_id, display_string, score) for top weighted-popular locations., Track location usage patterns for analytics and cache warming., Retrieve stored minimal metadata for a location ID, or None., Track a location request for analytics and popularity detection. (+8 more)
+
+### Community 31 - "Share Shares Store Ensure"
+Cohesion: 0.18
+Nodes (15): _lookup_share(), Return share record from Redis cache or Postgres, or None if not found., create_share(), get_share(), list_shares(), Social share endpoints — POST /v1/shares and GET /v1/shares/{id}., Create a share record and return a short URL. Requires Firebase auth., List recent share records, deduplicated by location+period+identifier. Public — (+7 more)
+
+### Community 32 - "Locations Endpoint Location Country"
 Cohesion: 0.12
 Nodes (17): _build_display_string(), _get_mapbox_client(), ImageUrl, _loc_to_dict(), PopularResponse, PreapprovedResponse, Preapproved locations endpoint router.  Provides access to a curated list of pre, Record a canonical location ID selected by the authenticated user.      Used to (+9 more)
 
-### Community 35 - "Fetch Location Geocode"
+### Community 33 - "Warming Warm Dates All"
+Cohesion: 0.13
+Nodes (12): Get cache warming statistics., Background task that schedules cache warming jobs on a schedule., Get list of dates to warm., Get list of month-day combinations to warm., Warm all data for a specific location., Warm cache for all popular locations., Cache warming and statistics.  CacheWarmer proactively populates Redis for popul, Build a shared aiohttp session for one warming run.          Pooled connector + (+4 more)
+
+### Community 34 - "Tracking Usage Pipeline Exists"
 Cohesion: 0.16
-Nodes (18): _geocode_mapbox(), Call the Mapbox Geocoding v5 API and return a list of dicts with keys:       nam, fetch_days(), fetch_timeline_for_location(), geocode_location(), _get_coordinates_from_store(), _om_archive_url(), _om_forecast_url() (+10 more)
+Nodes (8): TestGetPopularFromSelections, TestGetWeightedPopular, _install_pipeline(), Regression: 30-day EXISTS must be one round trip, not 30., Wire mock_redis.pipeline() so successive .execute() calls return the     queued, Regression: 7+30+90 EXISTS must collapse into a single 90-key pipeline., Final zunionstore must apply weights [0.5, 0.3, 0.2] via a {key: weight} dict., TestGetTotalSelections
 
-### Community 36 - "Cache Warming Locations"
-Cohesion: 0.12
-Nodes (16): get_cache_warmer(), Get the global cache warmer instance., Get list of locations to warm, prioritizing preapproved locations., Process a cache warming job., Singleton accessor functions and cache initialisation.  All module-level cache i, get_cache_warming_status(), get_locations_to_warm(), get_warming_schedule() (+8 more)
-
-### Community 37 - "Slope Trend Error"
+### Community 35 - "Temperature Calculations Slope Trend"
 Cohesion: 0.25
 Nodes (5): calculate_trend_slope(), Calculate temperature trend slope using linear regression.          This functio, Test the trend slope calculation, test_calculate_trend_slope(), Calculate temperature trend slope, R², and slope standard error using linear reg
 
-### Community 38 - "Warming Warm Cache"
+### Community 36 - "Initialize Args Load Redis"
+Cohesion: 0.11
+Nodes (15): Initialize analytics storage.          Args:             redis_client: Redis cli, Initialize cache statistics tracker.          Args:             redis_client: Re, Initialize cache invalidator for managing cache invalidation.          Args:, Initialize location usage tracker.          Args:             redis_client: Redi, Initialize async job manager for background processing.          Args:, Initialize single-flight lock manager.          Args:             redis_client:, Initialize enhanced cache with single-flight protection.          Args:, Initialize cache warmer for proactive cache population.          Args: (+7 more)
+
+### Community 37 - "Weather Provider Visual Crossing"
 Cohesion: 0.14
-Nodes (11): Get cache warming statistics., Background task that schedules cache warming jobs on a schedule., Get list of dates to warm., Get list of month-day combinations to warm., Warm all data for a specific location., Warm cache for all popular locations., CacheWarmer, Cache warming and statistics.  CacheWarmer proactively populates Redis for popul (+3 more)
+Nodes (16): Open-Meteo, Visual Crossing, Weather Provider, _build_timeline_url(), Raised when Visual Crossing rejects a location as unresolvable (HTTP 400).     N, Fetch timeline data for a contiguous date range (inclusive)., close_client_session(), fetch_timeline_days() (+8 more)
 
-### Community 39 - "Job Queue Worker"
-Cohesion: 0.15
-Nodes (10): FastAPI Dev Server, Job Worker, Process pending jobs from the queue., Get list of pending job IDs from the job queue.          Also cleans up orphaned, Deep scan the queue and remove orphaned/completed entries.          Called perio, Process a single job., Write a fresh heartbeat to Redis. Called at startup and before each job., Background worker for processing async jobs. (+2 more)
+### Community 38 - "Main Location Diversity Limit"
+Cohesion: 0.18
+Nodes (11): Monitor and limit location diversity per IP address to prevent API abuse., LocationDiversityMonitor, Test the LocationDiversityMonitor class, Test monitor initialization, Test location diversity check when under limit, Test that same location multiple times doesn't count as different, Test cleanup of old entries, Test that cleanup respects the interval setting (+3 more)
 
-### Community 40 - "Analytics Endpoints Records"
+### Community 39 - "Analytics Records Agg Main"
 Cohesion: 0.13
 Nodes (14): clear_rate_limit_keys(), Tests for the analytics endpoints.  Tests cover: - Analytics data submission - A, Clear rate limit keys in Redis before each test to avoid rate limit issues., Integration tests for analytics endpoint with actual HTTP calls, TestAnalyticsEndpointIntegration, Tests for the records aggregation router.  Tests cover: - V1 records endpoints (, Test the v1 subresource endpoints, Integration tests for records aggregation endpoints (+6 more)
 
-### Community 41 - "Shares Null Not"
+### Community 40 - "Dependencies Dependency Location Monitor"
+Cohesion: 0.13
+Nodes (16): get_analytics_storage(), get_invalid_location_cache(), get_location_monitor(), get_request_monitor(), initialize_dependencies(), Shared dependencies for routers., Dependency to get Redis client., Dependency to get invalid location cache. (+8 more)
+
+### Community 41 - "Shares Null Not Deduplication"
 Cohesion: 0.23
 Nodes (9): Tests for the Python-side proximity deduplication in ShareStore.list_shares., Build a fake asyncpg-like Record dict., Return a ShareStore whose DB fetch returns the given rows., Two shares within 50 km with same period+identifier → one result., Two shares >50 km apart with same period+identifier → both returned., Shares with NULL coords fall back to exact string deduplication., NULL-coord shares with different strings are not merged., The _lat/_lon fields used during dedup must not appear in the response. (+1 more)
 
-### Community 42 - "Cache Stats Rate"
-Cohesion: 0.15
-Nodes (10): Calculate overall cache hit rate., Calculate cache error rate., Get cache statistics by endpoint., Get comprehensive cache statistics., get_cache_health(), get_cache_hourly_stats(), Get comprehensive cache statistics and performance metrics., Get cache health assessment and alerts. (+2 more)
-
-### Community 43 - "Run Load Make"
-Cohesion: 0.16
-Nodes (10): LoadTester, LoadTestStats, Load tester for TempHist API., Make a single HTTP request and return results., Run concurrent requests., Run warmup requests to populate cache., Collect and analyze load test statistics., Calculate percentile without numpy dependency. (+2 more)
-
-### Community 44 - "Location Resolve Canonical"
+### Community 42 - "Locations Location Resolve Canonical"
 Cohesion: 0.18
 Nodes (9): Request body for recording a location selection.      Supply either ``location_i, Resolve a SelectionRequest to a canonical location ID.      Resolution order:, _resolve_canonical_id(), SelectionRequest, Test GET /v1/locations/search — location_id enrichment., Fallback path (no Mapbox token) always returns location_id., All fallback results are preapproved locations so location_id is always set., Mapbox path attaches location_id when result matches a preapproved location. (+1 more)
 
-### Community 45 - "London City Belfast"
+### Community 43 - "London Belfast City Hall"
 Cohesion: 0.23
 Nodes (16): Baroque Revival Architecture, Belfast, Belfast City Hall, Belfast City Hall Photo (JPG), Belfast City Hall Photo (WebP), County Hall London, Donegall Square, London (+8 more)
 
-### Community 46 - "Usage Firebase Statistics"
-Cohesion: 0.14
-Nodes (13): get_usage_tracker(), Get the global usage tracker instance., Verify Firebase authentication token., verify_firebase_token(), get_location_usage_stats(), get_usage_stats(), Statistics and rate limiting status endpoints., Get usage tracking statistics from the selection signal (admin endpoint).      B (+5 more)
+### Community 44 - "Warming Sessions Cachewarmer Warm"
+Cohesion: 0.17
+Nodes (13): _FakeResponse, Tests for cache warming HTTP-layer behaviour (issue #69).  Asserts that one `war, Minimal stand-in for aiohttp.ClientSession that records every URL., Patch aiohttp.ClientSession used inside cache.warming with a recorder., Keep the cycle tiny so URL counts stay readable in assertions., small_run(), JobWorker.process_cache_warming_job, _FakeSession (+5 more)
 
-### Community 47 - "Temperature Insert Location"
-Cohesion: 0.23
-Nodes (12): _build_insert_params(), _calculate_insert_fields(), DailyTemperatureRecord, Determine which temperature columns are present to build a typed insert., Represents a cached daily temperature observation stored in the database., Fetch cached temperature records for a location and list of dates.          Uses, Insert or update a batch of temperature records for a location.          Automat, InMemoryDailyTemperatureStore (+4 more)
+### Community 45 - "Shares List Firebase Auth"
+Cohesion: 0.13
+Nodes (4): mock_firebase(), Tests for social sharing endpoints.  Covers: - POST /v1/shares  — create share (, Stub Firebase token verification so auth middleware passes., TestListShares
 
-### Community 48 - "Locations Initialize Mock"
+### Community 46 - "Main Location Record Records"
+Cohesion: 0.18
+Nodes (14): is_location_likely_invalid(), Validate that the response contains meaningful data.     Returns (is_valid, erro, Check if a location string looks obviously invalid.     This is a quick check be, Response for subresource endpoints., Set appropriate cache headers based on the age of the weather data., set_weather_cache_headers(), SubResourceResponse, validate_location_response() (+6 more)
+
+### Community 47 - "Admin Auth Security Key"
 Cohesion: 0.15
-Nodes (9): initialize_locations_data(), Initialize locations data and warm cache., app(), Tests for the preapproved locations endpoint.  Tests cover: - Happy path scenari, Test data loading functionality., Create test FastAPI app with the router., test_initialize_locations_data(), test_initialize_locations_data_file_not_found() (+1 more)
+Nodes (13): admin_key_is_valid, is_admin_path, verify_admin_key, add_security_headers(), Add security headers to all responses to prevent various attacks., Middleware to verify Firebase tokens and apply rate limiting for protected route, verify_token_middleware, Security headers middleware. (+5 more)
 
-### Community 49 - "Cape Town San"
+### Community 48 - "Main Client Getting Header"
+Cohesion: 0.21
+Nodes (10): Add X-Response-Time header and log slow requests for performance monitoring., performance_timing_middleware, Test client IP address detection, Test getting client IP from direct connection, Test getting client IP from X-Forwarded-For header, Test getting client IP from X-Real-IP header, Test getting client IP when no client info available, TestClientIPDetection (+2 more)
+
+### Community 49 - "Cape Town San Francisco"
 Cohesion: 0.21
 Nodes (14): California, Atlantic Ocean coastline, Cape Town, Cape Town, South Africa, Cape Town Location Photo (JPG), Lion's Head Mountain, Cape Town, Sea Point Promenade, Cape Town, Signal Hill, Cape Town, Southern Africa Geographic Region (+6 more)
 
-### Community 50 - "Analytics Recent Records"
-Cohesion: 0.2
-Nodes (13): Get recent analytics records., Get analytics records for a specific session., _coerce_non_negative_int(), get_analytics_by_session(), _normalize_failure_rate(), Sanitize raw analytics payload to prevent validation failures., Submit client analytics data for monitoring and error tracking (MED-007: Rate li, Best-effort coercion of analytics numeric fields to non-negative ints. (+5 more)
+### Community 50 - "Core Ttl Endpoint Etag"
+Cohesion: 0.16
+Nodes (13): cached_endpoint_response(), Helper function to add caching to any endpoint.          Args:         request:, Get appropriate cache TTL based on how old the data is.      Args:         year:, Wrap any endpoint with cache get-or-compute logic., check_conditional_headers(), get_ttl_for_year(), matches_etag(), parse_etag() (+5 more)
 
-### Community 51 - "Client Getting Header"
-Cohesion: 0.21
-Nodes (10): performance_timing_middleware(), Add X-Response-Time header and log slow requests for performance monitoring., Test client IP address detection, Test getting client IP from direct connection, Test getting client IP from X-Forwarded-For header, Test getting client IP from X-Real-IP header, Test getting client IP when no client info available, TestClientIPDetection (+2 more)
-
-### Community 52 - "Same Key Redis"
-Cohesion: 0.18
-Nodes (8): mock_redis(), Return a MagicMock Redis client and override the dependency., Unit tests for LocationUsageTracker selection methods., Second call for same user+location+day is a no-op., Different users can each contribute one count., TestRecordSelection, _today(), tracker()
-
-### Community 53 - "Geo Index Exception"
-Cohesion: 0.15
-Nodes (5): Exception handlers for standardized error responses., Register all exception handlers with the FastAPI app., register_exception_handlers(), Exception, TestGeoIndex
-
-### Community 54 - "Initialize Args Redis"
-Cohesion: 0.15
-Nodes (12): Initialize analytics storage.          Args:             redis_client: Redis cli, Initialize cache statistics tracker.          Args:             redis_client: Re, Initialize cache invalidator for managing cache invalidation.          Args:, Initialize location usage tracker.          Args:             redis_client: Redi, Initialize async job manager for background processing.          Args:, Initialize single-flight lock manager.          Args:             redis_client:, Initialize enhanced cache with single-flight protection.          Args:, Initialize cache warmer for proactive cache population.          Args: (+4 more)
-
-### Community 55 - "Filter Locations Resolve"
-Cohesion: 0.17
-Nodes (9): filter_locations(), Filter locations based on criteria., Resolve alias or EU grouping. Returns a single ISO code or a frozenset of codes., resolve_country_code(), Test utility functions., Test ETag generation., Test cache key generation., Test location filtering. (+1 more)
-
-### Community 56 - "Record Location Invalid"
-Cohesion: 0.26
-Nodes (13): is_location_likely_invalid(), Check if a location string looks obviously invalid.     This is a quick check be, Set appropriate cache headers based on the age of the weather data., set_weather_cache_headers(), get_record_average(), _get_record_data_internal(), get_record_summary(), get_record_trend() (+5 more)
-
-### Community 57 - "Bundle Slug Key"
+### Community 51 - "Slug Resolve Identity Alias"
 Cohesion: 0.19
-Nodes (11): Generate cache key for assembled bundle.          Args:         scope: Period sc, bundle_key(), get_bundle_with_slug_fallback(), migrate_bundle_slug(), migrate_redis_key(), Rename a Redis key to its canonical form, preserving TTL when possible., Migrate bundle and ETag keys from a legacy slug to the canonical slug., Try bundle keys in order; lazily migrate a legacy hit to the canonical slug. (+3 more)
+Nodes (12): TestLocationCacheIdentityLookupSlugs, LocationCacheIdentity, Canonical location identity for Redis and temporal cache keying., Tests for resolve_cache_slug (Phase 2)., test_alias_lookup_returns_canonical_normalized_name(), test_creates_alias_via_geo_snap_when_no_existing_alias(), test_identity_alias_lookup_returns_both_fields(), test_identity_without_postgres_uses_preapproved_when_no_coords() (+4 more)
 
-### Community 58 - "Analytics Summary List"
-Cohesion: 0.15
-Nodes (9): _compute_percentiles(), Append a response time sample to a capped Redis list., Load a response-time list from Redis and return percentile stats., Return p50/p95/p99 and sample_size for a list of integers., Update analytics summary statistics.          Args:             analytics_record, Store analytics data and return unique ID., Update analytics summary statistics., Get analytics summary statistics. (+1 more)
+### Community 52 - "Main Location Handling Rate"
+Cohesion: 0.22
+Nodes (9): Test rate limiting edge cases and error handling, Test handling of empty location strings, Test handling of special characters in location names, Test handling of very long location names, Test that rate limiting is thread-safe for concurrent access, Helper tests for manual testing scenarios, Test rate limiting configuration, TestRateLimitingEdgeCases (+1 more)
 
-### Community 59 - "Share Identifier Store"
+### Community 53 - "Shares Share Create Identifier"
 Cohesion: 0.15
 Nodes (5): Identifier must be MM-DD., 503 when the share store returns None (e.g. no Postgres)., All valid period values should be accepted., Unauthenticated request should be rejected., TestCreateShare
 
-### Community 60 - "Image Records Redis"
+### Community 54 - "Shares Image Records Redis"
 Cohesion: 0.15
 Nodes (5): Redis value for the bundle key: {"records": [...]}, Returns a placeholder PNG (not 404) when records are missing., Fahrenheit share should render without error., Public endpoint — crawlers have no credentials., TestOgImage
 
-### Community 61 - "New York City"
+### Community 55 - "Locations Initialize App Warm"
+Cohesion: 0.17
+Nodes (9): initialize_locations_data(), Initialize locations data and warm cache., app(), Tests for the preapproved locations endpoint.  Tests cover: - Happy path scenari, Test data loading functionality., Create test FastAPI app with the router., test_initialize_locations_data(), test_initialize_locations_data_file_not_found() (+1 more)
+
+### Community 56 - "Locations Urls Etag Image"
+Cohesion: 0.18
+Nodes (10): generate_etag(), convert_image_urls(), load_locations_data(), Generate ETag from data content using SHA256 (32 chars for 128-bit security)., Convert relative image URLs to full URLs., Load and validate locations data from JSON file., Test utility functions., Test ETag generation. (+2 more)
+
+### Community 57 - "New York Locations Processed"
 Cohesion: 0.33
 Nodes (13): Hudson River / New York Harbor, Liberty Island, Lower Manhattan, New York City, New York Harbor, New York City Photo (JPEG), New York City Skyline, New York City Photo (WebP) (+5 more)
 
-### Community 62 - "Job Async Redis"
-Cohesion: 0.23
-Nodes (7): Test Redis connection., AsyncJobTester, Test the complete async job flow., Test if Redis is accessible., Create an async job and return job info., Check the status of a job., Poll job until completion or timeout.
-
-### Community 63 - "Cache Stats Track"
-Cohesion: 0.21
-Nodes (9): initialize_cache(), Track a cache request (hit, miss, or error)., Store current stats in Redis for persistence., Load stats from Redis on startup., Reset all cache statistics., Initialize global cache instances., Initialise all global cache/job singleton instances., CacheStats (+1 more)
-
-### Community 64 - "Popular Locations Limit"
-Cohesion: 0.17
-Nodes (11): _build_popular_locations(), get_locations_status(), get_popular_locations(), Validate limit parameter., Get status information about the preapproved locations service., Return ranked location dicts for the popular endpoint.      Preapproved location, Get popular locations with optional filtering.      Returns the most popular loc, Debug/ops endpoint: per-location selection counts from the rolling window. (+3 more)
-
-### Community 65 - "Temperature Values Returns"
+### Community 58 - "Location Canonicalization Snapped Radius"
 Cohesion: 0.26
-Nodes (4): calculate_standard_deviation(), Calculate population standard deviation of a list of temperature values., Unit tests for temperature calculation functions: mean, std dev, trend slope, sl, TestCalculateStandardDeviation
+Nodes (11): Tests for location canonicalization radius in DailyTemperatureStore., Unit tests for DailyTemperatureStore._find_nearby_location., test_custom_radius_respected(), test_exact_boundary_is_snapped(), test_location_beyond_45km_is_not_snapped(), test_location_beyond_identity_radius_is_not_snapped(), test_location_within_45km_is_snapped(), test_location_within_identity_radius_is_snapped() (+3 more)
 
-### Community 66 - "Year Average Than"
-Cohesion: 0.38
-Nodes (5): generate_summary(), Generate a summary text for temperature data in the requested unit.      Args:, generate_summary uses warm framing when above average, cold when below., Build a data list with historical years + current year., TestGenerateSummaryAverageAwareWording
+### Community 59 - "Legacy Slug Fallback When"
+Cohesion: 0.17
+Nodes (7): migrate_redis_key(), Rename a Redis key to its canonical form, preserving TTL when possible., Tests for Phase 4 legacy slug fallback and lazy migration., A legacy lexical temporal key is found when canonical_name is supplied., TestBundleSlugFallback, TestMigrateRedisKey, TestTemporalLegacyFallback
 
-### Community 67 - "Location Handling Rate"
+### Community 60 - "Prewarm Preapproved Load Locations"
 Cohesion: 0.18
-Nodes (8): Test rate limiting edge cases and error handling, Test handling of empty location strings, Test handling of special characters in location names, Test handling of very long location names, Test that rate limiting is thread-safe for concurrent access, Helper tests for manual testing scenarios, Test rate limiting configuration, TestRateLimitingManual
+Nodes (10): load_locations_to_prewarm(), load_preapproved_locations(), PrewarmStats, Track prewarming statistics., Add a request result to statistics., Load canonical location strings from preapproved_locations.json.      Args:, Return location display strings to prewarm, ranked by popularity.      Queries G, Register a preapproved location candidate with normalized variations.      Args: (+2 more)
 
-### Community 68 - "Share Cache Redis"
+### Community 61 - "Shares Share Redis Postgres"
 Cohesion: 0.17
 Nodes (5): Returns share served from Redis cache., Cache miss falls back to the Postgres store., A Postgres hit should write to Redis for future requests., Public endpoint — no Authorization header needed., TestGetShare
 
-### Community 69 - "Monitor Dependencies Dependency"
+### Community 62 - "Locations Popular Resolve Code"
 Cohesion: 0.17
-Nodes (11): Get service token rate limiting stats., get_analytics_storage(), get_location_monitor(), get_request_monitor(), initialize_dependencies(), Shared dependencies for routers., Dependency to get service token rate limiter., Dependency to get location diversity monitor. (+3 more)
+Nodes (11): _build_popular_locations(), get_locations_status(), get_popular_locations(), Resolve alias or EU grouping. Returns a single ISO code or a frozenset of codes., Get status information about the preapproved locations service., Return ranked location dicts for the popular endpoint.      Preapproved location, Get popular locations with optional filtering.      Returns the most popular loc, Debug/ops endpoint: per-location selection counts from the rolling window. (+3 more)
 
-### Community 70 - "Token Enforcement When"
+### Community 63 - "Stats Usage Statistics Accessors"
+Cohesion: 0.18
+Nodes (10): get_usage_tracker(), Get the global usage tracker instance., Singleton accessor functions and cache initialisation.  All module-level cache i, get_location_usage_stats(), get_usage_stats(), Statistics and rate limiting status endpoints., Get usage tracking statistics from the selection signal (admin endpoint).      B, Get usage tracking statistics. (+2 more)
+
+### Community 64 - "App Check Token Enforcement"
 Cohesion: 0.27
 Nodes (11): _firebase_headers(), _mock_weather(), Tests for Firebase App Check enforcement modes in verify_token_middleware., When APP_CHECK_ENFORCEMENT=off, requests without App Check token are not blocked, When APP_CHECK_ENFORCEMENT=monitor, an invalid App Check token is logged but not, When APP_CHECK_ENFORCEMENT=enforce, requests without App Check header are reject, When APP_CHECK_ENFORCEMENT=enforce, a valid App Check token allows the request., test_enforce_mode_no_header() (+3 more)
 
-### Community 71 - "Normalization Stats Separate"
+### Community 65 - "Warming Tiers Tier1 Tier2"
+Cohesion: 0.17
+Nodes (6): enable_tracking(), Unit tests for CacheWarmer two-tier location selection (issue #52)., USAGE_TRACKING_ENABLED is imported into cache.warming at module load — patch it, warmer(), mock_tracker(), TestTierComposition
+
+### Community 66 - "Usage Tracking Same Key"
+Cohesion: 0.21
+Nodes (6): TestRecordSelection, Unit tests for LocationUsageTracker selection methods., Second call for same user+location+day is a no-op., Different users can each contribute one count., _today(), tracker()
+
+### Community 67 - "Tracking Usage Active Recent"
 Cohesion: 0.18
-Nodes (5): Tests for CacheStats location normalization (Phase 1)., stats(), TestGetLocationStatsMergesLegacyBuckets, TestTrackCacheRequestLocationNormalization, Test cache statistics endpoint.
+Nodes (7): TestRecent24hSet, Drop entries from the 24h recency set older than now - 24h., Return (location_id, last_seen_epoch) for locations active in last 24h., Record a location selection from a user (for popularity ranking)., get_recent_active_locations, prune_recent_active, record_selection
 
-### Community 72 - "Endpoint Removed Legacy"
-Cohesion: 0.2
-Nodes (10): protected_route(), Legacy endpoints (410 Gone)., Legacy data endpoint has been removed. Use /v1/records/daily/{location}/{month_d, Legacy average endpoint has been removed. Use /v1/records/daily/{location}/{mont, Legacy summary endpoint has been removed. Use /v1/records/daily/{location}/{mont, Protected endpoint that requires Firebase authentication., removed_average_endpoint(), removed_data_endpoint() (+2 more)
-
-### Community 73 - "Preapproved Location Rate"
-Cohesion: 0.18
-Nodes (10): Location Endpoints, check_rate_limit(), _find_preapproved_id(), Check if IP is within rate limits., Return the canonical location ID if name+country_code matches a preapproved loca, Search for locations by city name.      When MAPBOX_TOKEN is configured, delegat, search_locations(), Test rate limit exceeded scenario. (+2 more)
-
-### Community 74 - "Rate That Whitelist"
+### Community 68 - "Main Rate That Whitelist"
 Cohesion: 0.18
 Nodes (7): Test IP whitelist and blacklist integration with FastAPI., Test that blacklisted IPs are blocked entirely., Test that whitelisted IPs bypass rate limiting., Test that service jobs using API_ACCESS_TOKEN bypass rate limiting., Test that rate limit status endpoint shows IP whitelist/blacklist status., Test that rate limit stats endpoint shows whitelist and blacklist (requires auth, TestIPWhitelistBlacklistIntegration
 
-### Community 75 - "Status Endpoint Locations"
+### Community 69 - "Legacy Endpoint Removed Has"
+Cohesion: 0.2
+Nodes (10): protected_route(), Legacy endpoints (410 Gone)., Legacy data endpoint has been removed. Use /v1/records/daily/{location}/{month_d, Legacy average endpoint has been removed. Use /v1/records/daily/{location}/{mont, Legacy summary endpoint has been removed. Use /v1/records/daily/{location}/{mont, Protected endpoint that requires Firebase authentication., removed_average_endpoint(), removed_data_endpoint() (+2 more)
+
+### Community 70 - "Locations Status Endpoint Popular"
 Cohesion: 0.18
 Nodes (5): Test the status endpoint., Test status endpoint., Test the popular locations status endpoint., Test GET /v1/locations/popular/stats., TestPopularStatsEndpoint
 
-### Community 76 - "Location Locations Item"
+### Community 71 - "Locations Location Item Mock"
 Cohesion: 0.18
 Nodes (9): mock_locations_data(), Sample location data for testing., Mock the global locations data., Test LocationItem model validation., Test valid location item creation., Test invalid country code validation., Test location item with image URLs and alt text., sample_locations() (+1 more)
 
-### Community 77 - "London Firebase Shares"
-Cohesion: 0.24
-Nodes (6): mock_firebase(), Tests for social sharing endpoints.  Covers: - POST /v1/shares  — create share (, Stub Firebase token verification so auth middleware passes., TestHaversine, _haversine_km(), Return the great-circle distance in km between two (lat, lon) points.
+### Community 72 - "Stats Normalization Separate Cachestats"
+Cohesion: 0.18
+Nodes (5): Tests for CacheStats location normalization (Phase 1)., stats(), TestGetLocationStatsMergesLegacyBuckets, TestTrackCacheRequestLocationNormalization, Test cache statistics endpoint.
 
-### Community 79 - "Metro Grid Slug"
+### Community 73 - "Metro Snap Grid Slug"
 Cohesion: 0.24
 Nodes (7): coords_to_metro_slug(), Map coordinates to a shared metro grid slug (~25 km cells by default)., Tests for metro-area cache snapping., test_snaps_to_nearby_anchor_slug(), test_without_postgres_uses_geo_grid_when_coords_available(), TestCoordsToMetroSlug, TestMetroAnchorResolution
 
-### Community 80 - "Profile Performance Functions"
-Cohesion: 0.31
-Nodes (9): generate_performance_report(), profile_calculation_functions(), profile_function(), profile_memory_usage(), Profile memory usage of functions., Generate a comprehensive performance report., Profile a function with multiple iterations., Profile URL building function. (+1 more)
+### Community 74 - "Analytics Storage Batched Recent"
+Cohesion: 0.18
+Nodes (9): AnalyticsStorage.get_analytics_summary, AnalyticsStorage.get_recent_analytics, mock_redis(), Return a MagicMock Redis client and override the dependency., test_get_recent_analytics_uses_single_mget, Regression tests for batched Redis reads in AnalyticsStorage.  Issue: turnpiece/, An id still in the index list but TTL'd out of the per-id key is skipped., storage() (+1 more)
 
-### Community 81 - "Preapproved Load Locations"
+### Community 75 - "Root Endpoint Redis Cors"
 Cohesion: 0.22
-Nodes (9): load_locations_to_prewarm(), load_preapproved_locations(), PrewarmStats, Track prewarming statistics., Load canonical location strings from preapproved_locations.json.      Args:, Return location display strings to prewarm, ranked by popularity.      Queries G, Register a preapproved location candidate with normalized variations.      Args:, Load preapproved locations from JSON file and create normalized mapping.      Re (+1 more)
+Nodes (9): Root endpoint and API information., Test Redis connection., Root endpoint that returns API information, Test endpoint for CORS, root(), test_cors(), test_cors_rolling(), test_redis() (+1 more)
 
-### Community 82 - "Worker Job Background"
-Cohesion: 0.22
-Nodes (9): get_worker(), initialize_worker(), Background job worker for processing async API requests.  This worker processes, Initialize the job worker., Get the global worker instance., Start the background job worker., Setup signal handlers for graceful shutdown., setup_signal_handlers() (+1 more)
+### Community 76 - "Version Bump Update Current"
+Cohesion: 0.2
+Nodes (9): get_current_version(), git_commit_and_tag(), Get current version from version.py, Bump version based on type (patch, minor, major), Update version.py with new version, Update pyproject.toml with new version, Commit changes and create git tag, update_pyproject_toml() (+1 more)
 
-### Community 83 - "Prewarm Popular Locations"
+### Community 77 - "Prewarm Popular Locations Build"
 Cohesion: 0.29
 Nodes (6): CachePrewarmer, Cache prewarmer for popular locations and endpoints., Prewarm cache for a specific location., Generate date patterns for prewarming., Build URL for the given endpoint and parameters.                  Args:, Prewarm cache for multiple popular locations.
 
-### Community 84 - "Endpoints That Removed"
+### Community 78 - "Performance Profile Functions Function"
+Cohesion: 0.31
+Nodes (9): generate_performance_report(), profile_calculation_functions(), profile_function(), profile_memory_usage(), Profile memory usage of functions., Generate a comprehensive performance report., Profile a function with multiple iterations., Profile URL building function. (+1 more)
+
+### Community 79 - "Records Agg Endpoints That"
 Cohesion: 0.2
 Nodes (6): Test that removed legacy endpoints return 410 Gone, Test v1 API error handling, Test that v1 endpoints require authentication, Test the V1 records endpoints from main.py, Test the API info endpoint, TestV1RecordsEndpoints
 
-### Community 85 - "Chicago Continental Urban"
+### Community 80 - "Chicago Jpg Continental Urban"
 Cohesion: 0.27
 Nodes (10): Chicago, Chicago City Photo (JPG), Continental Climate (Humid Continental), Dusk/Twilight Urban Atmosphere, Chicago Loop District, Midwest United States, Chicago Theatre Neon Marquee Sign, State Street, Chicago (+2 more)
 
-### Community 86 - "Toronto City Photo"
+### Community 81 - "Toronto City Photo Jpg"
 Cohesion: 0.42
 Nodes (10): Canada, Canadian Flag, CN Tower, Ontario, Temperate Continental Climate, Toronto, Toronto City Photo (JPG), Toronto Downtown Skyline (+2 more)
 
-### Community 87 - "Redis Client Cache"
+### Community 82 - "Jobs Manager Compute Benchmarks"
 Cohesion: 0.22
-Nodes (9): Dependency to get Redis client., get_cached_response(), get_redis_client(), Get cached response from Redis., Cache response in Redis., Warm the cache with all locations data., Image attribution details., Get Redis client instance. (+1 more)
+Nodes (7): Get from cache or compute with single-flight protection., _RateLimiter, Token-bucket rate limiter shared across all OM requests., Prevent cache stampedes with Redis-based locks., Acquire a lock for the given key., Release a lock for the given key., SingleFlightLock
 
-### Community 88 - "Average Temperature Historical"
-Cohesion: 0.22
-Nodes (9): Test that average temperature and current temperature comparison is accurate, Test that summary text accurately reflects temperature differences, Test the historical average calculation function, Test historical average with insufficient data, test_average_vs_current_temperature(), test_calculate_historical_average(), test_summary_text_accuracy(), calculate_historical_average() (+1 more)
+### Community 84 - "Analytics Warming Location Storage"
+Cohesion: 0.2
+Nodes (7): _classify_location_tier, AnalyticsStorage._update_analytics_summary, AnalyticsStorage.store_analytics, Return tier1/tier2/cold for a canonical location string.      Uses the cache war, Return 'tier1', 'tier2', or 'cold' for a display-string location.          Match, TestClassifyLocationTier, CacheWarmer.classify_location_tier
 
-### Community 89 - "Modified Behavior Not"
+### Community 85 - "Load Script Run Make"
+Cohesion: 0.31
+Nodes (6): LoadTester, Load tester for TempHist API., Make a single HTTP request and return results., Run concurrent requests., Run warmup requests to populate cache., Make a request and return (success, cache_hit).
+
+### Community 86 - "Locations Modified Behavior Not"
 Cohesion: 0.25
 Nodes (6): Test caching behavior., Test ETag not modified response., Test Last-Modified not modified response., Test Redis cache miss behavior., Test rate limiting behavior., TestCaching
 
-### Community 90 - "Analytics Recent Endpoint"
+### Community 87 - "Analytics Recent Endpoint Limit"
 Cohesion: 0.22
 Nodes (5): Test analytics data retrieval endpoints, Test analytics recent endpoint, Test analytics recent endpoint with limit parameter, Test analytics session endpoint, TestAnalyticsRetrievalEndpoints
 
-### Community 91 - "Los Angeles City"
+### Community 88 - "Los Angeles City Photo"
 Cohesion: 0.47
 Nodes (9): California, USA, Los Angeles, Los Angeles City Photo (WebP), Los Angeles City Photo (JPG), Los Angeles Downtown Skyline, Mediterranean Climate (Los Angeles), Los Angeles Urban Landscape, Mount Baldy (Mount San Antonio) (+1 more)
 
-### Community 92 - "Vancouver British Columbia"
+### Community 89 - "Vancouver British Columbia Canada"
 Cohesion: 0.44
 Nodes (9): British Columbia, Canada, Vancouver, British Columbia, Canada, Vancouver City Photo (JPG), Vancouver City Photo (WebP), Oceanic Temperate Climate (Cfb), Coast Mountains / North Shore Mountains, Vancouver Downtown Skyline, False Creek, Vancouver (+1 more)
 
-### Community 93 - "Session Analytics Yaml"
+### Community 90 - "Analytics Session Postman Collections"
 Cohesion: 0.22
 Nodes (7): GET /analytics/session/{session_id}, test-session-001, Analytics submission payload, app_version: 1.2.30, platform: iOS, POST /analytics, session_id: test-session-001
 
-### Community 94 - "Health Endpoint Detailed"
-Cohesion: 0.25
-Nodes (7): detailed_health_check(), health_check(), Health check and status endpoints., Simple health check endpoint for Render load balancers., Comprehensive health check endpoint for debugging and monitoring (LOW-007: Enhan, get_daily_temperature_store(), Return a singleton DailyTemperatureStore instance.
+### Community 91 - "Locations Usage Tracking Rate"
+Cohesion: 0.22
+Nodes (9): Location Endpoints, check_rate_limit(), Return display strings for the most-selected locations, including     non-preapp, Check if IP is within rate limits., Test rate limit exceeded scenario., Return display strings for the top-ranked locations.          Unlike get_popular, Return ranked location IDs from the rolling selection window., get_popular_display_strings (+1 more)
 
-### Community 95 - "Clear Queue Admin"
+### Community 92 - "Rate Limiting Check Returns"
 Cohesion: 0.25
-Nodes (7): clear_job_queue(), Clear the job queue in Redis.      Args:         redis_url: Redis connection URL, Get test summary statistics., admin_clear_job_queue(), get_summary(), Generate a text summary of temperature data for a specific location and date., Admin endpoint to clear the job queue.     Requires X-Admin-Key header matching
+Nodes (5): Clean up old entries to prevent memory bloat., Check if IP is requesting too many different locations.                  Returns, Check if IP is making too many requests.                  Returns:             t, Check if service token request rate is within limits.                  Returns:, Check if service token location diversity is within limits.                  Ret
 
-### Community 96 - "Selection Method Fields"
+### Community 93 - "Analytics Selection Method Fields"
 Cohesion: 0.25
 Nodes (5): Tests for P1-098: response_time_ms, cache_hit, selection_method, location fields, POST with all new performance fields should succeed., POST with an unrecognised selection_method value should return 422., After submitting a record with response_time_ms the summary should include respo, TestAnalyticsPerformanceFields
 
-### Community 97 - "Auckland Location New"
+### Community 94 - "Auckland Location New Zealand"
 Cohesion: 0.46
 Nodes (8): Auckland, New Zealand, Waitemata Harbour, Auckland Harbour Bridge, Auckland Location Image (JPG), Auckland Location Data Concept, Sky Tower Auckland, Auckland Location Image (WebP), New Zealand
 
-### Community 98 - "Dublin Bridge City"
+### Community 95 - "Dublin Bridge City Photo"
 Cohesion: 0.5
 Nodes (8): Cable-Stayed Harp Bridge, Dublin, Dublin City Photo (JPG), Dublin City Photo (WebP), Dusk / Blue Hour Atmosphere, Ireland, River Liffey, Samuel Beckett Bridge
 
-### Community 99 - "Default Radius Config"
+### Community 96 - "Canonicalization Location Default Radius"
 Cohesion: 0.32
 Nodes (4): _find_nearby_location default arg must match CANONICALIZATION_RADIUS_KM (45.0)., CANONICALIZATION_RADIUS_KM env var is read by config at import time;         ver, TestCanonicalizationRadius, TestSameLocationRadius
 
-### Community 100 - "Jobs Clear All"
+### Community 97 - "Rate Limiting Stats Prewarm"
+Cohesion: 0.29
+Nodes (5): Get current statistics., Get service token rate limiting stats., Check if an IP has been flagged as suspicious., Get rate limiting stats for an IP address., Dependency to get service token rate limiter.
+
+### Community 98 - "Jobs Diagnose Clear All"
 Cohesion: 0.29
 Nodes (6): clear_all_jobs(), clear_stuck_jobs(), diagnose_job_system(), Run comprehensive diagnostics on the async job system., Clear jobs that are stuck in pending or processing state., Clear all jobs and results.
 
-### Community 101 - "Root Endpoint Cors"
-Cohesion: 0.33
-Nodes (6): Root endpoint and API information., Root endpoint that returns API information, Test endpoint for CORS, root(), test_cors(), test_cors_rolling()
+### Community 99 - "Shares London Share Store"
+Cohesion: 0.43
+Nodes (3): TestHaversine, _haversine_km(), Return the great-circle distance in km between two (lat, lon) points.
 
-### Community 102 - "Popular Display Strings"
+### Community 100 - "Locations Preapproved Name Find"
 Cohesion: 0.29
-Nodes (5): get_popular_display_strings(), Return display strings for the most-selected locations, including     non-preapp, Return display strings for the top-ranked locations.          Unlike get_popular, Return ranked location IDs from the rolling selection window., Persist minimal metadata for a non-preapproved location.          Stored so that
+Nodes (6): _find_preapproved_id(), Return the canonical location ID if name+country_code matches a preapproved loca, Search for locations by city name.      When MAPBOX_TOKEN is configured, delegat, search_locations(), Helper returns canonical id for exact name+country match., Helper returns None when no preapproved location matches.
 
-### Community 104 - "Forecast Yaml Location"
+### Community 101 - "Weather Postman Collections Temphist"
 Cohesion: 0.33
 Nodes (5): {{baseURL}}, GET /forecast/{location}, London, UK, 2025-05-26, GET /weather/{location}/{date}
 
-### Community 105 - "Endpoint Cache Stats"
-Cohesion: 0.47
-Nodes (6): Admin API Key, Cache Stats Endpoint, Clear Cache Endpoint, Reset Cache Stats Endpoint, X-Admin-Key Header, Usage Stats Endpoint
+### Community 102 - "Path Parsing Location Extract"
+Cohesion: 0.29
+Nodes (5): extract_location_from_path(), URL path helpers for middleware location extraction., Return (location, endpoint) from a billable API path, or (None, None).      Supp, Tests for middleware location extraction from URL paths., test_extract_location_from_path()
 
-### Community 106 - "Urls Image Convert"
+### Community 103 - "Main Rate Check Limit"
 Cohesion: 0.33
-Nodes (5): convert_image_urls(), load_locations_data(), Convert relative image URLs to full URLs., Load and validate locations data from JSON file., Test image URL conversion from relative to full URLs.
+Nodes (4): Test the RequestRateMonitor class, Test request rate check when under limit, Test request rate check when over limit, TestRequestRateMonitor
 
-### Community 107 - "Gradient Factor Friendly"
+### Community 104 - "Clear Queue Admin Job"
 Cohesion: 0.33
-Nodes (5): calculate_gradient_factor(), get_friendly_date(), Temperature calculation and summary generation utilities., Get a friendly date string with ordinal suffix., Return a [-1, 1] UI intensity factor for the colour gradient engine.      Penali
+Nodes (5): clear_job_queue(), Clear the job queue in Redis.      Args:         redis_url: Redis connection URL, admin_clear_job_queue(), Generate a text summary of temperature data for a specific location and date., Admin endpoint to clear the job queue.     Requires X-Admin-Key header matching
 
-### Community 108 - "Handling Redis Unavailable"
+### Community 105 - "Locations Handling Redis Unavailable"
 Cohesion: 0.33
 Nodes (4): Test error handling scenarios., Test behavior when Redis is unavailable., Test handling of malformed JSON in cache., TestErrorHandling
 
-### Community 109 - "Client Convert Weather"
-Cohesion: 0.4
-Nodes (5): _f_to_c(), Convert °F to °C — matches weather_data._f_to_c., close_client(), _convert_days_to_celsius(), Visual Crossing weather client.  Alternative to Open-Meteo — enabled by setting
-
-### Community 110 - "Preapproved Slug Cache"
+### Community 106 - "Stats Admin Postman Collections"
 Cohesion: 0.47
-Nodes (3): _canonical_preapproved_cache_slug(), Return a stable cache slug for a known preapproved location, if matched., TestCanonicalPreapprovedCacheSlug
+Nodes (6): Admin API Key, Cache Stats Endpoint, Clear Cache Endpoint, Reset Cache Stats Endpoint, X-Admin-Key Header, Usage Stats Endpoint
 
-### Community 112 - "Validate Environment Worker"
+### Community 107 - "Series Mget Temperature Reads"
+Cohesion: 0.33
+Nodes (5): test_get_temperature_series_issues_single_mget, test_get_temperature_series_uses_cached_values_from_mget, Regression test for batched cache reads in get_temperature_series.  Issue: turnp, All per-year cache reads must collapse into one MGET call., A mix of hits and misses from one MGET must yield the right series.
+
+### Community 108 - "Main Performance Rapid Requests"
 Cohesion: 0.4
-Nodes (4): start.sh, Validate required environment variables are set., validate_environment(), Railway Worker Service
+Nodes (3): Test rate limiting performance under load, Test performance with rapid requests, Test that memory usage doesn't grow indefinitely
 
-### Community 113 - "Country Code Validate"
-Cohesion: 0.4
-Nodes (4): Validate ISO 3166-1 alpha-2 country code format., Validate a country code input. Returns (is_valid, error_message).      Accepts I, validate_country_code(), Test country code validation.
-
-### Community 114 - "Staticfiles Content Type"
-Cohesion: 0.4
-Nodes (4): ImageStaticFiles, Custom StaticFiles that ensures correct Content-Type headers for image files., Override to ensure proper content-type for images., StaticFiles
-
-### Community 115 - "Popular Cache Key"
+### Community 109 - "Locations Popular Key Generate"
 Cohesion: 0.4
 Nodes (4): get_popular_cache_key(), Generate cache key for popular locations filtered data., Test popular cache key generation., TestPopularCacheKey
 
-### Community 116 - "Normalise Array Based"
+### Community 110 - "Firebase Verify Authentication Token"
 Cohesion: 0.4
-Nodes (5): _fetch_om_batch(), Normalise OM array-based response to [{datetime, temp, tempmax, tempmin}]     an, Single OM archive call spanning the full year range; filter in-process.     Comp, _process_om_response(), Normalise OM's array-based response to [{datetime, temp, tempmax, tempmin}],
+Nodes (4): Verify Firebase authentication token., verify_firebase_token(), Firebase initialization and authentication utilities., Initialize Firebase Admin SDK.
 
-### Community 117 - "Configuration Validate Cors"
+### Community 111 - "Country Code Locations Validate"
+Cohesion: 0.4
+Nodes (4): Validate ISO 3166-1 alpha-2 country code format., Validate a country code input. Returns (is_valid, error_message).      Accepts I, validate_country_code(), Test country code validation.
+
+### Community 112 - "Locations Cached Redis Warm"
+Cohesion: 0.4
+Nodes (5): get_cached_response(), Get cached response from Redis., Cache response in Redis., Warm the cache with all locations data., warm_cache()
+
+### Community 113 - "Batch Fetch Performance That"
+Cohesion: 0.4
+Nodes (4): Test that rolling window values are fetched in a single database call., Test that the batch fetch includes all unique dates across years., test_batch_fetch_calculates_unique_dates(), test_batch_fetch_reduces_database_calls()
+
+### Community 114 - "Health Check Status Endpoints"
 Cohesion: 0.5
-Nodes (3): Application configuration and environment variables., Validate CORS configuration to prevent misconfiguration., validate_cors_config()
+Nodes (3): health_check(), Health check and status endpoints., Simple health check endpoint for Render load balancers.
+
+### Community 115 - "Locations Filter Based Criteria"
+Cohesion: 0.5
+Nodes (3): filter_locations(), Filter locations based on criteria., Test location filtering.
+
+### Community 116 - "Limit Locations Validate Parameter"
+Cohesion: 0.5
+Nodes (3): Validate limit parameter., validate_limit(), Test limit validation.
+
+### Community 117 - "Size Middleware Main Enforce"
+Cohesion: 0.5
+Nodes (3): Middleware to enforce request size limits and validate content types., request_size_middleware(), Request size validation middleware.
+
+### Community 118 - "Core Value Optional Statistics"
+Cohesion: 0.5
+Nodes (4): Get a value from the cache with optional statistics tracking., Set a value in the cache with specified lifetime., Get multiple cache values in a single round trip.      Returns a list of raw red, get_cache_value
+
+### Community 119 - "Updated Timestamp Core Last"
+Cohesion: 0.5
+Nodes (4): get_cache_updated_timestamp(), Get the last updated timestamp for a cache key., get_record_updated(), Get the last updated timestamp for a specific record endpoint.          Returns
+
+### Community 120 - "Config Configuration Validate Cors"
+Cohesion: 0.5
+Nodes (3): Application configuration and environment variables., Validate CORS configuration to prevent misconfiguration., validate_cors_config
 
 ## Ambiguous Edges - Review These
 - `New York City Photo (WebP)` → `Statue of Liberty`  [AMBIGUOUS]
@@ -671,9 +703,9 @@ Nodes (3): Application configuration and environment variables., Validate CORS c
   postman/collections/TempHist API/Records/Worker diagnostics.request.yaml · relation: conceptually_related_to
 
 ## Knowledge Gaps
-- **769 isolated node(s):** `Load canonical location strings from preapproved_locations.json.      Args:`, `Track prewarming statistics.`, `Add a request result to statistics.`, `Get current statistics.`, `Cache prewarmer for popular locations and endpoints.` (+764 more)
+- **809 isolated node(s):** `Load canonical location strings from preapproved_locations.json.      Args:`, `Track prewarming statistics.`, `Add a request result to statistics.`, `Get current statistics.`, `Cache prewarmer for popular locations and endpoints.` (+804 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **47 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **51 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
@@ -682,13 +714,13 @@ _Questions this graph is uniquely positioned to answer:_
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
 - **What is the exact relationship between `GET /v1/jobs/diagnostics/worker-status` and `GET /debug/jobs`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `Location Usage Tracking` connect `Location Canonical Usage` to `Records Temphist Guide`, `Popular Locations Limit`, `Popular Display Strings`, `Warming Warm Cache`, `Testgetpopularfromselections Ranks Correctly`, `Preapproved Location Rate`, `Cache Stats Rate`, `Parameter Location Query`, `Endpoint Cache Stats`, `Cache Ttl Etag`, `Same Key Redis`, `Geo Index Exception`, `Initialize Args Redis`, `Cache Stats Track`?**
-  _High betweenness centrality (0.113) - this node is a cross-community bridge._
-- **Why does `main()` connect `Version Current Function` to `Job Queue Worker`, `Job Rolling Bundle`, `Run Load Make`, `Url Run Date`, `Cache Key Metrics`, `Validate Environment Worker`, `Preapproved Load Locations`, `Worker Job Background`, `Prewarm Popular Locations`, `Job Async Redis`, `Cache Stats Track`?**
-  _High betweenness centrality (0.074) - this node is a cross-community bridge._
-- **Why does `LocationItem` connect `Record Selection Name` to `Locations Endpoint Location`, `Location Handling Rate`, `Invalid Location Analytics`, `Urls Image Convert`, `Status Endpoint Locations`, `Location Locations Item`, `Handling Redis Unavailable`, `Location Resolve Canonical`, `Locations Limit Preapproved`, `Locations Initialize Mock`, `Popular Cache Key`, `Filter Locations Resolve`, `Modified Behavior Not`?**
-  _High betweenness centrality (0.051) - this node is a cross-community bridge._
-- **Are the 4 inferred relationships involving `main()` (e.g. with `initialize_cache()` and `Job Worker`) actually correct?**
+- **Why does `LocationUsageTracker` connect `Usage Tracking Location Popular` to `Readme Postman Temphist Collections`, `Warming Warm Dates All`, `Usage Tracking Same Key`, `Keys Location Year Records`, `Tracking Usage Pipeline Exists`, `Initialize Args Load Redis`, `Tracking Usage Active Recent`, `Stats Admin Postman Collections`, `Postman Collections Temphist Locations`, `Stats Warming Statistics Rate`, `Locations Usage Tracking Rate`, `Usage Tracking Geo Index`, `Locations Popular Resolve Code`?**
+  _High betweenness centrality (0.107) - this node is a cross-community bridge._
+- **Why does `client()` connect `Analytics Records Agg Main` to `App Check Token Enforcement`, `Shares List Firebase Auth`, `Main Temperature Rate Endpoint`, `Admin Auth Endpoints Key`, `Locations Initialize App Warm`?**
+  _High betweenness centrality (0.068) - this node is a cross-community bridge._
+- **Why does `CacheInvalidator` connect `Invalidate Warming All Keys` to `Temporal App Key Canonical`, `Keys Location Year Records`, `Initialize Args Load Redis`, `Stats Warming Statistics Rate`, `Core Ttl Endpoint Etag`, `Jobs Manager Compute Benchmarks`?**
+  _High betweenness centrality (0.057) - this node is a cross-community bridge._
+- **Are the 4 inferred relationships involving `main()` (e.g. with `initialize_cache` and `Job Worker`) actually correct?**
   _`main()` has 4 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 5 inferred relationships involving `TempHist API` (e.g. with `FastAPI` and `Postman Production Environment`) actually correct?**
-  _`TempHist API` has 5 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 10 inferred relationships involving `LocationUsageTracker` (e.g. with `tracker()` and `TestGetTotalSelections`) actually correct?**
+  _`LocationUsageTracker` has 10 INFERRED edges - model-reasoned connections that need verification._

@@ -8,13 +8,6 @@ from typing import Dict, Set, Tuple
 import redis
 
 from config import (
-    DEBUG,
-    IP_BLACKLIST,
-    IP_WHITELIST,
-    MAX_LOCATIONS_PER_HOUR,
-    MAX_REQUESTS_PER_HOUR,
-    RATE_LIMIT_ENABLED,
-    RATE_LIMIT_WINDOW_HOURS,
     SERVICE_TOKEN_RATE_LIMITS,
 )
 
@@ -335,34 +328,3 @@ class RequestRateMonitor:
         }
 
 
-# Initialize rate limiting monitors
-def initialize_rate_limiting():
-    """Initialize rate limiting monitors."""
-    if RATE_LIMIT_ENABLED:
-        location_monitor = LocationDiversityMonitor(MAX_LOCATIONS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
-        request_monitor = RequestRateMonitor(MAX_REQUESTS_PER_HOUR, RATE_LIMIT_WINDOW_HOURS)
-
-        if DEBUG:
-            logger.info(
-                f"🛡️  RATE LIMITING INITIALIZED: {MAX_LOCATIONS_PER_HOUR} locations/hour, {MAX_REQUESTS_PER_HOUR} requests/hour, {RATE_LIMIT_WINDOW_HOURS}h window"
-            )
-            if IP_WHITELIST:
-                logger.debug(f"⭐ WHITELISTED IPS: {', '.join(IP_WHITELIST)}")
-            if IP_BLACKLIST:
-                logger.debug(f"🚫 BLACKLISTED IPS: {', '.join(IP_BLACKLIST)}")
-        else:
-            logger.debug(
-                f"Rate limiting enabled: max {MAX_LOCATIONS_PER_HOUR} locations, max {MAX_REQUESTS_PER_HOUR} requests per {RATE_LIMIT_WINDOW_HOURS} hour(s)"
-            )
-            if IP_WHITELIST:
-                logger.debug(f"Whitelisted IPs: {len(IP_WHITELIST)} configured")
-            if IP_BLACKLIST:
-                logger.debug(f"Blacklisted IPs: {len(IP_BLACKLIST)} configured")
-
-        return location_monitor, request_monitor
-    else:
-        if DEBUG:
-            logger.info("⚠️  RATE LIMITING DISABLED")
-        else:
-            logger.info("Rate limiting disabled")
-        return None, None

@@ -1,4 +1,0 @@
-$kind: http-request
-url: "{{baseURL}}/v1/jobs/diagnostics/worker-status"
-method: GET
-order: 11000
