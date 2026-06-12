@@ -1,5 +1,5 @@
 $kind: http-request
 name: Monthly
-url: "{{baseURL}}/v1/records/monthly/london/06-09"
+url: "{{baseURL}}/v1/records/monthly/Eastbourne%2C%20East%20Sussex%2C%20England%2C%20United%20Kingdom/06-12"
 method: GET
 order: 3000
