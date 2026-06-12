@@ -314,7 +314,24 @@ async def fetch_timeline_for_location(
     days, metadata = await fetch_days(lat, lon, start, end)
     if timezone_hint and not metadata.get("timezone"):
         metadata["timezone"] = timezone_hint
+
+    _cache_location_timezone(location, metadata.get("timezone"))
+
     return days, metadata
+
+
+def _cache_location_timezone(location: str, tz: Optional[str]) -> None:
+    """Persist a resolved timezone to Redis so non-preapproved locations
+    surface a populated `timezone` field in `/v1/records` responses.
+    """
+    if not tz:
+        return
+    try:
+        from cache.keys import store_location_timezone
+
+        store_location_timezone(location, tz)
+    except Exception as exc:
+        logger.debug("Could not cache timezone for %r: %s", location, exc)
 
 
 async def fetch_single_date(location: str, date_str: str) -> Dict:
@@ -325,7 +342,11 @@ async def fetch_single_date(location: str, date_str: str) -> Dict:
     """
     target = datetime.strptime(date_str, "%Y-%m-%d").date()
     lat, lon, timezone_hint = await geocode_location(location)
-    days, _ = await fetch_days(lat, lon, target, target)
+    days, metadata = await fetch_days(lat, lon, target, target)
+    if timezone_hint and not metadata.get("timezone"):
+        metadata["timezone"] = timezone_hint
+
+    _cache_location_timezone(location, metadata.get("timezone"))
 
     day = next((d for d in days if d.get("datetime") == date_str), None)
     if day is None:
