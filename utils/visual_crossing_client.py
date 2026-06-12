@@ -155,6 +155,7 @@ async def fetch_timeline_for_location(
                         "latitude": payload.get("latitude"),
                         "longitude": payload.get("longitude"),
                     }
+                    _cache_location_timezone(location, metadata.get("timezone"))
                     return _convert_days_to_celsius(days), metadata
 
         except LocationNotFoundError:
@@ -177,6 +178,20 @@ async def fetch_timeline_for_location(
                 exc,
             )
             await asyncio.sleep(delay)
+
+
+def _cache_location_timezone(location: str, tz: Optional[str]) -> None:
+    """Persist a resolved timezone to Redis so non-preapproved locations
+    surface a populated `timezone` field in `/v1/records` responses.
+    """
+    if not tz:
+        return
+    try:
+        from cache.keys import store_location_timezone
+
+        store_location_timezone(location, tz)
+    except Exception as exc:
+        logger.debug("Could not cache timezone for %r: %s", location, exc)
 
 
 # ── Public single-date helper (mirrors open_meteo_client) ────────────────────

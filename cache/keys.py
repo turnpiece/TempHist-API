@@ -168,10 +168,10 @@ def store_location_timezone(
 ) -> None:
     """Store timezone for a location in Redis cache.
 
-    Intended to be called from the location-resolution path (e.g. after Mapbox
-    or Open-Meteo geocoding returns a timezone for a non-preapproved location).
-    Until that wiring exists, the cache stays empty and `_get_location_timezone`
-    falls through to the preapproved-locations JSON.
+    Called from the active weather provider (Open-Meteo or Visual Crossing)
+    after each fetch that resolves a timezone, so subsequent
+    `_get_location_timezone` reads for non-preapproved locations hit the
+    cache instead of falling through to `None`.
     """
     try:
         if redis_client is None:
