@@ -10,6 +10,7 @@ venv/
 .venv/
 *_env_vars.json
 prewarm_results_*.json
+.github/instructions/sonarqube_mcp.instructions.md
 
 # Location image files
 data/locations/originals/
