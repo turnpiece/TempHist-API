@@ -1,6 +1,6 @@
 $kind: http-request
 name: Daily — Fahrenheit
-url: "{{baseURL}}/v1/records/daily/London, England, United Kingdom/06-03?unit_group=fahrenheit"
+url: "{{baseURL}}/v1/records/daily/London%2C%20England%2C%20United%20Kingdom%2F06-12?unit_group=fahrenheit"
 method: GET
 queryParams:
   unit_group: fahrenheit
