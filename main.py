@@ -184,46 +184,38 @@ else:
 from contextlib import asynccontextmanager  # noqa: E402
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Handle application startup and shutdown events."""
-    global service_token_rate_limiter
-
-    # Startup
-    # Initialize service token rate limiter (Redis-based, always enabled for security)
+def _init_service_token_rate_limiter() -> Optional[ServiceTokenRateLimiter]:
+    """Build the Redis-backed service-token rate limiter, or return None on failure."""
     try:
-        service_token_rate_limiter = ServiceTokenRateLimiter(redis_client)
+        limiter = ServiceTokenRateLimiter(redis_client)
         if DEBUG:
             logger.info(
-                f"🛡️  SERVICE TOKEN RATE LIMITING: {SERVICE_TOKEN_RATE_LIMITS['requests_per_hour']} requests/hour, {SERVICE_TOKEN_RATE_LIMITS['locations_per_hour']} locations/hour"
+                "🛡️  SERVICE TOKEN RATE LIMITING: %s requests/hour, %s locations/hour",
+                SERVICE_TOKEN_RATE_LIMITS["requests_per_hour"],
+                SERVICE_TOKEN_RATE_LIMITS["locations_per_hour"],
             )
+        return limiter
     except (redis.RedisError, redis.ConnectionError):
         logger.exception("❌ SERVICE TOKEN RATE LIMITER: Redis connection failed")
-        # Create None limiter if Redis fails - will fail open in middleware
-        service_token_rate_limiter = None
     except ImportError:
         logger.exception("❌ SERVICE TOKEN RATE LIMITER: Import failed")
-        service_token_rate_limiter = None
+    return None
 
-    # Initialize router dependencies (must happen after service_token_rate_limiter is created)
+
+def _init_router_dependencies(limiter: Optional[ServiceTokenRateLimiter]) -> None:
+    """Wire shared router dependencies (cache, monitors, analytics)."""
     try:
         from analytics_storage import AnalyticsStorage
         from utils.location_validation import InvalidLocationCache
 
-        # Create instances needed for dependencies
-        invalid_location_cache = InvalidLocationCache(redis_client)
-        analytics_storage = AnalyticsStorage(redis_client)
-
-        # Initialize dependencies
         initialize_dependencies(
             redis_client=redis_client,
-            invalid_location_cache=invalid_location_cache,
-            service_token_rate_limiter=service_token_rate_limiter,
+            invalid_location_cache=InvalidLocationCache(redis_client),
+            service_token_rate_limiter=limiter,
             location_monitor=location_monitor,
             request_monitor=request_monitor,
-            analytics_storage=analytics_storage,
+            analytics_storage=AnalyticsStorage(redis_client),
         )
-
         if DEBUG:
             logger.info("✅ ROUTER DEPENDENCIES: Initialized successfully")
     except (redis.RedisError, redis.ConnectionError):
@@ -233,7 +225,8 @@ async def lifespan(app: FastAPI):
     except (ValueError, TypeError):
         logger.exception("❌ ROUTER DEPENDENCIES: Configuration error")
 
-    # Initialize cache system first
+
+def _init_cache_system() -> None:
     try:
         initialize_cache(redis_client)
         if DEBUG:
@@ -243,7 +236,8 @@ async def lifespan(app: FastAPI):
     except ImportError:
         logger.exception("❌ CACHE SYSTEM: Import failed")
 
-    # Initialize locations data (carousel / search)
+
+async def _init_locations() -> None:
     try:
         await initialize_locations_data(redis_client)
         if DEBUG:
@@ -255,46 +249,48 @@ async def lifespan(app: FastAPI):
     except (IOError, PermissionError):
         logger.exception("❌ LOCATIONS: I/O error")
 
-    if CACHE_WARMING_ENABLED and get_cache_warmer():
-        # Wait a moment for the server to fully start
-        await asyncio.sleep(2)
 
-        if DEBUG:
-            logger.info("🚀 STARTUP CACHE WARMING: Creating initial warming job")
+async def _maybe_start_cache_warming() -> None:
+    """Enqueue the startup warming job and launch the scheduled-warming background task."""
+    if not (CACHE_WARMING_ENABLED and get_cache_warmer()):
+        return
 
-        # Create initial warming job instead of running directly
-        from cache.accessors import get_job_manager
+    # Wait a moment for the server to fully start
+    await asyncio.sleep(2)
 
-        job_manager = get_job_manager()
-        if job_manager:
-            try:
-                job_id = job_manager.create_job(
-                    "cache_warming",
-                    {
-                        "type": "all",
-                        "locations": [],
-                        "triggered_by": "startup",
-                        "triggered_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-                logger.info(f"✅ Startup cache warming job created: {job_id}")
-            except Exception as job_error:
-                logger.warning(f"⚠️  Startup cache warming job skipped: {job_error}")
-        else:
-            logger.warning("⚠️  Job manager not available, skipping startup warming")
+    if DEBUG:
+        logger.info("🚀 STARTUP CACHE WARMING: Creating initial warming job")
 
-        # Start scheduled warming background task (job-based)
-        asyncio.create_task(scheduled_cache_warming(get_cache_warmer()))
-        if DEBUG:
-            logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
+    from cache.accessors import get_job_manager
 
-    yield  # Application runs here
+    job_manager = get_job_manager()
+    if not job_manager:
+        logger.warning("⚠️  Job manager not available, skipping startup warming")
+        return
 
-    # Shutdown
+    try:
+        job_id = job_manager.create_job(
+            "cache_warming",
+            {
+                "type": "all",
+                "locations": [],
+                "triggered_by": "startup",
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        logger.info("✅ Startup cache warming job created: %s", job_id)
+    except Exception as job_error:
+        logger.warning("⚠️  Startup cache warming job skipped: %s", job_error)
+
+    asyncio.create_task(scheduled_cache_warming(get_cache_warmer()))
+    if DEBUG:
+        logger.info("⏰ SCHEDULED CACHE WARMING: Background task started")
+
+
+async def _shutdown_clients() -> None:
     if DEBUG:
         logger.info("🛑 APPLICATION SHUTDOWN: Cleaning up resources")
 
-    # Clean up async Redis client (global already declared at function start)
     if async_redis_client:
         try:
             await async_redis_client.aclose()
@@ -303,7 +299,6 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("⚠️  Error closing async Redis client")
 
-    # Clean up HTTP client sessions
     try:
         from utils.weather_provider import close_client_session
 
@@ -312,6 +307,22 @@ async def lifespan(app: FastAPI):
             logger.info("✅ HTTP client sessions closed successfully")
     except Exception:
         logger.exception("⚠️  Error closing HTTP client sessions")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown events."""
+    global service_token_rate_limiter
+
+    service_token_rate_limiter = _init_service_token_rate_limiter()
+    _init_router_dependencies(service_token_rate_limiter)
+    _init_cache_system()
+    await _init_locations()
+    await _maybe_start_cache_warming()
+
+    yield
+
+    await _shutdown_clients()
 
 
 app = FastAPI(lifespan=lifespan)
