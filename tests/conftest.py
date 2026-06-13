@@ -9,8 +9,11 @@ production code calls from FastAPI's shutdown hook — never from tests.
 """
 
 import asyncio
+import logging
 
 import pytest
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -25,14 +28,14 @@ def close_module_http_clients():
 
             await open_meteo_client.close_client()
         except Exception:
-            pass
+            logger.debug("open_meteo_client teardown failed", exc_info=True)
 
         try:
             from utils import visual_crossing_client
 
             await visual_crossing_client.close_client()
         except Exception:
-            pass
+            logger.debug("visual_crossing_client teardown failed", exc_info=True)
 
         try:
             from routers import locations as locations_router
@@ -42,7 +45,7 @@ def close_module_http_clients():
                 await client.close()
             locations_router._mapbox_client = None
         except Exception:
-            pass
+            logger.debug("mapbox client teardown failed", exc_info=True)
 
     try:
         asyncio.run(_close_all())

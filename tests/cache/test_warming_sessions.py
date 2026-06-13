@@ -7,7 +7,6 @@ Asserts that one `warm_all_locations` cycle:
 
 from unittest.mock import MagicMock
 
-import aiohttp
 import pytest
 
 from cache import warming as warming_module

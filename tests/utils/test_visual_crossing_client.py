@@ -1,6 +1,5 @@
 """Tests for utils.visual_crossing_client timezone caching."""
 
-import os
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
