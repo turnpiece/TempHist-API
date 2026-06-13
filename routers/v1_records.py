@@ -516,6 +516,102 @@ async def _collect_rolling_window_values(
     return values, aggregated, missing_years, coverage_details
 
 
+_PERIOD_DATE_RANGE_DAYS = {"daily": 1, "weekly": 7, "monthly": 31, "yearly": 365}
+
+_PERIOD_FRIENDLY_OVERRIDE = {
+    "weekly": "week ending ",
+    "monthly": "month ending ",
+    "yearly": "year ending ",
+}
+
+
+def _date_range_for_period(period: str) -> int:
+    if period not in _PERIOD_DATE_RANGE_DAYS:
+        raise HTTPException(status_code=400, detail="Invalid period. Must be daily, weekly, monthly, or yearly")
+    return _PERIOD_DATE_RANGE_DAYS[period]
+
+
+def _build_range_block(values: List, month: int, day: int) -> DateRange:
+    if not values:
+        return DateRange(start="", end="", years=0)
+    start_year_val = min(v.year for v in values)
+    end_year_val = max(v.year for v in values)
+    return DateRange(
+        start=f"{start_year_val}-{month:02d}-{day:02d}",
+        end=f"{end_year_val}-{month:02d}-{day:02d}",
+        years=end_year_val - start_year_val + 1,
+    )
+
+
+def _build_average_block_v1(
+    all_temps: List[float], unit_group: str
+) -> Tuple[AverageData, float, Optional[float]]:
+    if not all_temps:
+        return AverageData(mean=0.0, unit=unit_group, data_points=0), 0.0, None
+    series_mean = sum(all_temps) / len(all_temps)
+    series_std_dev = calculate_standard_deviation(all_temps)
+    avg = AverageData(
+        mean=round(series_mean, 2),
+        unit=unit_group,
+        data_points=len(all_temps),
+        standard_deviation=series_std_dev,
+    )
+    return avg, series_mean, series_std_dev
+
+
+def _build_trend_block_v1(values: List, unit_group: str) -> TrendData:
+    trend_unit = "°C/decade" if unit_group == "celsius" else "°F/decade"
+    if len(values) < 2:
+        return TrendData(slope=0.0, unit=trend_unit, data_points=len(values))
+    trend_input = [{"x": v.year, "y": v.temperature} for v in values]
+    slope, r_squared, slope_error = calculate_trend_slope(trend_input)
+    gf = calculate_gradient_factor(slope, slope_error, unit_group) if slope_error is not None else None
+    return TrendData(
+        slope=slope,
+        unit=trend_unit,
+        data_points=len(values),
+        r_squared=r_squared,
+        slope_error=slope_error,
+        gradient_factor=gf,
+    )
+
+
+def _make_summary_v1(
+    values: List,
+    period: str,
+    location: str,
+    unit_group: str,
+    series_mean: float,
+    end_date_obj: datetime,
+    redis_client: Optional[redis.Redis],
+) -> str:
+    summary_data = [{"x": v.year, "y": v.temperature} for v in values]
+    local_today = get_local_today(location, redis_client)
+    text = generate_summary(
+        summary_data, end_date_obj, period, unit_group, mean=series_mean, local_today=local_today
+    )
+    prefix = _PERIOD_FRIENDLY_OVERRIDE.get(period)
+    if prefix:
+        friendly = get_friendly_date(end_date_obj)
+        text = text.replace(friendly, prefix + friendly)
+    return text
+
+
+def _coverage_metadata(coverage_details: List[Dict]) -> Dict:
+    if not coverage_details:
+        return {}
+    total_expected = sum(item["expected_days"] for item in coverage_details)
+    total_available = sum(item["available_days"] for item in coverage_details)
+    overall_ratio = round(total_available / total_expected, 4) if total_expected else 0.0
+    return {
+        "overall_available_days": total_available,
+        "overall_expected_days": total_expected,
+        "overall_coverage_ratio": overall_ratio,
+        "approximate_years": [item for item in coverage_details if item["approximate"]],
+        "per_year": coverage_details,
+    }
+
+
 async def get_temperature_data_v1(
     location: str,
     period: str,
@@ -524,153 +620,54 @@ async def get_temperature_data_v1(
     redis_client: redis.Redis = None,  # Can be None, will use dependency if not provided
 ) -> Dict:
     """Get temperature data for v1 API using rolling timeline windows for weekly/monthly/yearly."""
-    # Parse identifier based on period (all use MM-DD format representing end date)
-    month, day, period_type = parse_identifier(period, identifier)
+    month, day, _ = parse_identifier(period, identifier)
     slug = await resolve_location_cache_slug(location)
 
-    # Use 50 years of data ending at current year (consistent with other endpoints)
     current_year = datetime.now().year
     years = get_year_range(current_year)
 
-    if period == "daily":
-        date_range_days = 1
-    elif period == "weekly":
-        date_range_days = 7
-    elif period == "monthly":
-        date_range_days = 31
-    elif period == "yearly":
-        date_range_days = 365
-    else:
-        raise HTTPException(status_code=400, detail="Invalid period. Must be daily, weekly, monthly, or yearly")
+    date_range_days = _date_range_for_period(period)
 
-    # Get temperature data for the date range across all years
-    values = []
-    all_temps = []
-    missing_years = []
-    coverage_details: List[Dict] = []
+    window_values, aggregated_values, window_missing, coverage_details = await _collect_rolling_window_values(
+        location=location,
+        period=period,  # type: ignore[arg-type]
+        month=month,
+        day=day,
+        unit_group=unit_group,
+        years=years,
+        slug=slug,
+    )
+    values = list(window_values)
+    all_temps = list(aggregated_values)
+    missing_years = list(window_missing)
 
-    if period in ["daily", "weekly", "monthly", "yearly"]:
-        (
-            window_values,
-            aggregated_values,
-            window_missing,
-            window_coverage,
-        ) = await _collect_rolling_window_values(
-            location=location,
-            period=period,  # type: ignore[arg-type]
-            month=month,
-            day=day,
-            unit_group=unit_group,
-            years=years,
-            slug=slug,
-        )
-        values.extend(window_values)
-        all_temps.extend(aggregated_values)
-        missing_years.extend(window_missing)
-        coverage_details.extend(window_coverage)
-
-    # Calculate date range
-    if values:
-        start_year_val = min(v.year for v in values)
-        end_year_val = max(v.year for v in values)
-        range_data = DateRange(
-            start=f"{start_year_val}-{month:02d}-{day:02d}",
-            end=f"{end_year_val}-{month:02d}-{day:02d}",
-            years=end_year_val - start_year_val + 1,
-        )
-    else:
-        range_data = DateRange(start="", end="", years=0)
-
-    # Calculate average and series statistics
-    if all_temps:
-        series_mean = sum(all_temps) / len(all_temps)
-        series_std_dev = calculate_standard_deviation(all_temps)
-        avg_data = AverageData(
-            mean=round(series_mean, 2), unit=unit_group, data_points=len(all_temps), standard_deviation=series_std_dev
-        )
-    else:
-        series_mean = 0.0
-        series_std_dev = None
-        avg_data = AverageData(mean=0.0, unit=unit_group, data_points=0)
+    range_data = _build_range_block(values, month, day)
+    avg_data, series_mean, _series_std_dev = _build_average_block_v1(all_temps, unit_group)
 
     values = [v.model_copy(update={"anomaly": round(v.temperature - series_mean, 2)}) for v in values]
 
-    # Calculate trend
-    if len(values) >= 2:
-        trend_input = [{"x": v.year, "y": v.temperature} for v in values]
-        slope, r_squared, slope_error = calculate_trend_slope(trend_input)
-        gf = calculate_gradient_factor(slope, slope_error, unit_group) if slope_error is not None else None
-        trend_data = TrendData(
-            slope=slope,
-            unit="°C/decade" if unit_group == "celsius" else "°F/decade",
-            data_points=len(values),
-            r_squared=r_squared,
-            slope_error=slope_error,
-            gradient_factor=gf,
-        )
-    else:
-        trend_data = TrendData(
-            slope=0.0, unit="°C/decade" if unit_group == "celsius" else "°F/decade", data_points=len(values)
-        )
+    trend_data = _build_trend_block_v1(values, unit_group)
 
-    # Generate summary using existing logic
     end_date_obj = datetime(current_year, month, day)
-
-    # Create friendly date based on period
-    if period == "daily":
-        friendly_date = get_friendly_date(end_date_obj)
-    elif period == "weekly":
-        friendly_date = f"week ending {get_friendly_date(end_date_obj)}"
-    elif period == "monthly":
-        friendly_date = f"month ending {get_friendly_date(end_date_obj)}"
-    elif period == "yearly":
-        friendly_date = f"year ending {get_friendly_date(end_date_obj)}"
-    else:
-        friendly_date = get_friendly_date(end_date_obj)
-
-    # Convert values to the format expected by generate_summary
-    summary_data = []
-    for value in values:
-        summary_data.append({"x": value.year, "y": value.temperature})
-
-    # Generate summary text with correct unit conversion.
-    # Use the location's local "today" so tense/context is correct across timezones.
-    local_today = get_local_today(location, redis_client)
-    summary_text = generate_summary(
-        summary_data, end_date_obj, period, unit_group, mean=series_mean, local_today=local_today
+    summary_text = _make_summary_v1(
+        values, period, location, unit_group, series_mean, end_date_obj, redis_client
     )
 
-    # Ensure metadata reflects missing current year when data is unavailable
     available_years = {v.year for v in values}
-    if current_year not in available_years:
-        if not any(entry.get("year") == current_year for entry in missing_years):
-            track_missing_year(missing_years, current_year, "no_data_current_year")
+    if current_year not in available_years and not any(
+        entry.get("year") == current_year for entry in missing_years
+    ):
+        track_missing_year(missing_years, current_year, "no_data_current_year")
 
-    # Replace the friendly date in the summary with our period-specific version
-    summary_text = summary_text.replace(get_friendly_date(end_date_obj), friendly_date)
-
-    # Create comprehensive metadata
-    additional_metadata = {
+    additional_metadata: Dict = {
         "period_days": date_range_days,
         "end_date": end_date_obj.strftime("%Y-%m-%d"),
     }
-    if coverage_details:
-        total_expected = sum(item["expected_days"] for item in coverage_details)
-        total_available = sum(item["available_days"] for item in coverage_details)
-        overall_ratio = round(total_available / total_expected, 4) if total_expected else 0.0
-        approximate_years = [item for item in coverage_details if item["approximate"]]
-        additional_metadata["coverage"] = {
-            "overall_available_days": total_available,
-            "overall_expected_days": total_expected,
-            "overall_coverage_ratio": overall_ratio,
-            "approximate_years": approximate_years,
-            "per_year": coverage_details,
-        }
+    coverage = _coverage_metadata(coverage_details)
+    if coverage:
+        additional_metadata["coverage"] = coverage
 
-    # Get timezone for the location
-    timezone_str = None
-    if redis_client:
-        timezone_str = _get_location_timezone(location, redis_client)
+    timezone_str = _get_location_timezone(location, redis_client) if redis_client else None
 
     return {
         "period": period,
