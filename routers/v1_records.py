@@ -1098,6 +1098,307 @@ async def _get_record_data_internal(
         return fallback_data  # Return as-is if no values
 
 
+def _validate_record_location(location: str, invalid_location_cache: InvalidLocationCache) -> str:
+    """Run SSRF check, format check, and the invalid-location cache lookup; return normalised location."""
+    try:
+        location = validate_location_for_ssrf(location)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400, detail="Invalid location format. Please provide a valid location name."
+        ) from e
+
+    if is_location_likely_invalid(location):
+        raise HTTPException(
+            status_code=400, detail=f"Invalid location format: '{location}'. Please provide a valid location name."
+        )
+
+    if invalid_location_cache.is_invalid_location(location):
+        invalid_info = invalid_location_cache.get_invalid_location_info(location)
+        reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}",
+        )
+    return location
+
+
+def _enqueue_record_refresh_job(
+    period: str, slug: str, identifier: str, year: int, location: str, log_label: str
+) -> None:
+    """Enqueue a record_computation job for the given (period, slug, year). Failures are logged, not raised."""
+    try:
+        job_manager = get_job_manager()
+        if not job_manager:
+            return
+        job_id = job_manager.create_job(
+            "record_computation",
+            {
+                "scope": period,
+                "slug": slug,
+                "identifier": identifier,
+                "year": year,
+                "location": location,
+            },
+        )
+        if DEBUG:
+            logger.debug("Enqueued job to %s: %s", log_label, job_id)
+    except Exception as e:
+        logger.warning("Failed to enqueue refresh job: %s", e)
+
+
+def _try_serve_bundle_cache(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    slug: str,
+    lookup_slugs: Tuple[str, ...],
+    month: int,
+    day: int,
+    current_year: int,
+    years: List[int],
+    unit_group: str,
+    if_none_match: Optional[str],
+    invalid_location_cache: InvalidLocationCache,
+    end_date,
+    response: Response,
+) -> Optional[Response]:
+    """Return a JSONResponse / 304 / None — None means caller should fall through to other strategies."""
+    bundle_data, bundle_etag, _bundle_hit_slug = get_bundle_with_slug_fallback(
+        redis_client, period, lookup_slugs, identifier
+    )
+    bundle_key_str = bundle_key(period, slug, identifier)
+
+    if not (bundle_data and bundle_etag):
+        return None
+
+    try:
+        data_str = bundle_data.decode("utf-8") if isinstance(bundle_data, bytes) else bundle_data
+        bundle_payload = json.loads(data_str)
+        bundle_etag_str = bundle_etag.decode("utf-8") if isinstance(bundle_etag, bytes) else bundle_etag
+
+        if if_none_match:
+            from cache.core import ETagGenerator
+
+            if ETagGenerator.matches_etag(bundle_etag_str, if_none_match):
+                response.status_code = 304
+                response.headers["ETag"] = bundle_etag_str
+                response.headers["X-Cache-Status"] = "HIT"
+                return None  # FastAPI will serve the empty Response with the headers
+
+        if not bundle_payload.get("records"):
+            return None
+
+        data = _rebuild_full_response_from_values(
+            bundle_payload["records"], period, location, identifier, month, day, current_year, years,
+            redis_client, unit_group,
+        )
+
+        is_valid, error_msg = validate_location_response(data, location)
+        if not is_valid:
+            invalid_location_cache.mark_location_invalid(location, "no_data_cached")
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        json_response = JSONResponse(content=data)
+        json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+        json_response.headers["ETag"] = bundle_etag_str
+        json_response.headers["X-Cache-Status"] = "HIT"
+        set_weather_cache_headers(
+            json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1"
+        )
+        if DEBUG:
+            logger.debug("✅ SERVING BUNDLE CACHE: %s", bundle_key_str)
+        return json_response
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        if DEBUG:
+            logger.debug("Error parsing bundle cache: %s, falling through to per-year lookup", e)
+        return None
+
+
+def _try_serve_temporal_cache(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    month: int,
+    day: int,
+    current_year: int,
+    years: List[int],
+    unit_group: str,
+    if_none_match: Optional[str],
+    invalid_location_cache: InvalidLocationCache,
+    location_identity,
+    end_date,
+    response: Response,
+) -> Optional[Response]:
+    temporal_hit = temporal_cache_get(
+        redis_client,
+        agg=period,
+        original_location=location,
+        end_date=end_date,
+        canonical_name=location_identity.canonical_name,
+    )
+    if not temporal_hit:
+        return None
+
+    data = temporal_hit["data"]
+    meta = temporal_hit["meta"]
+
+    if "records" in data:
+        data = _rebuild_full_response_from_values(
+            data["records"], period, location, identifier, month, day, current_year, years, redis_client, unit_group,
+        )
+    data["meta"] = meta
+
+    is_valid, error_msg = validate_location_response(data, location)
+    if not is_valid:
+        invalid_location_cache.mark_location_invalid(location, "no_data_cached")
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    from cache.core import ETagGenerator
+
+    etag = ETagGenerator.generate_etag(data)
+    if if_none_match and ETagGenerator.matches_etag(etag, if_none_match):
+        response.status_code = 304
+        response.headers["ETag"] = etag
+        response.headers["X-Cache-Status"] = "HIT"
+        return None
+
+    json_response = JSONResponse(content=data)
+    json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+    json_response.headers["ETag"] = etag
+    cache_label = "APPROX" if meta["approximate"]["temporal"] else "HIT"
+    json_response.headers["X-Cache-Status"] = cache_label
+    set_weather_cache_headers(
+        json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1"
+    )
+    if DEBUG:
+        logger.debug("✅ SERVING TEMPORAL CACHE (%s): %s/%s/%s", cache_label, period, location, identifier)
+    return json_response
+
+
+async def _try_serve_stale_bundle_for_current_year(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    slug: str,
+    lookup_slugs: Tuple[str, ...],
+    month: int,
+    day: int,
+    current_year: int,
+    years: List[int],
+    unit_group: str,
+    if_none_match: Optional[str],
+    invalid_location_cache: InvalidLocationCache,
+    end_date,
+    response: Response,
+) -> Optional[Response]:
+    """When only the current year is missing, serve the previous bundle stale and enqueue a refresh."""
+    bundle_data, _bundle_etag, _stale_hit_slug = get_bundle_with_slug_fallback(
+        redis_client, period, lookup_slugs, identifier
+    )
+    if not bundle_data:
+        return None
+
+    try:
+        data_str = bundle_data.decode("utf-8") if isinstance(bundle_data, bytes) else bundle_data
+        bundle_payload = json.loads(data_str)
+        if not bundle_payload.get("records"):
+            return None
+
+        data = _rebuild_full_response_from_values(
+            bundle_payload["records"], period, location, identifier, month, day, current_year, years,
+            redis_client, unit_group,
+        )
+        is_valid, error_msg = validate_location_response(data, location)
+        if not is_valid:
+            invalid_location_cache.mark_location_invalid(location, "no_data_cached")
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        year_etags = await get_year_etags(
+            redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
+        )
+        bundle_etag_computed = compute_bundle_etag(year_etags)
+
+        if if_none_match:
+            from cache.core import ETagGenerator
+
+            if ETagGenerator.matches_etag(bundle_etag_computed, if_none_match):
+                response.status_code = 304
+                response.headers["ETag"] = bundle_etag_computed
+                response.headers["X-Cache-Status"] = "STALE"
+                return None
+
+        json_response = JSONResponse(content=data)
+        json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+        json_response.headers["ETag"] = bundle_etag_computed
+        json_response.headers["X-Cache-Status"] = "STALE"
+        set_weather_cache_headers(
+            json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1"
+        )
+        _enqueue_record_refresh_job(period, slug, identifier, current_year, location, "refresh current year")
+        return json_response
+    except HTTPException:
+        raise
+    except Exception as e:
+        if DEBUG:
+            logger.debug("Error serving stale bundle: %s", e)
+        return None
+
+
+def _resolve_bundle_etag(
+    redis_client: redis.Redis, period: str, slug: str, identifier: str, data: Dict
+) -> str:
+    """Return the stored bundle ETag if present, else hash the response data."""
+    from cache.core import ETagGenerator
+
+    if CACHE_ENABLED:
+        bundle_etag_key = f"{bundle_key(period, slug, identifier)}:etag"
+        stored = redis_client.get(bundle_etag_key)
+        if stored:
+            return stored.decode("utf-8") if isinstance(stored, bytes) else stored
+    return ETagGenerator.generate_etag(data)
+
+
+async def _inline_fetch_missing_years(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    slug: str,
+    current_year: int,
+    missing_past: List[int],
+    missing_current: bool,
+    year_data: Dict[int, Dict],
+) -> None:
+    """Synchronously compute records for missing years and write them into cache and ``year_data``."""
+    years_to_cache = list(missing_past) + ([current_year] if missing_current else [])
+    per_year_records, _, _ = await compute_per_year_records(
+        location, period, identifier, years_to_cache, "celsius", redis_client
+    )
+    from cache.core import ETagGenerator
+
+    for year in years_to_cache:
+        if year not in per_year_records:
+            continue
+        year_key = rec_key(period, slug, identifier, year)
+        etag_key = rec_etag_key(period, slug, identifier, year)
+        ttl = _get_ttl_for_current_year(period) if year == current_year else TTL_STABLE
+        etag = ETagGenerator.generate_etag(per_year_records[year])
+        try:
+            json_data = json.dumps(per_year_records[year], sort_keys=True, separators=(",", ":"))
+            redis_client.setex(year_key, ttl, json_data)
+            redis_client.setex(etag_key, ttl, etag)
+            year_data[year] = per_year_records[year]
+        except Exception as e:
+            logger.warning("Error caching year %s: %s", year, e)
+
+
 @router.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
 async def get_record(
     request: Request,
@@ -1111,28 +1412,7 @@ async def get_record(
 ):
     """Get temperature record data for a specific period, location, and identifier."""
     try:
-        # Comprehensive SSRF validation for location
-        try:
-            location = validate_location_for_ssrf(location)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400, detail="Invalid location format. Please provide a valid location name."
-            ) from e
-
-        # Quick validation for obviously invalid locations (redundant but provides early feedback)
-        if is_location_likely_invalid(location):
-            raise HTTPException(
-                status_code=400, detail=f"Invalid location format: '{location}'. Please provide a valid location name."
-            )
-
-        # Check if location is known to be invalid
-        if invalid_location_cache.is_invalid_location(location):
-            invalid_info = invalid_location_cache.get_invalid_location_info(location)
-            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
-            raise HTTPException(
-                status_code=400,
-                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}",
-            )
+        location = _validate_record_location(location, invalid_location_cache)
 
         # Parse identifier to get the end date for cache headers
         month, day, _ = parse_identifier(period, identifier)
@@ -1155,254 +1435,55 @@ async def get_record(
         bundle_etag_computed = None
 
         if CACHE_ENABLED:
-            # Step 1: Try bundle cache first (fast path)
-            bundle_data, bundle_etag, _bundle_hit_slug = get_bundle_with_slug_fallback(
-                redis_client, period, lookup_slugs, identifier
+            bundle_resp = _try_serve_bundle_cache(
+                redis_client=redis_client, period=period, location=location, identifier=identifier,
+                slug=slug, lookup_slugs=lookup_slugs, month=month, day=day, current_year=current_year,
+                years=years, unit_group=unit_group, if_none_match=if_none_match,
+                invalid_location_cache=invalid_location_cache, end_date=end_date, response=response,
             )
-            bundle_key_str = bundle_key(period, slug, identifier)
-            bundle_etag_key = f"{bundle_key_str}:etag"
+            if bundle_resp is not None or response.status_code == 304:
+                return bundle_resp
 
-            if bundle_data and bundle_etag:
-                try:
-                    data_str = bundle_data.decode("utf-8") if isinstance(bundle_data, bytes) else bundle_data
-                    bundle_payload = json.loads(data_str)
-                    bundle_etag_str = bundle_etag.decode("utf-8") if isinstance(bundle_etag, bytes) else bundle_etag
-
-                    # Check ETag conditional request
-                    if if_none_match:
-                        from cache.core import ETagGenerator
-
-                        if ETagGenerator.matches_etag(bundle_etag_str, if_none_match):
-                            response.status_code = 304
-                            response.headers["ETag"] = bundle_etag_str
-                            response.headers["X-Cache-Status"] = "HIT"
-                            return None
-
-                    # Reconstruct full response from bundle
-                    if "records" in bundle_payload and len(bundle_payload["records"]) > 0:
-                        values = bundle_payload["records"]
-                        data = _rebuild_full_response_from_values(
-                            values,
-                            period,
-                            location,
-                            identifier,
-                            month,
-                            day,
-                            current_year,
-                            years,
-                            redis_client,
-                            unit_group,
-                        )
-
-                        # Validate cached data
-                        is_valid, error_msg = validate_location_response(data, location)
-                        if not is_valid:
-                            invalid_location_cache.mark_location_invalid(location, "no_data_cached")
-                            raise HTTPException(status_code=400, detail=error_msg)
-
-                        # Set cache headers with stale-while-revalidate and ETag
-                        json_response = JSONResponse(content=data)
-                        json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
-                        json_response.headers["ETag"] = bundle_etag_str
-                        json_response.headers["X-Cache-Status"] = "HIT"
-                        set_weather_cache_headers(
-                            json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1"
-                        )
-
-                        if DEBUG:
-                            logger.debug(f"✅ SERVING BUNDLE CACHE: {bundle_key_str}")
-
-                        return json_response
-                except (json.JSONDecodeError, KeyError, ValueError) as e:
-                    if DEBUG:
-                        logger.debug(f"Error parsing bundle cache: {e}, falling through to per-year lookup")
-
-            # Step 1b: Try temporal cache (supports approximate matching for monthly/yearly)
-            temporal_hit = temporal_cache_get(
-                redis_client,
-                agg=period,
-                original_location=location,
-                end_date=end_date,
-                canonical_name=location_identity.canonical_name,
+            temporal_resp = _try_serve_temporal_cache(
+                redis_client=redis_client, period=period, location=location, identifier=identifier,
+                month=month, day=day, current_year=current_year, years=years, unit_group=unit_group,
+                if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
+                location_identity=location_identity, end_date=end_date, response=response,
             )
-            if temporal_hit:
-                data = temporal_hit["data"]
-                meta = temporal_hit["meta"]
-
-                # Always rebuild from raw records so computed fields (gradient_factor, etc.)
-                # reflect the current code, not whatever was serialised at cache-write time.
-                if "records" in data:
-                    values = data["records"]
-                    data = _rebuild_full_response_from_values(
-                        values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
-                    )
-
-                # Attach meta block to response
-                data["meta"] = meta
-
-                is_valid, error_msg = validate_location_response(data, location)
-                if not is_valid:
-                    invalid_location_cache.mark_location_invalid(location, "no_data_cached")
-                    raise HTTPException(status_code=400, detail=error_msg)
-
-                from cache.core import ETagGenerator
-
-                etag = ETagGenerator.generate_etag(data)
-
-                if if_none_match and ETagGenerator.matches_etag(etag, if_none_match):
-                    response.status_code = 304
-                    response.headers["ETag"] = etag
-                    response.headers["X-Cache-Status"] = "HIT"
-                    return None
-
-                json_response = JSONResponse(content=data)
-                json_response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
-                json_response.headers["ETag"] = etag
-                cache_label = "APPROX" if meta["approximate"]["temporal"] else "HIT"
-                json_response.headers["X-Cache-Status"] = cache_label
-                set_weather_cache_headers(
-                    json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1"
-                )
-
-                if DEBUG:
-                    logger.debug(f"✅ SERVING TEMPORAL CACHE ({cache_label}): {period}/{location}/{identifier}")
-
-                return json_response
+            if temporal_resp is not None or response.status_code == 304:
+                return temporal_resp
 
             # Step 2: MGET all year keys
             year_data, missing_past, missing_current = await get_records(
                 redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
             )
 
-            # Step 3: Handle missing years — enqueue background jobs, never inline fetch
             if missing_past or missing_current:
-                # If only current year is missing, serve stale bundle immediately and enqueue refresh
-                if missing_past == [] and missing_current:
-                    # Try to serve last bundle if available (stale-while-revalidate)
-                    bundle_data, bundle_etag, _stale_hit_slug = get_bundle_with_slug_fallback(
-                        redis_client, period, lookup_slugs, identifier
+                # If only the current year is missing, try to serve a stale bundle while a refresh job runs.
+                if not missing_past and missing_current:
+                    stale_resp = await _try_serve_stale_bundle_for_current_year(
+                        redis_client=redis_client, period=period, location=location, identifier=identifier,
+                        slug=slug, lookup_slugs=lookup_slugs, month=month, day=day,
+                        current_year=current_year, years=years, unit_group=unit_group,
+                        if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
+                        end_date=end_date, response=response,
                     )
-                    if bundle_data:
-                        try:
-                            data_str = bundle_data.decode("utf-8") if isinstance(bundle_data, bytes) else bundle_data
-                            bundle_payload = json.loads(data_str)
-                            if "records" in bundle_payload and len(bundle_payload["records"]) > 0:
-                                values = bundle_payload["records"]
-                                data = _rebuild_full_response_from_values(
-                                    values,
-                                    period,
-                                    location,
-                                    identifier,
-                                    month,
-                                    day,
-                                    current_year,
-                                    years,
-                                    redis_client,
-                                    unit_group,
-                                )
-
-                                # Validate cached data
-                                is_valid, error_msg = validate_location_response(data, location)
-                                if not is_valid:
-                                    invalid_location_cache.mark_location_invalid(location, "no_data_cached")
-                                    raise HTTPException(status_code=400, detail=error_msg)
-
-                                # Compute bundle ETag from per-year ETags
-                                year_etags = await get_year_etags(
-                                    redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
-                                )
-                                bundle_etag_computed = compute_bundle_etag(year_etags)
-
-                                # Check ETag conditional request
-                                if if_none_match:
-                                    from cache.core import ETagGenerator
-
-                                    if ETagGenerator.matches_etag(bundle_etag_computed, if_none_match):
-                                        response.status_code = 304
-                                        response.headers["ETag"] = bundle_etag_computed
-                                        response.headers["X-Cache-Status"] = "STALE"
-                                        return None
-
-                                # Serve stale bundle with refresh job
-                                json_response = JSONResponse(content=data)
-                                json_response.headers["Cache-Control"] = (
-                                    "public, max-age=60, stale-while-revalidate=300"
-                                )
-                                json_response.headers["ETag"] = bundle_etag_computed
-                                json_response.headers["X-Cache-Status"] = "STALE"
-                                set_weather_cache_headers(
-                                    json_response,
-                                    req_date=end_date,
-                                    key_parts=f"{location}|{identifier}|{period}|metric|v1",
-                                )
-
-                                # Enqueue job to refresh current year only
-                                try:
-                                    job_manager = get_job_manager()
-                                    if job_manager:
-                                        job_id = job_manager.create_job(
-                                            "record_computation",
-                                            {
-                                                "scope": period,
-                                                "slug": slug,
-                                                "identifier": identifier,
-                                                "year": current_year,
-                                                "location": location,
-                                            },
-                                        )
-                                        if DEBUG:
-                                            logger.debug(f"Enqueued job to refresh current year: {job_id}")
-                                except Exception as e:
-                                    logger.warning(f"Failed to enqueue refresh job: {e}")
-
-                                return json_response
-                        except Exception as e:
-                            if DEBUG:
-                                logger.debug(f"Error serving stale bundle: {e}")
+                    if stale_resp is not None or response.status_code == 304:
+                        return stale_resp
 
                     # No stale bundle — enqueue job to fetch current year
-                    try:
-                        job_manager = get_job_manager()
-                        if job_manager:
-                            job_id = job_manager.create_job(
-                                "record_computation",
-                                {
-                                    "scope": period,
-                                    "slug": slug,
-                                    "identifier": identifier,
-                                    "year": current_year,
-                                    "location": location,
-                                },
-                            )
-                            if DEBUG:
-                                logger.debug(f"Enqueued job to fetch current year: {job_id}")
-                    except Exception as e:
-                        logger.warning(f"Failed to enqueue refresh job: {e}")
+                    _enqueue_record_refresh_job(
+                        period, slug, identifier, current_year, location, "fetch current year"
+                    )
 
                 # Fetch missing years inline. When only the current year is missing
                 # and there is no stale bundle to serve, we still need to fetch it
                 # inline — otherwise it gets left out of the assembled bundle.
-                if missing_past or missing_current:
-                    years_to_cache = list(missing_past) + ([current_year] if missing_current else [])
-                    per_year_records, _, _ = await compute_per_year_records(
-                        location, period, identifier, years_to_cache, "celsius", redis_client
-                    )
-                    from cache.core import ETagGenerator
-
-                    for year in years_to_cache:
-                        if year not in per_year_records:
-                            continue
-                        year_key = rec_key(period, slug, identifier, year)
-                        etag_key = rec_etag_key(period, slug, identifier, year)
-                        ttl = _get_ttl_for_current_year(period) if year == current_year else TTL_STABLE
-                        etag = ETagGenerator.generate_etag(per_year_records[year])
-                        try:
-                            json_data = json.dumps(per_year_records[year], sort_keys=True, separators=(",", ":"))
-                            redis_client.setex(year_key, ttl, json_data)
-                            redis_client.setex(etag_key, ttl, etag)
-                            year_data[year] = per_year_records[year]
-                        except Exception as e:
-                            logger.warning(f"Error caching year {year}: {e}")
+                await _inline_fetch_missing_years(
+                    redis_client=redis_client, period=period, location=location, identifier=identifier,
+                    slug=slug, current_year=current_year, missing_past=missing_past,
+                    missing_current=missing_current, year_data=year_data,
+                )
 
             # Step 4: Assemble response from per-year records
             if year_data:
@@ -1508,30 +1589,9 @@ async def get_record(
         if "updated" not in data:
             data["updated"] = datetime.now(timezone.utc).isoformat()
 
-        # Compute bundle ETag if not already computed
         if bundle_etag_computed is None:
-            if CACHE_ENABLED:
-                # Try to get from stored bundle ETag
-                bundle_key_str = bundle_key(period, slug, identifier)
-                bundle_etag_key = f"{bundle_key_str}:etag"
-                bundle_etag_stored = redis_client.get(bundle_etag_key)
-                if bundle_etag_stored:
-                    bundle_etag_computed = (
-                        bundle_etag_stored.decode("utf-8")
-                        if isinstance(bundle_etag_stored, bytes)
-                        else bundle_etag_stored
-                    )
-                else:
-                    # Fallback: compute from data
-                    from cache.core import ETagGenerator
+            bundle_etag_computed = _resolve_bundle_etag(redis_client, period, slug, identifier, data)
 
-                    bundle_etag_computed = ETagGenerator.generate_etag(data)
-            else:
-                from cache.core import ETagGenerator
-
-                bundle_etag_computed = ETagGenerator.generate_etag(data)
-
-        # Store in temporal cache for future approximate matching (always store celsius data)
         if CACHE_ENABLED:
             try:
                 temporal_cache_set(
@@ -1543,9 +1603,8 @@ async def get_record(
                     canonical_name=location_identity.canonical_name,
                 )
             except Exception as e:
-                logger.warning(f"Failed to store in temporal cache: {e}")
+                logger.warning("Failed to store in temporal cache: %s", e)
 
-        # Create response with smart cache headers
         json_response = JSONResponse(content=data)
         json_response.headers["ETag"] = bundle_etag_computed
         json_response.headers["X-Cache-Status"] = cache_status if CACHE_ENABLED else "DISABLED"
@@ -1557,10 +1616,7 @@ async def get_record(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in v1 records endpoint: {e}")
-        import traceback
-
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.exception("Error in v1 records endpoint")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
