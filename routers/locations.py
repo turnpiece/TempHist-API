@@ -32,6 +32,7 @@ from config import (
     POPULARITY_WINDOW_DAYS,
     SAME_LOCATION_RADIUS_KM,
 )
+from routers._responses import error_responses
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -585,7 +586,11 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/v1/locations/preapproved", response_model=PreapprovedResponse)
+@router.get(
+    "/v1/locations/preapproved",
+    response_model=PreapprovedResponse,
+    responses=error_responses(304, 400, 429),
+)
 async def get_preapproved_locations(
     request: Request,
     response: Response,
@@ -660,7 +665,7 @@ async def get_preapproved_locations(
     return PreapprovedResponse(**response_data)
 
 
-@router.get("/v1/locations/search")
+@router.get("/v1/locations/search", responses=error_responses(400, 429, 503))
 async def search_locations(
     request: Request,
     q: str = Query(..., min_length=2, max_length=100, description="City name search query"),
@@ -811,7 +816,7 @@ def _build_popular_locations(limit: int) -> List[dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/v1/locations/popular")
+@router.get("/v1/locations/popular", responses=error_responses(304, 400, 429))
 async def get_popular_locations(
     request: Request,
     response: Response,
@@ -999,7 +1004,7 @@ def _build_display_string(body: "SelectionRequest") -> Optional[str]:
     return None
 
 
-@router.post("/v1/locations/selections", status_code=204)
+@router.post("/v1/locations/selections", status_code=204, responses=error_responses(401, 429))
 async def record_location_selection(request: Request, body: SelectionRequest):
     """
     Record a canonical location ID selected by the authenticated user.
@@ -1094,7 +1099,7 @@ async def record_location_selection(request: Request, body: SelectionRequest):
     return Response(status_code=204)
 
 
-@router.get("/v1/locations/popular/display-strings")
+@router.get("/v1/locations/popular/display-strings", responses=error_responses(429))
 async def get_popular_display_strings(
     request: Request,
     limit: Optional[int] = Query(

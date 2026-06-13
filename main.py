@@ -52,6 +52,7 @@ from middleware import (
 )
 from middleware.cors import get_cors_origin_regex, get_cors_origins
 from rate_limiting import LocationDiversityMonitor, RequestRateMonitor, ServiceTokenRateLimiter
+from routers._responses import error_responses
 from routers.analytics import router as analytics_router
 from routers.cache import router as cache_router
 from routers.dependencies import initialize_dependencies
@@ -727,7 +728,7 @@ app.add_middleware(
 # - /analytics/* -> routers/analytics.py
 
 
-@app.post("/admin/clear-job-queue")
+@app.post("/admin/clear-job-queue", responses=error_responses(401, 500))
 async def admin_clear_job_queue(_admin: bool = Depends(verify_admin_key)):
     """
     Admin endpoint to clear the job queue.

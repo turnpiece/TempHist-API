@@ -8,6 +8,7 @@ import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from routers._responses import error_responses
 from routers.dependencies import get_redis_client
 from utils.share_store import get_share_store
 
@@ -31,7 +32,7 @@ class ShareCreate(BaseModel):
     longitude: Optional[float] = Field(None, ge=-180, le=180)
 
 
-@router.get("/v1/shares")
+@router.get("/v1/shares", responses=error_responses(503))
 async def list_shares(
     period: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = None,
     limit: int = Query(20, ge=1, le=100),
@@ -45,7 +46,7 @@ async def list_shares(
     return {"shares": shares, "limit": limit, "offset": offset}
 
 
-@router.post("/v1/shares", status_code=201)
+@router.post("/v1/shares", status_code=201, responses=error_responses(401, 503))
 async def create_share(
     request: Request,
     body: ShareCreate,
@@ -72,7 +73,7 @@ async def create_share(
     return result
 
 
-@router.get("/v1/shares/{share_id}")
+@router.get("/v1/shares/{share_id}", responses=error_responses(404))
 async def get_share(
     share_id: str,
     redis_client: redis.Redis = Depends(get_redis_client),
