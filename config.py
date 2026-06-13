@@ -21,6 +21,7 @@ MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "").strip()
 # Cache configuration
 CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 CACHE_CONTROL_HEADER = "public, max-age=3600, stale-while-revalidate=86400, stale-if-error=86400"
+LOCATIONS_CACHE_CONTROL_HEADER = "public, max-age=3600, s-maxage=604800"
 FILTER_WEATHER_DATA = os.getenv("FILTER_WEATHER_DATA", "true").lower() == "true"
 
 # Environment and debug settings

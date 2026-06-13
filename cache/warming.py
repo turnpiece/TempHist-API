@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 CACHE_WARMING_ENABLED = os.getenv("CACHE_WARMING_ENABLED", "true").lower() == "true"
 CACHE_WARMING_INTERVAL_HOURS = int(os.getenv("CACHE_WARMING_INTERVAL_HOURS", "4"))
+
+CACHE_WARMING_IN_PROGRESS_KEY = "cache_warming:in_progress"
 CACHE_WARMING_DAYS_BACK = int(os.getenv("CACHE_WARMING_DAYS_BACK", "7"))
 CACHE_WARMING_CONCURRENT_REQUESTS = int(os.getenv("CACHE_WARMING_CONCURRENT_REQUESTS", "3"))
 
@@ -298,7 +300,7 @@ class CacheWarmer:
             results["errors"].append(f"location_warming: HTTP error - {e}")
         except Exception as e:
             results["errors"].append(f"location_warming: Unexpected error - {e}")
-            logger.error(f"Unexpected error warming location {location}: {e}", exc_info=True)
+            logger.exception("Unexpected error warming location %s", location)
 
         return results
 
@@ -315,9 +317,9 @@ class CacheWarmer:
 
         self.warming_in_progress = True
         try:
-            self.redis_client.setex("cache_warming:in_progress", 3600, "1")
+            self.redis_client.setex(CACHE_WARMING_IN_PROGRESS_KEY, 3600, "1")
         except Exception as _e:
-            logger.debug("Could not set cache_warming:in_progress flag: %s", _e)
+            logger.debug("Could not set %s flag: %s", CACHE_WARMING_IN_PROGRESS_KEY, _e)
         start_time = time.time()
 
         try:
@@ -417,14 +419,14 @@ class CacheWarmer:
 
         except Exception as e:
             if DEBUG:
-                logger.error(f"❌ CACHE WARMING FAILED: {e}")
+                logger.exception("❌ CACHE WARMING FAILED")
             return {"status": "error", "message": str(e), "duration_seconds": time.time() - start_time}
         finally:
             self.warming_in_progress = False
             try:
-                self.redis_client.delete("cache_warming:in_progress")
+                self.redis_client.delete(CACHE_WARMING_IN_PROGRESS_KEY)
             except Exception as _e:
-                logger.debug("Could not clear cache_warming:in_progress flag: %s", _e)
+                logger.debug("Could not clear %s flag: %s", CACHE_WARMING_IN_PROGRESS_KEY, _e)
 
     def get_warming_stats(self) -> Dict:
         stats = dict(self.warming_stats)
@@ -442,7 +444,7 @@ class CacheWarmer:
                     "failed_warmed": persisted.get("failed_warmed", 0),
                     "last_warming_duration": persisted.get("last_warming_duration", 0),
                 }
-            in_progress = bool(self.redis_client.exists("cache_warming:in_progress"))
+            in_progress = bool(self.redis_client.exists(CACHE_WARMING_IN_PROGRESS_KEY))
         except Exception as _e:
             logger.debug("Could not read warming stats from Redis: %s", _e)
 
@@ -555,9 +557,9 @@ class CacheStats:
                 self.retention_seconds,
                 json.dumps(self.stats),
             )
-        except Exception as e:
+        except Exception:
             if DEBUG:
-                logger.error(f"Failed to store cache stats in Redis: {e}")
+                logger.exception("Failed to store cache stats in Redis")
 
     def _load_stats_from_redis(self):
         if not CACHE_STATS_ENABLED:
@@ -571,9 +573,9 @@ class CacheStats:
                         self.stats[key].update(value)
                     else:
                         self.stats[key] = value
-        except Exception as e:
+        except Exception:
             if DEBUG:
-                logger.error(f"Failed to load cache stats from Redis: {e}")
+                logger.exception("Failed to load cache stats from Redis")
 
     def get_hit_rate(self) -> float:
         total = self.stats["cache_hits"] + self.stats["cache_misses"]
@@ -747,7 +749,7 @@ async def scheduled_cache_warming(cache_warmer: CacheWarmer):
                 if DEBUG:
                     logger.info("⏭️  SCHEDULED CACHE WARMING: Skipping - warming already in progress")
 
-        except Exception as e:
+        except Exception:
             if DEBUG:
-                logger.error(f"❌ SCHEDULED CACHE WARMING ERROR: {e}")
+                logger.exception("❌ SCHEDULED CACHE WARMING ERROR")
             await asyncio.sleep(300)

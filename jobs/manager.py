@@ -18,8 +18,6 @@ _CACHE_TTL_JOB = CACHE_TTL_JOB
 class JobQueueFullError(Exception):
     """Raised when the job queue exceeds MAX_JOB_QUEUE_SIZE."""
 
-    pass
-
 
 class JobStatus:
     PENDING = "pending"

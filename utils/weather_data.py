@@ -69,7 +69,7 @@ async def get_weather_for_date(
     try:
         result = await fetch_single_date(location, date_str)
     except Exception as exc:
-        logger.error("Weather fetch failed for %s on %s: %s", location, date_str, exc)
+        logger.error("Weather fetch failed for %s on %s: %s", sanitize_for_logging(location), date_str, exc)
         return {"error": str(exc)}
 
     if "error" in result:
@@ -120,12 +120,14 @@ async def get_forecast_data(location: str, date, redis_client: redis.Redis = Non
     else:
         date_str = str(date)
 
-    logger.debug("🌐 Fetching forecast for location: %r, date: %s", location, date_str)
+    logger.debug("🌐 Fetching forecast for location: %s, date: %s", sanitize_for_logging(location), date_str)
 
     try:
         result = await fetch_single_date(location, date_str)
     except Exception as exc:
-        logger.error("Weather forecast fetch failed for %s on %s: %s", location, date_str, exc)
+        logger.error(
+            "Weather forecast fetch failed for %s on %s: %s", sanitize_for_logging(location), date_str, exc
+        )
         return {"error": str(exc)}
 
     if "error" in result:

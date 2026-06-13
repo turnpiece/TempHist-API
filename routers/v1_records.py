@@ -60,6 +60,7 @@ from utils.daily_temperature_store import (
     resolve_location_cache_slug,
 )
 from utils.location_validation import InvalidLocationCache, is_location_likely_invalid, validate_location_response
+from utils.sanitization import sanitize_for_logging
 from utils.temperature import (
     calculate_gradient_factor,
     calculate_standard_deviation,
@@ -424,11 +425,13 @@ async def _collect_rolling_window_values(
                 logger.warning("Location not found, aborting fetch for %s: %s", location, exc)
                 raise HTTPException(status_code=422, detail="location_not_found")
             if exc is not None:
-                error_detail = (
-                    f"❌ timeline fetch failed for {location} "
-                    f"({range_start.strftime('%Y-%m-%d')} to {range_end.strftime('%Y-%m-%d')}): {exc}"
+                logger.error(
+                    "❌ timeline fetch failed for %s (%s to %s): %s",
+                    sanitize_for_logging(location),
+                    range_start.strftime("%Y-%m-%d"),
+                    range_end.strftime("%Y-%m-%d"),
+                    exc,
                 )
-                logger.error(error_detail)
                 track_missing_year(missing_years, year, "timeline_error")
                 timeline_failed_years.add(year)
                 continue
@@ -491,7 +494,13 @@ async def _collect_rolling_window_values(
         )
 
         if year == current_year_now:
-            logger.info(f"Current year [{year}] included for {location}: {len(temps_converted)}/{expected_days} days")
+            logger.info(
+                "Current year [%s] included for %s: %d/%d days",
+                year,
+                sanitize_for_logging(location),
+                len(temps_converted),
+                expected_days,
+            )
 
         coverage_details.append(
             {

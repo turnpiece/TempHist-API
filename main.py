@@ -196,12 +196,12 @@ async def lifespan(app: FastAPI):
             logger.info(
                 f"🛡️  SERVICE TOKEN RATE LIMITING: {SERVICE_TOKEN_RATE_LIMITS['requests_per_hour']} requests/hour, {SERVICE_TOKEN_RATE_LIMITS['locations_per_hour']} locations/hour"
             )
-    except (redis.RedisError, redis.ConnectionError) as redis_error:
-        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Redis connection failed - {redis_error}")
+    except (redis.RedisError, redis.ConnectionError):
+        logger.exception("❌ SERVICE TOKEN RATE LIMITER: Redis connection failed")
         # Create None limiter if Redis fails - will fail open in middleware
         service_token_rate_limiter = None
-    except ImportError as import_error:
-        logger.error(f"❌ SERVICE TOKEN RATE LIMITER: Import failed - {import_error}")
+    except ImportError:
+        logger.exception("❌ SERVICE TOKEN RATE LIMITER: Import failed")
         service_token_rate_limiter = None
 
     # Initialize router dependencies (must happen after service_token_rate_limiter is created)
@@ -225,34 +225,34 @@ async def lifespan(app: FastAPI):
 
         if DEBUG:
             logger.info("✅ ROUTER DEPENDENCIES: Initialized successfully")
-    except (redis.RedisError, redis.ConnectionError) as redis_error:
-        logger.error(f"❌ ROUTER DEPENDENCIES: Redis connection failed - {redis_error}")
-    except ImportError as import_error:
-        logger.error(f"❌ ROUTER DEPENDENCIES: Import failed - {import_error}")
-    except (ValueError, TypeError) as config_error:
-        logger.error(f"❌ ROUTER DEPENDENCIES: Configuration error - {config_error}")
+    except (redis.RedisError, redis.ConnectionError):
+        logger.exception("❌ ROUTER DEPENDENCIES: Redis connection failed")
+    except ImportError:
+        logger.exception("❌ ROUTER DEPENDENCIES: Import failed")
+    except (ValueError, TypeError):
+        logger.exception("❌ ROUTER DEPENDENCIES: Configuration error")
 
     # Initialize cache system first
     try:
         initialize_cache(redis_client)
         if DEBUG:
             logger.info("✅ CACHE SYSTEM: Initialized successfully")
-    except (redis.RedisError, redis.ConnectionError) as redis_error:
-        logger.error(f"❌ CACHE SYSTEM: Redis connection failed - {redis_error}")
-    except ImportError as import_error:
-        logger.error(f"❌ CACHE SYSTEM: Import failed - {import_error}")
+    except (redis.RedisError, redis.ConnectionError):
+        logger.exception("❌ CACHE SYSTEM: Redis connection failed")
+    except ImportError:
+        logger.exception("❌ CACHE SYSTEM: Import failed")
 
     # Initialize locations data (carousel / search)
     try:
         await initialize_locations_data(redis_client)
         if DEBUG:
             logger.info("✅ LOCATIONS: Data loaded and cache warmed")
-    except (redis.RedisError, redis.ConnectionError) as redis_error:
-        logger.error(f"❌ LOCATIONS: Redis connection failed - {redis_error}")
-    except (FileNotFoundError, json.JSONDecodeError) as file_error:
-        logger.error(f"❌ LOCATIONS: File error - {file_error}")
-    except (IOError, PermissionError) as io_error:
-        logger.error(f"❌ LOCATIONS: I/O error - {io_error}")
+    except (redis.RedisError, redis.ConnectionError):
+        logger.exception("❌ LOCATIONS: Redis connection failed")
+    except (FileNotFoundError, json.JSONDecodeError):
+        logger.exception("❌ LOCATIONS: File error")
+    except (IOError, PermissionError):
+        logger.exception("❌ LOCATIONS: I/O error")
 
     if CACHE_WARMING_ENABLED and get_cache_warmer():
         # Wait a moment for the server to fully start
@@ -299,8 +299,8 @@ async def lifespan(app: FastAPI):
             await async_redis_client.aclose()
             if DEBUG:
                 logger.info("✅ Async Redis client closed successfully")
-        except Exception as e:
-            logger.error(f"⚠️  Error closing async Redis client: {e}")
+        except Exception:
+            logger.exception("⚠️  Error closing async Redis client")
 
     # Clean up HTTP client sessions
     try:
@@ -309,8 +309,8 @@ async def lifespan(app: FastAPI):
         await close_client_session()
         if DEBUG:
             logger.info("✅ HTTP client sessions closed successfully")
-    except Exception as e:
-        logger.error(f"⚠️  Error closing HTTP client sessions: {e}")
+    except Exception:
+        logger.exception("⚠️  Error closing HTTP client sessions")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -667,11 +667,8 @@ async def verify_token_middleware(request: Request, call_next):
                     )
 
         except Exception as e:
-            logger.error(f"[DEBUG] Middleware: Firebase token verification failed: {e}")
-            logger.error(f"[DEBUG] Middleware: Error type: {type(e).__name__}")
-            logger.error(f"[DEBUG] Middleware: Error message: {str(e)}")
-            # Log detailed error server-side only
-            logger.error(f"Firebase token verification failed: {e}", exc_info=True)
+            # Log detailed error server-side only (with stack trace)
+            logger.exception("Firebase token verification failed (type=%s)", type(e).__name__)
 
             # Return generic error message to client (don't expose internal details)
             if DEBUG:
@@ -749,7 +746,7 @@ async def admin_clear_job_queue(_admin: bool = Depends(verify_admin_key)):
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
-        logger.error(f"Error clearing job queue: {e}")
+        logger.exception("Error clearing job queue")
         raise HTTPException(status_code=500, detail=f"Error clearing job queue: {str(e)}")
 
 

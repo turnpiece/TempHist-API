@@ -340,7 +340,7 @@ def get_bundle_with_slug_fallback(
 # ---------------------------------------------------------------------------
 
 
-async def get_records(
+async def get_records(  # NOSONAR S7503 — async by design (awaited by callers)
     redis_client: redis.Redis,
     scope: str,
     slug: str,
@@ -367,8 +367,8 @@ async def get_records(
         keys = [rec_key(scope, try_slug, identifier, year) for year in remaining_years]
         try:
             values = redis_client.mget(keys)
-        except Exception as e:
-            logger.error(f"Error in MGET for records: {e}")
+        except Exception:
+            logger.exception("Error in MGET for records")
             return year_data, [y for y in years if y not in year_data and y < current_year], current_year in years
 
         for year, value in zip(remaining_years, values):
@@ -399,7 +399,7 @@ async def get_records(
     return year_data, missing_past, missing_current
 
 
-async def get_year_etags(
+async def get_year_etags(  # NOSONAR S7503 — async by design (awaited by callers)
     redis_client: redis.Redis,
     scope: str,
     slug: str,
@@ -422,8 +422,8 @@ async def get_year_etags(
         keys = [rec_etag_key(scope, try_slug, identifier, year) for year in remaining_years]
         try:
             values = redis_client.mget(keys)
-        except Exception as e:
-            logger.error(f"Error in MGET for ETags: {e}")
+        except Exception:
+            logger.exception("Error in MGET for ETags")
             return {year: etags.get(year, "") for year in years}
         for year, value in zip(remaining_years, values):
             if value:

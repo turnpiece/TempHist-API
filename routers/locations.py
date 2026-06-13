@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from cache.accessors import get_usage_tracker
 from config import (
     BASE_URL,
+    LOCATIONS_CACHE_CONTROL_HEADER,
     MAPBOX_TOKEN,
     POPULARITY_MAX_LOCATIONS,
     POPULARITY_WINDOW_DAYS,
@@ -633,7 +634,7 @@ async def get_preapproved_locations(
     cached_response = await get_cached_response(cache_key)
 
     if cached_response:
-        response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
+        response.headers["Cache-Control"] = LOCATIONS_CACHE_CONTROL_HEADER
         response.headers["ETag"] = locations_etag
         response.headers["Last-Modified"] = locations_last_modified
         return PreapprovedResponse(**cached_response)
@@ -652,7 +653,7 @@ async def get_preapproved_locations(
     await set_cached_response(cache_key, response_data)
 
     # Set cache headers (7 days for CDN/shared caches, 1 hour for browsers)
-    response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
+    response.headers["Cache-Control"] = LOCATIONS_CACHE_CONTROL_HEADER
     response.headers["ETag"] = locations_etag
     response.headers["Last-Modified"] = locations_last_modified
 
@@ -866,7 +867,7 @@ async def get_popular_locations(
     cached_response = await get_cached_response(cache_key)
 
     if cached_response:
-        response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
+        response.headers["Cache-Control"] = LOCATIONS_CACHE_CONTROL_HEADER
         response.headers["ETag"] = locations_etag
         response.headers["Last-Modified"] = locations_last_modified
         if not include_images:
@@ -899,7 +900,7 @@ async def get_popular_locations(
     }
     await set_cached_response(cache_key, full_data, ttl=POPULAR_CACHE_TTL)
 
-    response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=604800"
+    response.headers["Cache-Control"] = LOCATIONS_CACHE_CONTROL_HEADER
     response.headers["ETag"] = locations_etag
     response.headers["Last-Modified"] = locations_last_modified
 

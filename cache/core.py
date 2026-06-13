@@ -18,6 +18,7 @@ import redis
 from fastapi import Request, Response
 
 from config import DEBUG
+from utils.sanitization import sanitize_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,9 @@ CACHE_CONTROL_DAILY_TODAY = "public, max-age=1800, s-maxage=3600, stale-while-re
 CACHE_INVALIDATION_ENABLED = os.getenv("CACHE_INVALIDATION_ENABLED", "true").lower() == "true"
 CACHE_INVALIDATION_DRY_RUN = os.getenv("CACHE_INVALIDATION_DRY_RUN", "false").lower() == "true"
 CACHE_INVALIDATION_BATCH_SIZE = int(os.getenv("CACHE_INVALIDATION_BATCH_SIZE", "100"))
+
+CACHE_INVALIDATION_DISABLED_MSG = "Cache invalidation is not enabled"
+REDIS_SCAN_FORBIDDEN_MSG = "Redis SCAN command not permitted on this instance"
 
 # ---------------------------------------------------------------------------
 # Year-based TTL helper
@@ -185,7 +189,7 @@ class EnhancedCache:
     def _get_metrics_key(self, key: str) -> str:
         return f"{self.metrics_prefix}{key}"
 
-    async def get(self, key: str) -> Optional[Tuple[Any, str, datetime]]:
+    async def get(self, key: str) -> Optional[Tuple[Any, str, datetime]]:  # NOSONAR S7503 — async by design (awaited by callers)
         cache_key = self._get_cache_key(key)
         etag_key = self._get_etag_key(key)
 
@@ -206,16 +210,16 @@ class EnhancedCache:
                 self.misses += 1
                 return None
 
-        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError):
             self.errors += 1
-            logger.error(f"Redis error getting cache key {key}: {e}")
+            logger.exception("Redis error getting cache key %s", sanitize_for_logging(str(key)))
             return None
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError):
             self.errors += 1
-            logger.error(f"Decode error for cache key {key}: {e}")
+            logger.exception("Decode error for cache key %s", sanitize_for_logging(str(key)))
             return None
 
-    async def get_updated_timestamp(self, key: str) -> Optional[datetime]:
+    async def get_updated_timestamp(self, key: str) -> Optional[datetime]:  # NOSONAR S7503 — async by design (awaited by callers)
         cache_key = self._get_cache_key(key)
         try:
             cached_timestamp = self.redis.hget(cache_key, "timestamp")
@@ -224,14 +228,14 @@ class EnhancedCache:
                     cached_timestamp.decode() if isinstance(cached_timestamp, bytes) else cached_timestamp
                 )
             return None
-        except (redis.RedisError, redis.ConnectionError) as e:
-            logger.error(f"Redis error getting timestamp for {key}: {e}")
+        except (redis.RedisError, redis.ConnectionError):
+            logger.exception("Redis error getting timestamp for %s", sanitize_for_logging(str(key)))
             return None
-        except (ValueError, TypeError) as e:
-            logger.error(f"Date parsing error for timestamp {key}: {e}")
+        except (ValueError, TypeError):
+            logger.exception("Date parsing error for timestamp %s", sanitize_for_logging(str(key)))
             return None
 
-    async def set(
+    async def set(  # NOSONAR S7503 — async by design (awaited by callers)
         self,
         key: str,
         data: Any,
@@ -262,16 +266,16 @@ class EnhancedCache:
             self.redis.expire(cache_key, ttl)
             return etag
 
-        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError):
             self.errors += 1
-            logger.error(f"Redis error setting cache key {key}: {e}")
+            logger.exception("Redis error setting cache key %s", sanitize_for_logging(str(key)))
             raise
-        except (json.JSONEncodeError, TypeError) as e:
+        except (json.JSONEncodeError, TypeError):
             self.errors += 1
-            logger.error(f"JSON encoding error for cache key {key}: {e}")
+            logger.exception("JSON encoding error for cache key %s", sanitize_for_logging(str(key)))
             raise
 
-    async def mset(self, items: List[Tuple[str, Any, int, Optional[str]]]) -> List[str]:
+    async def mset(self, items: List[Tuple[str, Any, int, Optional[str]]]) -> List[str]:  # NOSONAR S7503
         if not items:
             return []
 
@@ -303,16 +307,16 @@ class EnhancedCache:
             pipeline.execute()
             return etags
 
-        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError):
             self.errors += len(items)
-            logger.error(f"Redis error in batch set: {e}")
+            logger.exception("Redis error in batch set")
             raise
-        except (json.JSONEncodeError, TypeError) as e:
+        except (json.JSONEncodeError, TypeError):
             self.errors += len(items)
-            logger.error(f"JSON encoding error in batch set: {e}")
+            logger.exception("JSON encoding error in batch set")
             raise
 
-    async def mget(self, keys: List[str]) -> Dict[str, Optional[Tuple[Any, str, datetime]]]:
+    async def mget(self, keys: List[str]) -> Dict[str, Optional[Tuple[Any, str, datetime]]]:  # NOSONAR S7503
         if not keys:
             return {}
 
@@ -351,9 +355,9 @@ class EnhancedCache:
 
             return parsed
 
-        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError) as e:
+        except (redis.RedisError, redis.ConnectionError, redis.TimeoutError):
             self.errors += len(keys)
-            logger.error(f"Redis error in batch get: {e}")
+            logger.exception("Redis error in batch get")
             return {key: None for key in keys}
 
     async def get_or_compute(
@@ -424,7 +428,7 @@ class CacheInvalidator:
 
     def invalidate_by_key(self, cache_key: str, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         try:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
                 exists = self.redis_client.exists(cache_key)
@@ -447,7 +451,7 @@ class CacheInvalidator:
 
     def invalidate_by_pattern(self, pattern: str, dry_run: bool = False, max_keys: int = 10000) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         if max_keys > 100000:
             logger.warning(f"Cache invalidation max_keys ({max_keys}) is very high, capping at 100000")
             max_keys = 100000
@@ -473,7 +477,7 @@ class CacheInvalidator:
                     return {
                         "status": "error",
                         "pattern": pattern,
-                        "error": "Redis SCAN command not permitted on this instance",
+                        "error": REDIS_SCAN_FORBIDDEN_MSG,
                         "message": "Cache invalidation by pattern is not available on managed Redis services",
                     }
                 raise e
@@ -504,18 +508,18 @@ class CacheInvalidator:
 
     def invalidate_by_endpoint(self, endpoint: str, location: str = None, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         pattern = f"{endpoint}_{location.lower()}_*" if location else f"{endpoint}_*"
         return self.invalidate_by_pattern(pattern, dry_run)
 
     def invalidate_by_location(self, location: str, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         return self.invalidate_by_pattern(f"*_{location.lower()}_*", dry_run)
 
     def invalidate_by_date(self, date: str, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         date_patterns = [
             f"*_{date}_*",
             f"*_{date.replace('-', '_')}_*",
@@ -543,12 +547,12 @@ class CacheInvalidator:
 
     def invalidate_forecast_data(self, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         return self.invalidate_by_pattern("forecast_*", dry_run)
 
     def invalidate_today_data(self, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         today = datetime.now()
         today_str = today.strftime("%Y-%m-%d")
         today_pattern = today.strftime("%m_%d")
@@ -561,7 +565,7 @@ class CacheInvalidator:
 
     def invalidate_expired_keys(self, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         try:
             all_keys = []
             cursor = 0
@@ -579,7 +583,7 @@ class CacheInvalidator:
                 if "permissions" in str(e).lower() or "scan" in str(e).lower():
                     return {
                         "status": "error",
-                        "error": "Redis SCAN command not permitted on this instance",
+                        "error": REDIS_SCAN_FORBIDDEN_MSG,
                         "message": "Expired key invalidation is not available on managed Redis services",
                     }
                 raise e
@@ -662,7 +666,7 @@ class CacheInvalidator:
 
     def clear_all_cache(self, dry_run: bool = False) -> Dict:
         if not CACHE_INVALIDATION_ENABLED:
-            return {"status": "disabled", "message": "Cache invalidation is not enabled"}
+            return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         try:
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
                 try:
@@ -678,7 +682,7 @@ class CacheInvalidator:
                     if "permissions" in str(e).lower() or "scan" in str(e).lower():
                         return {
                             "status": "error",
-                            "error": "Redis SCAN command not permitted on this instance",
+                            "error": REDIS_SCAN_FORBIDDEN_MSG,
                             "message": "Cannot count keys on managed Redis service for dry run",
                         }
                     raise e
@@ -707,20 +711,24 @@ def get_cache_value(
 ):
     """Get a value from the cache with optional statistics tracking."""
     if DEBUG:
-        logger.debug(f"🔍 CACHE GET: {cache_key}")
+        logger.debug("🔍 CACHE GET: %s", sanitize_for_logging(str(cache_key)))
     try:
         result = redis_client.get(cache_key)
         hit = result is not None
         if cache_stats:
             cache_stats.track_cache_request(cache_key, hit, endpoint, location)
         if DEBUG:
-            logger.debug(f"{'✅ CACHE HIT' if hit else '❌ CACHE MISS'}: {cache_key}")
+            logger.debug(
+                "%s: %s",
+                "✅ CACHE HIT" if hit else "❌ CACHE MISS",
+                sanitize_for_logging(str(cache_key)),
+            )
         return result
-    except Exception as e:
+    except Exception:
         if cache_stats:
             cache_stats.track_cache_request(cache_key, False, endpoint, location, error=True)
         if DEBUG:
-            logger.error(f"❌ CACHE ERROR: {cache_key} - {e}")
+            logger.exception("❌ CACHE ERROR: %s", sanitize_for_logging(str(cache_key)))
         return None
 
 
@@ -747,14 +755,18 @@ def mget_cache_values(
                 cache_stats.track_cache_request(cache_key, result is not None, endpoint, location)
         if DEBUG:
             for cache_key, result in zip(cache_keys, results):
-                logger.debug(f"{'✅ CACHE HIT' if result is not None else '❌ CACHE MISS'}: {cache_key}")
+                logger.debug(
+                    "%s: %s",
+                    "✅ CACHE HIT" if result is not None else "❌ CACHE MISS",
+                    sanitize_for_logging(str(cache_key)),
+                )
         return results
-    except Exception as e:
+    except Exception:
         if cache_stats:
             for cache_key in cache_keys:
                 cache_stats.track_cache_request(cache_key, False, endpoint, location, error=True)
         if DEBUG:
-            logger.error(f"❌ CACHE MGET ERROR for {len(cache_keys)} keys: {e}")
+            logger.exception("❌ CACHE MGET ERROR for %d keys", len(cache_keys))
         return [None] * len(cache_keys)
 
 
@@ -767,7 +779,7 @@ def set_cache_value(cache_key, lifetime, value, redis_client: redis.Redis):
     redis_client.set(cache_key, value, ex=lifetime)
 
 
-async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis) -> Optional[datetime]:
+async def get_cache_updated_timestamp(cache_key: str, redis_client: redis.Redis) -> Optional[datetime]:  # NOSONAR S7503
     """Get the last updated timestamp for a cache key."""
     try:
         if not redis_client:

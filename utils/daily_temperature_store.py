@@ -11,6 +11,7 @@ import asyncpg  # type: ignore[import-untyped]
 
 from cache.keys import normalize_location_for_cache
 from config import METRO_CACHE_GRID_DEGREES, METRO_CACHE_SNAP_KM, SAME_LOCATION_RADIUS_KM
+from utils.sanitization import sanitize_for_logging
 
 
 def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[bool, bool, bool]:
@@ -288,7 +289,7 @@ class DailyTemperatureStore:
                             row.get("timezone"),
                         )
             except Exception as exc:
-                logger.debug("DB coordinate lookup failed for %r: %s", location, exc)
+                logger.debug("DB coordinate lookup failed for %s: %s", sanitize_for_logging(location), exc)
 
         info = _get_preapproved_location_info(normalized)
         if info and info.get("latitude") is not None:
@@ -324,7 +325,7 @@ class DailyTemperatureStore:
             lat, lon, tz = await geocode_location(location)
             return lat, lon, tz
         except Exception as exc:
-            logger.debug("Geocode for cache identity failed for %r: %s", location, exc)
+            logger.debug("Geocode for cache identity failed for %s: %s", sanitize_for_logging(location), exc)
             return None
 
     async def _ensure_location_alias(
@@ -492,7 +493,7 @@ class DailyTemperatureStore:
                     normalized,
                 )
         except Exception as exc:
-            logger.debug("resolve_location_cache_identity failed for %r: %s", location, exc)
+            logger.debug("resolve_location_cache_identity failed for %s: %s", sanitize_for_logging(location), exc)
             return _fallback_identity()
 
     async def resolve_cache_slug(self, location: str, metadata: Optional[Dict[str, Any]] = None) -> str:
