@@ -7,12 +7,7 @@ echo "Starting TempHist API local stack..."
 unset VIRTUAL_ENV
 
 # 1) Ensure local dependencies are synced using uv
-if [[ ! -f "requirements.txt" ]]; then
-  echo "Error: requirements.txt not found!"
-  exit 1
-fi
-# This instantly creates/syncs a .venv folder in milliseconds
-uv pip install -r requirements.txt 
+uv sync
 
 # 2) Optionally start Redis (best-effort)
 if command -v redis-cli >/dev/null 2>&1; then
@@ -48,10 +43,10 @@ else
   echo "psql not found; skipping PostgreSQL auto-start."
 fi
 
-# 4) Start the API server in background using uv run
+# 4) Start the API server in background using the synced .venv
 echo "Starting API server..."
-uv run uvicorn main:app --reload &
+.venv/bin/python -m uvicorn main:app --reload &
 
-# 5) Start the worker in foreground using uv run
+# 5) Start the worker in foreground using the synced .venv
 echo "Starting worker..."
-uv run python job_worker.py
+.venv/bin/python job_worker.py
