@@ -988,6 +988,18 @@ Clients should read this header to populate `cache_hit` in their analytics paylo
 | `GET /rate-limit-stats`  | Overall rate limiting statistics | Admin  |
 | `GET /test-redis`        | Redis connection test            | Public |
 | `GET /health`            | Health check                     | Public |
+| `GET /health/detailed`   | Dependency and upstream health   | Public |
+
+#### Open-Meteo monitoring
+
+When `WEATHER_PROVIDER=open_meteo`, `/health/detailed` includes an `open_meteo_api` check with both the synthetic probe result and rolling production-traffic counters from Redis. External uptime services should poll this endpoint and send email alerts from the monitoring platform, not from the API process.
+
+Recommended alert rules:
+
+- `checks.open_meteo_api.status == "unhealthy"`
+- `checks.open_meteo_api.failure_rate >= 0.25`
+- `checks.open_meteo_api.consecutive_failures >= 10`
+- `checks.open_meteo_api.probe_status == "unhealthy"`
 
 ### V1 API Response Format
 

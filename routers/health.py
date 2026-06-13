@@ -9,8 +9,8 @@ import redis
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from cache.accessors import get_cache_stats
-from config import OPEN_METEO_ARCHIVE_URL
+from cache.accessors import get_cache_stats, get_open_meteo_stats
+from config import HTTP_TIMEOUT_SHORT, OPEN_METEO_ARCHIVE_URL, WEATHER_PROVIDER
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import get_daily_temperature_store
 from version import __version__
@@ -74,36 +74,57 @@ async def detailed_health_check(redis_client: Annotated[redis.Redis, Depends(get
             if overall_healthy:
                 health_status["status"] = "degraded"
 
-    # Check Open-Meteo API availability
-    try:
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                f"{OPEN_METEO_ARCHIVE_URL}?latitude=51.5&longitude=-0.1"
-                f"&start_date={yesterday}&end_date={yesterday}"
-                f"&daily=temperature_2m_mean&timezone=UTC",
-                timeout=5.0,
-            )
-            if resp.status_code < 500:
-                health_status["checks"]["open_meteo_api"] = {
-                    "status": "healthy",
-                    "status_code": resp.status_code,
-                    "message": "API reachable",
-                }
-            else:
-                health_status["checks"]["open_meteo_api"] = {
-                    "status": "degraded",
-                    "status_code": resp.status_code,
-                    "message": f"API returned status {resp.status_code}",
-                }
-                if overall_healthy:
-                    health_status["status"] = "degraded"
-    except Exception as e:
+    # Check Open-Meteo API availability and recent production-traffic failures.
+    if WEATHER_PROVIDER != "open_meteo":
         health_status["checks"]["open_meteo_api"] = {
-            "status": "unhealthy",
-            "error": str(e),
+            "status": "skipped",
+            "provider": WEATHER_PROVIDER,
+            "message": "Open-Meteo monitoring is informational when another provider is active",
         }
-        if overall_healthy:
+    else:
+        probe_status = "unknown"
+        probe_status_code = None
+        probe_error = None
+        try:
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SHORT) as client:
+                resp = await client.get(
+                    f"{OPEN_METEO_ARCHIVE_URL}?latitude=51.5&longitude=-0.1"
+                    f"&start_date={yesterday}&end_date={yesterday}"
+                    f"&daily=temperature_2m_mean&timezone=UTC",
+                    timeout=HTTP_TIMEOUT_SHORT,
+                )
+                probe_status_code = resp.status_code
+                probe_status = "healthy" if resp.status_code < 400 else "degraded"
+        except Exception as e:
+            probe_status = "unhealthy"
+            probe_error = str(e)
+
+        open_meteo_stats = get_open_meteo_stats()
+        if open_meteo_stats:
+            open_meteo_health = open_meteo_stats.get_health(probe_status=probe_status)
+        else:
+            open_meteo_health = {
+                "status": probe_status,
+                "monitoring_enabled": False,
+                "message": "Open-Meteo stats unavailable",
+            }
+
+        open_meteo_health.update(
+            {
+                "provider": WEATHER_PROVIDER,
+                "probe_status": probe_status,
+                "probe_status_code": probe_status_code,
+            }
+        )
+        if probe_error:
+            open_meteo_health["probe_error"] = probe_error
+        health_status["checks"]["open_meteo_api"] = open_meteo_health
+
+        if open_meteo_health["status"] == "unhealthy":
+            overall_healthy = False
+            health_status["status"] = "unhealthy"
+        elif open_meteo_health["status"] == "degraded" and overall_healthy:
             health_status["status"] = "degraded"
 
     # Check worker service health (LOW-007)

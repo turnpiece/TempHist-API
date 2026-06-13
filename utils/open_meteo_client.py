@@ -35,6 +35,20 @@ _client: Optional[aiohttp.ClientSession] = None
 _client_lock: Optional[asyncio.Lock] = None
 
 
+def _get_open_meteo_stats():
+    try:
+        from cache.accessors import get_open_meteo_stats
+
+        return get_open_meteo_stats()
+    except Exception as exc:
+        logger.debug("Open-Meteo stats unavailable: %s", exc)
+        return None
+
+
+def _endpoint_for_url(url: str) -> str:
+    return "forecast" if "/v1/forecast" in url else "archive"
+
+
 async def _get_client() -> aiohttp.ClientSession:
     global _client, _client_lock
     if _client_lock is None:
@@ -246,15 +260,23 @@ async def fetch_days(
         global _sem
         if _sem is None:
             _sem = asyncio.Semaphore(2)
+        endpoint = _endpoint_for_url(url)
+        stats = _get_open_meteo_stats()
+        if stats:
+            stats.record_call(endpoint)
         attempt = 0
         while True:
             attempt += 1
             try:
                 async with _sem:
+                    if stats:
+                        stats.record_attempt(endpoint)
                     async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
                         if resp.status == 429:
                             retry_after = float(resp.headers.get("Retry-After", _RETRY_BASE_DELAY * attempt))
                             if attempt < _RETRY_ATTEMPTS:
+                                if stats:
+                                    stats.record_failure("rate_limited", endpoint=endpoint, terminal=False)
                                 logger.warning(
                                     "OM rate limited, retrying in %.1fs (attempt %d)",
                                     retry_after,
@@ -262,9 +284,13 @@ async def fetch_days(
                                 )
                                 await asyncio.sleep(retry_after)
                                 continue
+                            if stats:
+                                stats.record_failure("rate_limit_exceeded", endpoint=endpoint)
                             logger.error("OM rate limit exceeded after %d attempts: %s", attempt, url)
                             return
                         if resp.status != 200:
+                            if stats:
+                                stats.record_failure(f"http_{resp.status}", endpoint=endpoint)
                             logger.warning("OM returned status %s for %s", resp.status, url)
                             return
                         payload = await resp.json()
@@ -272,18 +298,33 @@ async def fetch_days(
                             reason = str(payload.get("reason", "")).lower()
                             logger.warning("OM error for %s: %s", url, payload.get("reason"))
                             if ("rate" in reason or "limit" in reason) and attempt < _RETRY_ATTEMPTS:
+                                if stats:
+                                    stats.record_failure("rate_limited", endpoint=endpoint, terminal=False)
                                 await asyncio.sleep(_RETRY_BASE_DELAY * attempt)
                                 continue
+                            if stats:
+                                failure_reason = (
+                                    "rate_limit_exceeded" if "rate" in reason or "limit" in reason else "open_meteo_error"
+                                )
+                                stats.record_failure(failure_reason, endpoint=endpoint)
                             return
                         days = _process_om_response(payload, fs, fe)
                         all_days.extend(days)
                         if metadata["timezone"] is None:
                             metadata.update(_extract_metadata(payload))
+                        if stats:
+                            stats.record_success(endpoint)
                         return
             except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                is_timeout = isinstance(exc, asyncio.TimeoutError)
+                reason = "connection_timeout" if is_timeout else "client_error"
                 if attempt >= _RETRY_ATTEMPTS:
+                    if stats:
+                        stats.record_failure(reason, endpoint=endpoint, timeout=is_timeout)
                     logger.error("OM fetch failed after %d attempts for %s: %s", attempt, url, exc)
                     return
+                if stats:
+                    stats.record_failure(reason, endpoint=endpoint, terminal=False, timeout=is_timeout)
                 delay = _RETRY_BASE_DELAY * attempt
                 logger.warning("OM fetch attempt %d failed, retrying in %.1fs: %s", attempt, delay, exc)
                 await asyncio.sleep(delay)

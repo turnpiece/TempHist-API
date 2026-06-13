@@ -29,6 +29,7 @@ from config import (
 )
 from jobs.manager import JobManager
 from tracking.usage import LocationUsageTracker
+from utils.open_meteo_stats import OpenMeteoStats
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,12 @@ usage_tracker: Optional[LocationUsageTracker] = None
 cache_warmer: Optional[CacheWarmer] = None
 cache_stats: Optional[CacheStats] = None
 cache_invalidator: Optional[CacheInvalidator] = None
+open_meteo_stats: Optional[OpenMeteoStats] = None
 
 
 def initialize_cache(redis_client: redis.Redis):
     """Initialise all global cache/job singleton instances."""
-    global enhanced_cache, job_manager, usage_tracker, cache_warmer, cache_stats, cache_invalidator
+    global enhanced_cache, job_manager, usage_tracker, cache_warmer, cache_stats, cache_invalidator, open_meteo_stats
 
     enhanced_cache = EnhancedCache(redis_client)
     job_manager = JobManager(redis_client)
@@ -81,6 +83,9 @@ def initialize_cache(redis_client: redis.Redis):
     else:
         cache_stats = None
         logger.info("Cache statistics disabled" if not DEBUG else "⚠️  CACHE STATS DISABLED")
+
+    open_meteo_stats = OpenMeteoStats(redis_client)
+    logger.info("Open-Meteo monitoring initialized" if not DEBUG else "📈 OPEN-METEO MONITORING INITIALIZED")
 
     from cache.core import CACHE_INVALIDATION_BATCH_SIZE, CACHE_INVALIDATION_ENABLED
 
@@ -124,6 +129,10 @@ def get_cache_warmer() -> Optional[CacheWarmer]:
 
 def get_cache_stats() -> Optional[CacheStats]:
     return cache_stats
+
+
+def get_open_meteo_stats() -> Optional[OpenMeteoStats]:
+    return open_meteo_stats
 
 
 def get_cache_invalidator() -> Optional[CacheInvalidator]:
