@@ -1433,6 +1433,7 @@ async def get_record(
         year_data = {}
         cache_status = "MISS"
         bundle_etag_computed = None
+        celsius_records_for_temporal_cache = []
 
         if CACHE_ENABLED:
             bundle_resp = _try_serve_bundle_cache(
@@ -1509,6 +1510,7 @@ async def get_record(
 
                 # Rebuild full response from year_data using helper
                 values = [year_data[y] for y in sorted(year_data.keys())]
+                celsius_records_for_temporal_cache = values
                 data = _rebuild_full_response_from_values(
                     values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
                 )
@@ -1552,6 +1554,7 @@ async def get_record(
                     )
 
                 values_list = [per_year_records[y] for y in sorted(per_year_records.keys())]
+                celsius_records_for_temporal_cache = values_list
                 if values_list:
                     data = _rebuild_full_response_from_values(
                         values_list,
@@ -1592,14 +1595,15 @@ async def get_record(
         if bundle_etag_computed is None:
             bundle_etag_computed = _resolve_bundle_etag(redis_client, period, slug, identifier, data)
 
-        if CACHE_ENABLED:
+        if CACHE_ENABLED and celsius_records_for_temporal_cache:
             try:
+                temporal_payload = {"records": celsius_records_for_temporal_cache}
                 temporal_cache_set(
                     redis_client,
                     agg=period,
                     original_location=location,
                     end_date=end_date,
-                    payload=data,
+                    payload=temporal_payload,
                     canonical_name=location_identity.canonical_name,
                 )
             except Exception as e:
