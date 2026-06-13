@@ -344,6 +344,177 @@ async def _enqueue_backfill_job(
             logger.debug("Failed to enqueue backfill job for %s %s %s: %s", period, location, year, exc)
 
 
+def _plan_year_date_sequences(
+    years: List[int], month: int, day: int, window_days: int, missing_years: List[Dict]
+) -> Tuple[Dict[int, List[date]], set[date]]:
+    """Build per-year date windows and a deduplicated set of all dates needed."""
+    year_to_date_sequence: Dict[int, List[date]] = {}
+    all_dates_needed: set[date] = set()
+    for year in years:
+        anchor = _resolve_anchor_date(year, month, day)
+        if anchor is None:
+            track_missing_year(missing_years, year, "invalid_anchor_date")
+            continue
+        start_date = anchor - timedelta(days=window_days - 1)
+        date_sequence = [start_date + timedelta(days=i) for i in range(window_days)]
+        year_to_date_sequence[year] = date_sequence
+        all_dates_needed.update(date_sequence)
+    return year_to_date_sequence, all_dates_needed
+
+
+async def _enqueue_backfill_and_collect_ranges(
+    location: str,
+    period: str,
+    month: int,
+    day: int,
+    slug: Optional[str],
+    year_to_date_sequence: Dict[int, List[date]],
+    cache: Dict[date, DailyTemperatureRecord],
+    current_year_now: int,
+) -> List[Tuple[int, date, date]]:
+    """Per year, enqueue a backfill job if anything is missing and (if coverage is below threshold) return the dates to fetch from the provider."""
+    ranges_to_fetch: List[Tuple[int, date, date]] = []
+    for year, date_sequence in year_to_date_sequence.items():
+        expected_days = len(date_sequence)
+        missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
+        available_count = expected_days - len(missing_dates)
+        coverage_ok, coverage_ratio = _evaluate_coverage(period, available_count, expected_days, year=year)
+
+        if year == current_year_now and missing_dates:
+            logger.info(
+                "Current year [%s] coverage for %s: %d/%d days (%.1f%%)",
+                year,
+                sanitize_for_logging(location),
+                available_count,
+                expected_days,
+                coverage_ratio * 100,
+            )
+
+        if not missing_dates:
+            continue
+
+        await _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year, slug=slug)
+        if not coverage_ok:
+            ranges_to_fetch.extend(
+                (year, range_start, range_end)
+                for range_start, range_end in _collapse_consecutive_dates(missing_dates)
+            )
+    return ranges_to_fetch
+
+
+async def _fetch_and_store_timeline_ranges(
+    location: str,
+    ranges_to_fetch: List[Tuple[int, date, date]],
+    cache: Dict[date, DailyTemperatureRecord],
+    missing_years: List[Dict],
+    timeline_failed_years: set[int],
+) -> None:
+    """Hit the weather provider for missing ranges and merge records back into ``cache``."""
+    store = await get_daily_temperature_store()
+    fetch_results = await _fetch_timeline_ranges(location, ranges_to_fetch)
+    records_to_store: List[DailyTemperatureRecord] = []
+    upsert_metadata: Optional[Dict[str, Any]] = None
+
+    for year, range_start, range_end, timeline_days, timeline_metadata, exc in fetch_results:
+        if isinstance(exc, LocationNotFoundError):
+            logger.warning("Location not found, aborting fetch for %s: %s", location, exc)
+            raise HTTPException(status_code=422, detail="location_not_found")
+        if exc is not None:
+            logger.error(
+                "❌ timeline fetch failed for %s (%s to %s): %s",
+                sanitize_for_logging(location),
+                range_start.strftime("%Y-%m-%d"),
+                range_end.strftime("%Y-%m-%d"),
+                exc,
+            )
+            track_missing_year(missing_years, year, "timeline_error")
+            timeline_failed_years.add(year)
+            continue
+        if timeline_metadata and upsert_metadata is None:
+            upsert_metadata = timeline_metadata
+        records_to_store.extend(_timeline_days_to_records(timeline_days, range_start, range_end))
+
+    if records_to_store:
+        await store.upsert(location, records_to_store, metadata=upsert_metadata)
+        for rec in records_to_store:
+            cache[rec.date] = rec
+
+
+def _aggregate_year(
+    year: int,
+    date_sequence: List[date],
+    cache: Dict[date, DailyTemperatureRecord],
+    period: str,
+    unit_group: str,
+    location: str,
+    current_year_now: int,
+    timeline_failed: bool,
+    missing_years: List[Dict],
+) -> Optional[Tuple[TemperatureValue, float, Dict]]:
+    """Return (value, aggregated temp, coverage entry) for a year, or None if it should be skipped."""
+    anchor = _resolve_anchor_date(year, *_anchor_components(date_sequence))
+    expected_days = len(date_sequence)
+    final_missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
+    available_count = expected_days - len(final_missing_dates)
+    coverage_ok, _ = _evaluate_coverage(period, available_count, expected_days, year=year)
+    if timeline_failed:
+        coverage_ok = False
+
+    if final_missing_dates and not coverage_ok:
+        if year == current_year_now:
+            available_days = expected_days - len(final_missing_dates)
+            logger.warning(
+                "Current year [%s] skipped for %s: Coverage %d/%d days (%.1f%%) below threshold",
+                year,
+                sanitize_for_logging(location),
+                available_days,
+                expected_days,
+                (available_days / expected_days) * 100,
+            )
+        if not timeline_failed:
+            track_missing_year(missing_years, year, "coverage_below_threshold")
+        return None
+
+    temps_converted = [
+        _convert_c_to_unit(cache[d].temp_c, unit_group)
+        for d in date_sequence
+        if d in cache and cache[d].temp_c is not None
+    ]
+    if not temps_converted:
+        track_missing_year(missing_years, year, "no_daily_data")
+        return None
+
+    avg_temp = sum(temps_converted) / len(temps_converted)
+    value = TemperatureValue(
+        date=anchor.strftime("%Y-%m-%d"),
+        year=anchor.year,
+        temperature=round(avg_temp, 2),
+    )
+    if year == current_year_now:
+        logger.info(
+            "Current year [%s] included for %s: %d/%d days",
+            year,
+            sanitize_for_logging(location),
+            len(temps_converted),
+            expected_days,
+        )
+    coverage_entry = {
+        "year": anchor.year,
+        "available_days": len(temps_converted),
+        "expected_days": expected_days,
+        "missing_days": expected_days - len(temps_converted),
+        "coverage_ratio": round(len(temps_converted) / expected_days, 4) if expected_days else 0.0,
+        "approximate": len(temps_converted) < expected_days,
+    }
+    return value, avg_temp, coverage_entry
+
+
+def _anchor_components(date_sequence: List[date]) -> Tuple[int, int]:
+    """Return (month, day) for the anchor (the last date in the window)."""
+    anchor = date_sequence[-1]
+    return anchor.month, anchor.day
+
+
 async def _collect_rolling_window_values(
     location: str,
     period: Literal["daily", "weekly", "monthly", "yearly"],
@@ -363,155 +534,46 @@ async def _collect_rolling_window_values(
     window_days = WINDOW_DAYS[period]
     current_year_now = datetime.now().year
 
-    # First pass: collect all unique dates needed across all years
-    # This allows us to fetch all data in a single database query instead of 51 separate queries
-    all_dates_needed: set[date] = set()
-    year_to_date_sequence: Dict[int, List[date]] = {}
+    year_to_date_sequence, all_dates_needed = _plan_year_date_sequences(
+        years, month, day, window_days, missing_years
+    )
 
-    for year in years:
-        anchor = _resolve_anchor_date(year, month, day)
-        if anchor is None:
-            track_missing_year(missing_years, year, "invalid_anchor_date")
-            continue
-
-        start_date = anchor - timedelta(days=window_days - 1)
-        date_sequence = [start_date + timedelta(days=i) for i in range(window_days)]
-        year_to_date_sequence[year] = date_sequence
-        all_dates_needed.update(date_sequence)
-
-    # Single database fetch for ALL dates across ALL years (huge performance improvement!)
-    # This reduces ~51 database calls to just 1 by fetching all unique dates at once
     if all_dates_needed:
         logger.info(
-            f"Fetching {len(all_dates_needed)} unique dates for {location} "
-            f"across {len(year_to_date_sequence)} years in single query"
+            "Fetching %d unique dates for %s across %d years in single query",
+            len(all_dates_needed),
+            sanitize_for_logging(location),
+            len(year_to_date_sequence),
         )
     cache = await store.fetch(location, list(all_dates_needed))
 
-    # Second pass: enqueue backfills and collect all below-threshold ranges before hitting the provider.
-    ranges_to_fetch: List[Tuple[int, date, date]] = []
-    for year in years:
-        if year not in year_to_date_sequence:
-            continue  # Already tracked as missing in first pass
-
-        date_sequence = year_to_date_sequence[year]
-        expected_days = len(date_sequence)
-        missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
-        available_count = expected_days - len(missing_dates)
-        coverage_ok, coverage_ratio = _evaluate_coverage(period, available_count, expected_days, year=year)
-
-        # Log current year coverage for monitoring
-        if year == current_year_now and missing_dates:
-            logger.info(
-                f"Current year [{year}] coverage for {location}: "
-                f"{available_count}/{expected_days} days ({coverage_ratio:.1%})"
-            )
-
-        if missing_dates:
-            await _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year, slug=slug)
-
-            if not coverage_ok:
-                ranges_to_fetch.extend(
-                    (year, range_start, range_end)
-                    for range_start, range_end in _collapse_consecutive_dates(missing_dates)
-                )
-
+    ranges_to_fetch = await _enqueue_backfill_and_collect_ranges(
+        location, period, month, day, slug,
+        year_to_date_sequence, cache, current_year_now,
+    )
     if ranges_to_fetch:
-        fetch_results = await _fetch_timeline_ranges(location, ranges_to_fetch)
-        records_to_store: List[DailyTemperatureRecord] = []
-        upsert_metadata: Optional[Dict[str, Any]] = None
-        for year, range_start, range_end, timeline_days, timeline_metadata, exc in fetch_results:
-            if isinstance(exc, LocationNotFoundError):
-                logger.warning("Location not found, aborting fetch for %s: %s", location, exc)
-                raise HTTPException(status_code=422, detail="location_not_found")
-            if exc is not None:
-                logger.error(
-                    "❌ timeline fetch failed for %s (%s to %s): %s",
-                    sanitize_for_logging(location),
-                    range_start.strftime("%Y-%m-%d"),
-                    range_end.strftime("%Y-%m-%d"),
-                    exc,
-                )
-                track_missing_year(missing_years, year, "timeline_error")
-                timeline_failed_years.add(year)
-                continue
-            if timeline_metadata and upsert_metadata is None:
-                upsert_metadata = timeline_metadata
-            records_to_store.extend(_timeline_days_to_records(timeline_days, range_start, range_end))
+        await _fetch_and_store_timeline_ranges(
+            location, ranges_to_fetch, cache, missing_years, timeline_failed_years
+        )
 
-        if records_to_store:
-            await store.upsert(location, records_to_store, metadata=upsert_metadata)
-            for rec in records_to_store:
-                cache[rec.date] = rec
-
-    # Final pass: process each year using the original cache plus any freshly fetched timeline data.
-    for year in years:
-        if year not in year_to_date_sequence:
-            continue  # Already tracked as missing in first pass
-
-        date_sequence = year_to_date_sequence[year]
-        anchor = _resolve_anchor_date(year, month, day)
-        expected_days = len(date_sequence)
-        final_missing_dates = [d for d in date_sequence if d not in cache or cache[d].temp_c is None]
-        available_count = expected_days - len(final_missing_dates)
-        coverage_ok, _ = _evaluate_coverage(period, available_count, expected_days, year=year)
-        timeline_failed = year in timeline_failed_years
-
-        if timeline_failed:
-            coverage_ok = False
-
-        if final_missing_dates and not coverage_ok:
-            if year == current_year_now:
-                available_days = expected_days - len(final_missing_dates)
-                logger.warning(
-                    f"Current year [{year}] skipped for {location}: "
-                    f"Coverage {available_days}/{expected_days} days ({(available_days / expected_days) * 100:.1f}%) "
-                    f"below threshold"
-                )
-
-            if not timeline_failed:
-                track_missing_year(missing_years, year, "coverage_below_threshold")
+    for year, date_sequence in year_to_date_sequence.items():
+        result = _aggregate_year(
+            year=year,
+            date_sequence=date_sequence,
+            cache=cache,
+            period=period,
+            unit_group=unit_group,
+            location=location,
+            current_year_now=current_year_now,
+            timeline_failed=year in timeline_failed_years,
+            missing_years=missing_years,
+        )
+        if result is None:
             continue
-
-        temps_converted = [
-            _convert_c_to_unit(cache[d].temp_c, unit_group)
-            for d in date_sequence
-            if d in cache and cache[d].temp_c is not None
-        ]
-
-        if not temps_converted:
-            track_missing_year(missing_years, year, "no_daily_data")
-            continue
-
-        avg_temp = sum(temps_converted) / len(temps_converted)
+        value, avg_temp, coverage_entry = result
+        values.append(value)
         aggregated.append(avg_temp)
-        values.append(
-            TemperatureValue(
-                date=anchor.strftime("%Y-%m-%d"),
-                year=anchor.year,
-                temperature=round(avg_temp, 2),
-            )
-        )
-
-        if year == current_year_now:
-            logger.info(
-                "Current year [%s] included for %s: %d/%d days",
-                year,
-                sanitize_for_logging(location),
-                len(temps_converted),
-                expected_days,
-            )
-
-        coverage_details.append(
-            {
-                "year": anchor.year,
-                "available_days": len(temps_converted),
-                "expected_days": expected_days,
-                "missing_days": expected_days - len(temps_converted),
-                "coverage_ratio": round(len(temps_converted) / expected_days, 4) if expected_days else 0.0,
-                "approximate": len(temps_converted) < expected_days,
-            }
-        )
+        coverage_details.append(coverage_entry)
 
     return values, aggregated, missing_years, coverage_details
 
