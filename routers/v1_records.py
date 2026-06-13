@@ -687,6 +687,86 @@ async def get_temperature_data_v1(
     }
 
 
+def _convert_values_to_unit(values: List[Dict], unit_group: str) -> List[Dict]:
+    """Return shallow copies of ``values`` with temperatures converted to ``unit_group``."""
+    converted = []
+    for v in values:
+        out = dict(v)
+        if out.get("temperature") is not None:
+            out["temperature"] = _convert_c_to_unit(out["temperature"], unit_group)
+        converted.append(out)
+    return converted
+
+
+def _build_average_block(temps: List[float], unit_group: str, std_dev: float) -> Dict:
+    if not temps:
+        return {"mean": 0.0, "unit": unit_group, "data_points": 0}
+    return {
+        "mean": round(sum(temps) / len(temps), 2),
+        "unit": unit_group,
+        "data_points": len(temps),
+        "standard_deviation": std_dev,
+    }
+
+
+def _build_trend_block(values: List[Dict], unit_group: str) -> Dict:
+    from utils.temperature import calculate_gradient_factor, calculate_trend_slope
+
+    trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
+    if len(values) < 2:
+        return {"slope": 0.0, "unit": trend_unit, "data_points": len(values)}
+
+    trend_input = [{"x": v.get("year"), "y": v.get("temperature")} for v in values]
+    slope, r_squared, slope_error = calculate_trend_slope(trend_input)
+    gf = calculate_gradient_factor(slope, slope_error, unit_group) if slope_error is not None else None
+    return {
+        "slope": slope,
+        "unit": trend_unit,
+        "data_points": len(values),
+        "r_squared": r_squared,
+        "slope_error": slope_error,
+        "gradient_factor": gf,
+    }
+
+
+_PERIOD_FRIENDLY_PREFIX = {"weekly": "week ending ", "monthly": "month ending ", "yearly": "year ending "}
+
+
+def _build_summary_text(
+    values: List[Dict],
+    period: str,
+    location: str,
+    unit_group: str,
+    series_mean: float,
+    end_date_obj: datetime,
+    redis_client: redis.Redis,
+) -> str:
+    from utils.temperature import generate_summary
+
+    summary_data = [{"x": v.get("year"), "y": v.get("temperature")} for v in values]
+    local_today = get_local_today(location, redis_client)
+    text = generate_summary(
+        summary_data, end_date_obj, period, unit_group, mean=series_mean, local_today=local_today
+    )
+
+    prefix = _PERIOD_FRIENDLY_PREFIX.get(period)
+    if prefix:
+        friendly = get_friendly_date(end_date_obj)
+        text = text.replace(friendly, prefix + friendly)
+    return text
+
+
+def _collect_missing_years(values: List[Dict], years: List[int], current_year: int) -> List:
+    available = {v.get("year") for v in values if v.get("year") is not None}
+    missing: List = []
+    for y in years:
+        if y in available:
+            continue
+        reason = "no_data_current_year" if y == current_year else "no_data"
+        track_missing_year(missing, y, reason)
+    return missing
+
+
 def _rebuild_full_response_from_values(
     values: List[Dict],
     period: str,
@@ -699,39 +779,11 @@ def _rebuild_full_response_from_values(
     redis_client: redis.Redis,
     unit_group: str = "celsius",
 ) -> Dict:
-    """Rebuild full RecordResponse from list of year values.
-
-    Args:
-        values: List of TemperatureValue dicts with temperatures in Celsius
-        period: Period type
-        location: Location name
-        identifier: Date identifier
-        month: Month
-        day: Day
-        current_year: Current year
-        years: List of all years in range
-        redis_client: Redis client
-        unit_group: Target unit ('celsius' or 'fahrenheit')
-
-    Returns:
-        Full response dict with all fields, with temperatures converted to unit_group
-    """
-    from utils.temperature import (
-        calculate_gradient_factor,
-        calculate_standard_deviation,
-        calculate_trend_slope,
-        generate_summary,
-    )
+    """Rebuild full RecordResponse from list of year values (Celsius inputs)."""
+    from utils.temperature import calculate_standard_deviation
     from utils.weather import create_metadata
 
-    # Convert temperatures from Celsius to requested unit
-    converted_values = []
-    for v in values:
-        converted_v = dict(v)  # Make a copy
-        if converted_v.get("temperature") is not None:
-            converted_v["temperature"] = _convert_c_to_unit(converted_v["temperature"], unit_group)
-        converted_values.append(converted_v)
-
+    converted_values = _convert_values_to_unit(values, unit_group)
     all_temps = [v.get("temperature") for v in converted_values if v.get("temperature") is not None]
 
     series_mean = sum(all_temps) / len(all_temps) if all_temps else 0.0
@@ -740,72 +792,25 @@ def _rebuild_full_response_from_values(
         temp = v.get("temperature")
         v["anomaly"] = round(temp - series_mean, 2) if temp is not None else None
 
-    # Format average based on unit
-    if all_temps:
-        avg_mean = round(sum(all_temps) / len(all_temps), 2)
-
-        avg_data = {
-            "mean": avg_mean,
-            "unit": unit_group,
-            "data_points": len(all_temps),
-            "standard_deviation": series_std_dev,
-        }
-    else:
-        avg_data = {"mean": 0.0, "unit": unit_group, "data_points": 0}
-
-    if len(converted_values) >= 2:
-        trend_input = [{"x": v.get("year"), "y": v.get("temperature")} for v in converted_values]
-        slope, r_squared, slope_error = calculate_trend_slope(trend_input)
-        trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
-        gf = calculate_gradient_factor(slope, slope_error, unit_group) if slope_error is not None else None
-        trend_data = {
-            "slope": slope,
-            "unit": trend_unit,
-            "data_points": len(converted_values),
-            "r_squared": r_squared,
-            "slope_error": slope_error,
-            "gradient_factor": gf,
-        }
-    else:
-        trend_unit = "°F/decade" if unit_group.lower() == "fahrenheit" else "°C/decade"
-        trend_data = {"slope": 0.0, "unit": trend_unit, "data_points": len(converted_values)}
-
     end_date_obj = datetime(current_year, month, day)
-    summary_data = [{"x": v.get("year"), "y": v.get("temperature")} for v in converted_values]
-    local_today = get_local_today(location, redis_client)
-    summary_text = generate_summary(
-        summary_data, end_date_obj, period, unit_group, mean=series_mean, local_today=local_today
+    avg_data = _build_average_block(all_temps, unit_group, series_std_dev)
+    trend_data = _build_trend_block(converted_values, unit_group)
+    summary_text = _build_summary_text(
+        converted_values, period, location, unit_group, series_mean, end_date_obj, redis_client
     )
-
-    # Replace bare date with period-prefixed version for non-daily periods
-    if period == "weekly":
-        period_friendly_date = f"week ending {get_friendly_date(end_date_obj)}"
-    elif period == "monthly":
-        period_friendly_date = f"month ending {get_friendly_date(end_date_obj)}"
-    elif period == "yearly":
-        period_friendly_date = f"year ending {get_friendly_date(end_date_obj)}"
-    else:
-        period_friendly_date = None
-    if period_friendly_date:
-        summary_text = summary_text.replace(get_friendly_date(end_date_obj), period_friendly_date)
-
-    available_years = {v.get("year") for v in converted_values if v.get("year") is not None}
-    rebuilt_missing_years = []
-    for y in years:
-        if y not in available_years:
-            reason = "no_data_current_year" if y == current_year else "no_data"
-            track_missing_year(rebuilt_missing_years, y, reason)
-
+    rebuilt_missing_years = _collect_missing_years(converted_values, years, current_year)
     period_days = WINDOW_DAYS.get(period, 1)
 
+    min_year = min(v.get("year") for v in converted_values)
+    max_year = max(v.get("year") for v in converted_values)
     return {
         "period": period,
         "location": location,
         "identifier": identifier,
         "range": {
-            "start": f"{min(v.get('year') for v in converted_values)}-{month:02d}-{day:02d}",
-            "end": f"{max(v.get('year') for v in converted_values)}-{month:02d}-{day:02d}",
-            "years": max(v.get("year") for v in converted_values) - min(v.get("year") for v in converted_values) + 1,
+            "start": f"{min_year}-{month:02d}-{day:02d}",
+            "end": f"{max_year}-{month:02d}-{day:02d}",
+            "years": max_year - min_year + 1,
         },
         "unit_group": unit_group,
         "values": converted_values,
