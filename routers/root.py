@@ -1,6 +1,7 @@
 """Root endpoint and API information."""
 
 from datetime import timedelta
+from typing import Annotated
 
 import redis
 from fastapi import APIRouter, Depends
@@ -102,7 +103,7 @@ async def test_cors_rolling():
 
 
 @router.get("/test-redis")
-async def test_redis(redis_client: redis.Redis = Depends(get_redis_client)):
+async def test_redis(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Test Redis connection."""
     try:
         # Try to set a test value

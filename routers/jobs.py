@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -206,7 +206,7 @@ async def create_rolling_bundle_job(
 
 
 @router.get("/v1/jobs/diagnostics/worker-status")
-async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_client)):
+async def get_worker_diagnostics(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Get diagnostic information about the background worker and job queue."""
     try:
         # Check worker heartbeat
@@ -315,7 +315,7 @@ async def get_worker_diagnostics(redis_client: redis.Redis = Depends(get_redis_c
 
 
 @router.get("/debug/jobs")
-async def debug_jobs_endpoint(redis_client: redis.Redis = Depends(get_redis_client)):
+async def debug_jobs_endpoint(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Debug endpoint to check job queue and job data in Redis."""
     try:
         now = datetime.now(timezone.utc)

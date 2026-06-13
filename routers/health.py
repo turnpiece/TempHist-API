@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime, timedelta
+from typing import Annotated
 
 import httpx
 import redis
@@ -24,7 +25,7 @@ async def health_check():
 
 
 @router.get("/health/detailed")
-async def detailed_health_check(redis_client: redis.Redis = Depends(get_redis_client)):
+async def detailed_health_check(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Comprehensive health check endpoint for debugging and monitoring (LOW-007: Enhanced dependencies check)."""
     health_status = {"status": "healthy", "timestamp": datetime.now().isoformat(), "version": __version__, "checks": {}}
 

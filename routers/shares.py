@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -50,7 +50,7 @@ async def list_shares(
 async def create_share(
     request: Request,
     body: ShareCreate,
-    redis_client: redis.Redis = Depends(get_redis_client),
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
 ):
     """Create a share record and return a short URL. Requires Firebase auth."""
     # Auth is enforced by the middleware for all non-public paths.
@@ -76,7 +76,7 @@ async def create_share(
 @router.get("/v1/shares/{share_id}", responses=error_responses(404))
 async def get_share(
     share_id: str,
-    redis_client: redis.Redis = Depends(get_redis_client),
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
 ):
     """Retrieve share parameters by ID. Public — no auth required."""
     if len(share_id) != 8 or not share_id.isalnum():

@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import date as dt_date
+from typing import Annotated
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
@@ -44,11 +45,11 @@ from routers.dependencies import get_redis_client  # noqa: E402
 
 @router.get("/weather/{location:path}/{date}")
 async def get_weather(
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
     location: str = Path(..., description="Location name", max_length=200),
     date: str = Path(..., description="Date in YYYY-MM-DD format"),
     unit_group: str = Query("celsius", description="Temperature unit: 'celsius' or 'fahrenheit'"),
     response: Response = None,
-    redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """Get weather data for a specific location and date.
 
@@ -112,9 +113,9 @@ async def get_weather(
 
 @router.get("/forecast/{location}")
 async def get_forecast(
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
     location: str = Path(..., description="Location name", max_length=200),
     unit_group: str = Query("celsius", description="Temperature unit: 'celsius' or 'fahrenheit'"),
-    redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """Get weather forecast for a location with time-based caching."""
     try:

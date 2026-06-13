@@ -1,5 +1,7 @@
 """Statistics and rate limiting status endpoints."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, Request
 
 from cache.accessors import get_usage_tracker
@@ -89,7 +91,7 @@ async def get_rate_limit_status(
 @router.get("/rate-limit-stats")
 async def get_rate_limit_stats(
     request: Request,
-    _admin: bool = Depends(verify_admin_key),
+    _admin: Annotated[bool, Depends(verify_admin_key)],
     location_monitor=Depends(get_location_monitor),
     request_monitor=Depends(get_request_monitor),
 ):
@@ -122,7 +124,7 @@ async def get_rate_limit_stats(
 @router.get("/usage-stats")
 async def get_usage_stats(
     request: Request,
-    _admin: bool = Depends(verify_admin_key),
+    _admin: Annotated[bool, Depends(verify_admin_key)],
 ):
     """Get usage tracking statistics from the selection signal (admin endpoint).
 
@@ -145,7 +147,7 @@ async def get_usage_stats(
 @router.get("/usage-stats/{location}")
 async def get_location_usage_stats(
     location: str,
-    _admin: bool = Depends(verify_admin_key),
+    _admin: Annotated[bool, Depends(verify_admin_key)],
 ):
     """Get selection statistics for a specific location ID (admin endpoint)."""
     tracker = get_usage_tracker()

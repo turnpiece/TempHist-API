@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -1042,8 +1042,8 @@ async def get_record(
     identifier: str = Path(..., description="Date identifier"),
     unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
-    redis_client: redis.Redis = Depends(get_redis_client),
-    invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache),
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
+    invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
     """Get temperature record data for a specific period, location, and identifier."""
     try:
@@ -1507,8 +1507,8 @@ async def get_record_average(
     identifier: str = Path(..., description="Date identifier"),
     unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
-    redis_client: redis.Redis = Depends(get_redis_client),
-    invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache),
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
+    invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
     """Get average temperature data for a specific record."""
     try:
@@ -1569,8 +1569,8 @@ async def get_record_trend(
     identifier: str = Path(..., description="Date identifier"),
     unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
-    redis_client: redis.Redis = Depends(get_redis_client),
-    invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache),
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
+    invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
     """Get temperature trend data for a specific record."""
     try:
@@ -1631,8 +1631,8 @@ async def get_record_summary(
     identifier: str = Path(..., description="Date identifier"),
     unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
-    redis_client: redis.Redis = Depends(get_redis_client),
-    invalid_location_cache: InvalidLocationCache = Depends(get_invalid_location_cache),
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
+    invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
     """Get temperature summary text for a specific record."""
     try:

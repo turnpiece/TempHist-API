@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Annotated, Any, Dict, List, Tuple
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -185,8 +185,8 @@ def _sanitize_analytics_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any]
 @router.post("/analytics", response_model=AnalyticsResponse)
 async def submit_analytics(
     request: Request,
-    redis_client: redis.Redis = Depends(get_redis_client),
-    analytics_storage: AnalyticsStorage = Depends(get_analytics_storage),
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
+    analytics_storage: Annotated[AnalyticsStorage, Depends(get_analytics_storage)],
 ):
     """Submit client analytics data for monitoring and error tracking (MED-007: Rate limited)."""
     client_ip = get_client_ip(request)
@@ -330,7 +330,7 @@ async def submit_analytics(
 
 
 @router.get("/analytics/summary")
-async def get_analytics_summary(analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)):
+async def get_analytics_summary(analytics_storage: Annotated[AnalyticsStorage, Depends(get_analytics_storage)]):
     """Get analytics summary statistics."""
     try:
         summary = analytics_storage.get_analytics_summary()
@@ -342,7 +342,8 @@ async def get_analytics_summary(analytics_storage: AnalyticsStorage = Depends(ge
 
 @router.get("/analytics/recent")
 async def get_recent_analytics(
-    limit: int = Query(100, ge=1, le=1000), analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
+    analytics_storage: Annotated[AnalyticsStorage, Depends(get_analytics_storage)],
+    limit: int = Query(100, ge=1, le=1000),
 ):
     """Get recent analytics records."""
     try:
@@ -360,7 +361,7 @@ async def get_recent_analytics(
 
 @router.get("/analytics/session/{session_id}")
 async def get_analytics_by_session(
-    session_id: str, analytics_storage: AnalyticsStorage = Depends(get_analytics_storage)
+    session_id: str, analytics_storage: Annotated[AnalyticsStorage, Depends(get_analytics_storage)]
 ):
     """Get analytics records for a specific session."""
     try:

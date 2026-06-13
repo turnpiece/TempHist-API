@@ -7,7 +7,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 # Third-party imports
 import redis
@@ -729,7 +729,7 @@ app.add_middleware(
 
 
 @app.post("/admin/clear-job-queue", responses=error_responses(401, 500))
-async def admin_clear_job_queue(_admin: bool = Depends(verify_admin_key)):
+async def admin_clear_job_queue(_admin: Annotated[bool, Depends(verify_admin_key)]):
     """
     Admin endpoint to clear the job queue.
     Requires X-Admin-Key header matching ADMIN_API_KEY environment variable.

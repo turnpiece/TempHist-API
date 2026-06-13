@@ -8,7 +8,7 @@ import io
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Annotated, Optional
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -488,8 +488,8 @@ async def _fetch_records_live(share: dict, redis_client) -> Optional[list]:
 @router.get("/v1/og/{share_id}.png", include_in_schema=True)
 async def og_image(
     share_id: str,
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
     show_title: bool = Query(default=False, description="Whether to render the city/period title on the image"),
-    redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """Return a 1200×630 OG preview image for the given share ID. No auth required."""
     if len(share_id) != 8 or not share_id.isalnum():
