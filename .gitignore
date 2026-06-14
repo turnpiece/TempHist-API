@@ -8,6 +8,8 @@ weather_cache/
 firebase-service-account.json
 venv/
 .venv/
+.venv
+.venv.nosync/
 *_env_vars.json
 prewarm_results_*.json
 .github/instructions/sonarqube_mcp.instructions.md
