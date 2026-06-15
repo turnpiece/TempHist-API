@@ -490,7 +490,7 @@ class TestListSharesProximityDedup:
         }
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def _mock_store_with_rows(self, rows):
         """Return a ShareStore whose DB fetch returns the given rows."""
