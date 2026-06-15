@@ -766,5 +766,6 @@ async def admin_clear_job_queue(_admin: Annotated[bool, Depends(verify_admin_key
 if __name__ == "__main__":
     import uvicorn
 
+    host = os.getenv("LOCAL_HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)  # noqa: S104
+    uvicorn.run("main:app", host=host, port=port)
