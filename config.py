@@ -117,7 +117,7 @@ FORECAST_DAY_CACHE_DURATION = timedelta(seconds=FORECAST_DAY_CACHE_DURATION_SECO
 FORECAST_NIGHT_CACHE_DURATION = timedelta(seconds=FORECAST_NIGHT_CACHE_DURATION_SECONDS)
 
 # Analytics rate limiting
-ANALYTICS_RATE_LIMIT = int(os.getenv("ANALYTICS_RATE_LIMIT", "100"))  # 100 requests per hour per IP
+ANALYTICS_RATE_LIMIT = int(os.getenv("ANALYTICS_RATE_LIMIT", "1000"))  # requests per hour per IP (0 = disabled)
 
 
 # CORS configuration

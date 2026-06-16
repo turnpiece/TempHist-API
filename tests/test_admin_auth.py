@@ -68,9 +68,13 @@ def test_admin_endpoints_accept_admin_key(client, admin_key_env):
 
 
 def test_rate_limit_stats_accepts_admin_key(client, admin_key_env):
+    from config import RATE_LIMIT_ENABLED
+
     response = client.get("/rate-limit-stats", headers={"X-Admin-Key": ADMIN_KEY})
     assert response.status_code == 200
     data = response.json()
+    if not RATE_LIMIT_ENABLED:
+        pytest.skip("Rate limiting disabled in this environment — content assertions require it enabled")
     assert "whitelisted_ips" in data
     assert "blacklisted_ips" in data
 

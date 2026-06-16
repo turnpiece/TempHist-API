@@ -32,7 +32,6 @@ def mock_env_vars():
         {
             "CACHE_ENABLED": "true",
             "API_ACCESS_TOKEN": "test_api_token",
-            "ANALYTICS_RATE_LIMIT": "10000",  # Very high limit for tests to avoid rate limit issues
         },
     ):
         yield
@@ -545,6 +544,67 @@ class TestAnalyticsPerformanceFields:
         assert "overall" in rt
         assert "by_selection_method" in rt
         assert "by_cache_hit" in rt
+
+
+class TestAnalyticsRateLimit:
+    """Tests for P1-134: analytics rate limiting behavior and monitoring visibility."""
+
+    VALID_PAYLOAD = {
+        "session_duration": 60,
+        "api_calls": 1,
+        "api_failure_rate": "0%",
+        "retry_attempts": 0,
+        "location_failures": 0,
+        "error_count": 0,
+        "recent_errors": [],
+    }
+
+    def test_rate_limit_blocks_when_enabled(self, client):
+        """Requests beyond the per-IP limit return 429 when rate limiting is active."""
+        with patch("routers.analytics.RATE_LIMIT_ENABLED", True), patch("routers.analytics.ANALYTICS_RATE_LIMIT", 2):
+            r1 = client.post("/analytics", json=self.VALID_PAYLOAD)
+            r2 = client.post("/analytics", json=self.VALID_PAYLOAD)
+            r3 = client.post("/analytics", json=self.VALID_PAYLOAD)
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r3.status_code == 429
+
+    def test_rate_limit_skipped_when_rate_limit_disabled(self, client):
+        """No 429 when RATE_LIMIT_ENABLED=False, even with a very low per-IP limit."""
+        with patch("routers.analytics.RATE_LIMIT_ENABLED", False), patch("routers.analytics.ANALYTICS_RATE_LIMIT", 1):
+            for _ in range(5):
+                r = client.post("/analytics", json=self.VALID_PAYLOAD)
+                assert r.status_code == 200
+
+    def test_rate_limit_zero_disables(self, client):
+        """ANALYTICS_RATE_LIMIT=0 disables the limit independently of RATE_LIMIT_ENABLED."""
+        with patch("routers.analytics.RATE_LIMIT_ENABLED", True), patch("routers.analytics.ANALYTICS_RATE_LIMIT", 0):
+            for _ in range(5):
+                r = client.post("/analytics", json=self.VALID_PAYLOAD)
+                assert r.status_code == 200
+
+    def test_rate_limit_status_shows_analytics_info_when_disabled(self, client):
+        """GET /rate-limit-status includes analytics_rate_limit even when RATE_LIMIT_ENABLED=False."""
+        with patch("routers.stats.RATE_LIMIT_ENABLED", False):
+            response = client.get("/rate-limit-status")
+        assert response.status_code == 200
+        body = response.json()
+        assert "analytics_rate_limit" in body
+        assert "enabled" in body["analytics_rate_limit"]
+        assert "limit_per_hour" in body["analytics_rate_limit"]
+
+    def test_rate_limit_status_shows_analytics_info_when_enabled(self, client):
+        """GET /rate-limit-status includes analytics_rate_limit when RATE_LIMIT_ENABLED=True."""
+        with patch("routers.stats.RATE_LIMIT_ENABLED", True), patch("routers.stats.ANALYTICS_RATE_LIMIT", 500):
+            response = client.get("/rate-limit-status")
+        assert response.status_code == 200
+        body = response.json()
+        assert "analytics_rate_limit" in body
+        rl = body["analytics_rate_limit"]
+        assert rl["enabled"] is True
+        assert rl["limit_per_hour"] == 500
+        assert rl["current_count"] is not None
+        assert rl["remaining"] is not None
 
 
 if __name__ == "__main__":

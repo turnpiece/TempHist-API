@@ -9,7 +9,7 @@ import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from analytics_storage import AnalyticsStorage
-from config import ANALYTICS_RATE_LIMIT, DEBUG
+from config import ANALYTICS_RATE_LIMIT, DEBUG, RATE_LIMIT_ENABLED
 from models import AnalyticsData, AnalyticsResponse
 from routers.dependencies import get_analytics_storage, get_redis_client
 from utils.ip_utils import get_client_ip
@@ -191,9 +191,10 @@ async def submit_analytics(
     """Submit client analytics data for monitoring and error tracking (MED-007: Rate limited)."""
     client_ip = get_client_ip(request)
 
-    # MED-007: Add rate limiting for analytics endpoint to prevent spam/DoS
-    # Skip rate limiting in test environment or if limit is very high (indicates test mode)
-    if ANALYTICS_RATE_LIMIT < 10000:  # Normal production limit
+    # MED-007: Rate limiting for analytics endpoint to prevent spam/DoS.
+    # Controlled by RATE_LIMIT_ENABLED (same flag as weather endpoints) and
+    # ANALYTICS_RATE_LIMIT (set to 0 to disable independently of RATE_LIMIT_ENABLED).
+    if RATE_LIMIT_ENABLED and ANALYTICS_RATE_LIMIT > 0:
         analytics_key = f"analytics_limit:{client_ip}"
         try:
             current_count = redis_client.get(analytics_key)
@@ -203,6 +204,12 @@ async def submit_analytics(
                     logger.warning(
                         f"⚠️  ANALYTICS RATE LIMIT EXCEEDED: {client_ip} ({current_count}/{ANALYTICS_RATE_LIMIT})"
                     )
+                    # Track global 429 count for health monitoring (1-hour window)
+                    try:
+                        redis_client.incr("analytics_429:total")
+                        redis_client.expire("analytics_429:total", 3600)
+                    except redis.exceptions.RedisError:
+                        pass
                     raise HTTPException(
                         status_code=429,
                         detail=f"Analytics submission rate limit exceeded ({ANALYTICS_RATE_LIMIT} per hour). Please try again later.",
@@ -215,7 +222,9 @@ async def submit_analytics(
             # Fail open if Redis unavailable (don't block analytics)
             logger.warning(f"⚠️  Analytics rate limiting unavailable (Redis error): {e}")
     elif DEBUG:
-        logger.debug(f"📊 Analytics rate limiting bypassed (test mode): limit={ANALYTICS_RATE_LIMIT}")
+        logger.debug(
+            f"📊 Analytics rate limiting bypassed: RATE_LIMIT_ENABLED={RATE_LIMIT_ENABLED}, limit={ANALYTICS_RATE_LIMIT}"
+        )
 
     try:
         # Log request details for debugging

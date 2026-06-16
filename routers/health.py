@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from cache.accessors import get_cache_stats, get_open_meteo_stats
-from config import HTTP_TIMEOUT_SHORT, OPEN_METEO_ARCHIVE_URL, WEATHER_PROVIDER
+from config import ANALYTICS_RATE_LIMIT, HTTP_TIMEOUT_SHORT, OPEN_METEO_ARCHIVE_URL, RATE_LIMIT_ENABLED, WEATHER_PROVIDER
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import get_daily_temperature_store
 from version import __version__
@@ -186,6 +186,22 @@ async def detailed_health_check(redis_client: Annotated[redis.Redis, Depends(get
         health_status["checks"]["postgres"] = {"status": "unhealthy", "error": str(e)}
         overall_healthy = False
         health_status["status"] = "unhealthy"
+
+    # Check analytics rate limit pressure (reports 429s fired in the last hour)
+    try:
+        rejected = redis_client.get("analytics_429:total")
+        rejected_count = int(rejected) if rejected else 0
+        analytics_rl_status = "healthy" if rejected_count == 0 else "degraded"
+        health_status["checks"]["analytics_rate_limit"] = {
+            "status": analytics_rl_status,
+            "enabled": RATE_LIMIT_ENABLED and ANALYTICS_RATE_LIMIT > 0,
+            "limit_per_hour": ANALYTICS_RATE_LIMIT,
+            "rejected_last_hour": rejected_count,
+        }
+        if rejected_count > 0 and health_status["status"] == "healthy":
+            health_status["status"] = "degraded"
+    except Exception as e:
+        health_status["checks"]["analytics_rate_limit"] = {"status": "unknown", "error": str(e)}
 
     # Return appropriate HTTP status code
     status_code = 200 if health_status["status"] == "healthy" else 503

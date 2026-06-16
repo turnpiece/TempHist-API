@@ -2,10 +2,12 @@
 
 from typing import Annotated
 
+import redis
 from fastapi import APIRouter, Depends, Request
 
 from cache.accessors import get_usage_tracker
 from config import (
+    ANALYTICS_RATE_LIMIT,
     API_ACCESS_TOKEN,
     MAX_LOCATIONS_PER_HOUR,
     MAX_REQUESTS_PER_HOUR,
@@ -14,25 +16,49 @@ from config import (
     RATE_LIMIT_WINDOW_HOURS,
     USAGE_TRACKING_ENABLED,
 )
-from routers.dependencies import get_location_monitor, get_request_monitor, get_service_token_rate_limiter
+from routers.dependencies import get_location_monitor, get_redis_client, get_request_monitor, get_service_token_rate_limiter
 from utils.admin_auth import verify_admin_key
 from utils.ip_utils import get_client_ip, is_ip_blacklisted, is_ip_whitelisted
 
 router = APIRouter()
 
 
+def _get_analytics_rate_limit_info(client_ip: str, redis_client) -> dict:
+    """Build analytics rate limit status for the given IP. Always returned regardless of RATE_LIMIT_ENABLED."""
+    info = {
+        "enabled": RATE_LIMIT_ENABLED and ANALYTICS_RATE_LIMIT > 0,
+        "limit_per_hour": ANALYTICS_RATE_LIMIT,
+        "current_count": None,
+        "remaining": None,
+    }
+    try:
+        count = redis_client.get(f"analytics_limit:{client_ip}")
+        current = int(count) if count else 0
+        info["current_count"] = current
+        info["remaining"] = max(0, ANALYTICS_RATE_LIMIT - current)
+    except Exception:
+        pass
+    return info
+
+
 @router.get("/rate-limit-status")
 async def get_rate_limit_status(
     request: Request,
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
     location_monitor=Depends(get_location_monitor),
     request_monitor=Depends(get_request_monitor),
     service_token_rate_limiter=Depends(get_service_token_rate_limiter),
 ):
     """Get rate limiting status for the current client IP, including service token rate limits if applicable."""
-    if not RATE_LIMIT_ENABLED:
-        return {"status": "disabled", "message": "Rate limiting is not enabled"}
-
     client_ip = get_client_ip(request)
+    analytics_info = _get_analytics_rate_limit_info(client_ip, redis_client)
+
+    if not RATE_LIMIT_ENABLED:
+        return {
+            "status": "disabled",
+            "message": "Rate limiting is not enabled",
+            "analytics_rate_limit": analytics_info,
+        }
 
     # Check if this is a service job using API_ACCESS_TOKEN
     auth_header = request.headers.get("Authorization")
@@ -64,6 +90,7 @@ async def get_rate_limit_status(
                 "locations_per_hour": service_token_rate_limiter.locations_per_hour,
                 "window_hours": service_token_rate_limiter.window_seconds / 3600,
             },
+            "analytics_rate_limit": analytics_info,
         }
     else:
         # Regular user rate limits (standard limits)
@@ -85,6 +112,7 @@ async def get_rate_limit_status(
                 "max_requests_per_hour": MAX_REQUESTS_PER_HOUR,
                 "window_hours": RATE_LIMIT_WINDOW_HOURS,
             },
+            "analytics_rate_limit": analytics_info,
         }
 
 
