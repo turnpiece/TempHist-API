@@ -1629,7 +1629,7 @@ async def get_record_average(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
-    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -1658,7 +1658,7 @@ async def get_record_average(
 
         # Get full record data using per-year caching
         record_data = await _get_record_data_internal(
-            period, location, identifier, redis_client, invalid_location_cache, unit
+            period, location, identifier, redis_client, invalid_location_cache, unit_group
         )
 
         # Extract average data
@@ -1691,7 +1691,7 @@ async def get_record_trend(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
-    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -1720,7 +1720,7 @@ async def get_record_trend(
 
         # Get full record data using per-year caching
         record_data = await _get_record_data_internal(
-            period, location, identifier, redis_client, invalid_location_cache, unit
+            period, location, identifier, redis_client, invalid_location_cache, unit_group
         )
 
         # Extract trend data
@@ -1753,7 +1753,7 @@ async def get_record_summary(
     period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
     location: str = Path(..., description="Location name", max_length=200),
     identifier: str = Path(..., description="Date identifier"),
-    unit: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -1782,7 +1782,7 @@ async def get_record_summary(
 
         # Get full record data using per-year caching
         record_data = await _get_record_data_internal(
-            period, location, identifier, redis_client, invalid_location_cache, unit
+            period, location, identifier, redis_client, invalid_location_cache, unit_group
         )
 
         # Extract summary data
