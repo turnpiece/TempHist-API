@@ -122,6 +122,7 @@ class TestV1RecordsEndpoints:
             ("daily", "london", "01-15", "average"),
             ("daily", "london", "01-15", "trend"),
             ("daily", "london", "01-15", "summary"),
+            ("daily", "london", "01-15", "meta"),
             ("weekly", "london", "01-15", "average"),
             ("monthly", "london", "01-15", "trend"),
         ],
@@ -173,6 +174,11 @@ class TestV1RecordsEndpoints:
             assert "location" in data
             assert "identifier" in data
             assert "metadata" in data
+
+            if subresource == "meta":
+                assert "summary" in data["data"]
+                assert "average" in data["data"]
+                assert "trend" in data["data"]
 
     def test_removed_endpoints_return_410(self, client):
         """Test that removed legacy endpoints return 410 Gone"""

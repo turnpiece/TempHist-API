@@ -45,6 +45,8 @@ from config import (
 from models import (
     AverageData,
     DateRange,
+    MetaData,
+    MetaResponse,
     RecordResponse,
     SubResourceResponse,
     TemperatureValue,
@@ -1807,6 +1809,72 @@ async def get_record_summary(
         raise
     except Exception as e:
         logger.error(f"Error in v1 records summary endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/v1/records/{period}/{location}/{identifier}/meta", response_model=MetaResponse)
+async def get_record_meta(
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
+    location: str = Path(..., description="Location name", max_length=200),
+    identifier: str = Path(..., description="Date identifier"),
+    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    response: Response = None,
+    redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
+    invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
+):
+    """Get combined summary, average and trend data for a specific record."""
+    try:
+        # Quick validation for obviously invalid locations
+        if is_location_likely_invalid(location):
+            raise HTTPException(
+                status_code=400, detail=f"Invalid location format: '{location}'. Please provide a valid location name."
+            )
+
+        # Check if location is known to be invalid
+        if invalid_location_cache.is_invalid_location(location):
+            invalid_info = invalid_location_cache.get_invalid_location_info(location)
+            reason = invalid_info.get("reason", "invalid location") if invalid_info else "invalid location"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Location '{location}' is not supported by the weather service. Reason: {reason}",
+            )
+
+        # Parse identifier to get the end date for cache headers
+        month, day, _ = parse_identifier(period, identifier)
+        current_year = datetime.now().year
+        end_date = datetime(current_year, month, day).date()
+
+        # Get full record data using per-year caching
+        record_data = await _get_record_data_internal(
+            period, location, identifier, redis_client, invalid_location_cache, unit_group
+        )
+
+        # Combine summary, average and trend into a single response
+        response_data = MetaResponse(
+            period=record_data["period"],
+            location=record_data["location"],
+            identifier=record_data["identifier"],
+            data=MetaData(
+                summary=record_data["summary"],
+                average=record_data["average"],
+                trend=record_data["trend"],
+            ),
+            metadata=record_data["metadata"],
+            timezone=record_data.get("timezone"),
+        )
+
+        # Create response with smart cache headers
+        json_response = JSONResponse(content=response_data.model_dump())
+        json_response.headers["X-Cache-Status"] = "HIT" if CACHE_ENABLED else "DISABLED"
+        set_weather_cache_headers(
+            json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|meta|metric|v1"
+        )
+        return json_response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in v1 records meta endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

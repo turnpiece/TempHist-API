@@ -93,6 +93,27 @@ class SubResourceResponse(BaseModel):
     )
 
 
+class MetaData(BaseModel):
+    """Combined summary, average and trend payload for the /meta sub-resource."""
+
+    summary: str = Field(..., description="Human-readable summary")
+    average: AverageData = Field(..., description="Average temperature statistics")
+    trend: TrendData = Field(..., description="Temperature trend analysis")
+
+
+class MetaResponse(BaseModel):
+    """Response model for the /meta sub-resource endpoint."""
+
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
+    location: str = Field(..., description="Location name")
+    identifier: str = Field(..., description="Date identifier")
+    data: MetaData = Field(..., description="Combined summary, average and trend data")
+    metadata: Dict = Field(default_factory=dict, description="Additional metadata")
+    timezone: Optional[str] = Field(
+        None, description="IANA timezone identifier for the location (e.g., 'America/New_York', 'Europe/London')"
+    )
+
+
 # Analytics Models
 class ErrorDetail(BaseModel):
     """Individual error detail."""

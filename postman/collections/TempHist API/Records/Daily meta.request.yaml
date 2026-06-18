@@ -1,0 +1,7 @@
+$kind: http-request
+name: Daily meta
+url: "{{baseURL}}/v1/records/daily/Chicago%2C%20Illinois%2C%20USA/06-18/meta?unit_group=fahrenheit"
+method: GET
+queryParams:
+  unit_group: fahrenheit
+order: 7664
