@@ -50,6 +50,14 @@ class TrendData(BaseModel):
     )
 
 
+class RankingData(BaseModel):
+    """Year ranking within the historical record."""
+
+    warm: int = Field(..., description="Rank by warmth (1 = warmest on record)")
+    cold: int = Field(..., description="Rank by coldness (1 = coldest on record)")
+    total: int = Field(..., description="Total number of years with data")
+
+
 class UpdatedResponse(BaseModel):
     """Response model for updated timestamp endpoint."""
 
@@ -99,6 +107,7 @@ class MetaData(BaseModel):
     summary: str = Field(..., description="Human-readable summary")
     average: AverageData = Field(..., description="Average temperature statistics")
     trend: TrendData = Field(..., description="Temperature trend analysis")
+    ranking: RankingData = Field(..., description="Rank of the most recent year within the historical record")
 
 
 class MetaResponse(BaseModel):

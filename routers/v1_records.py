@@ -47,6 +47,7 @@ from models import (
     DateRange,
     MetaData,
     MetaResponse,
+    RankingData,
     RecordResponse,
     SubResourceResponse,
     TemperatureValue,
@@ -791,6 +792,19 @@ def _build_trend_block(values: List[Dict], unit_group: str) -> Dict:
 
 
 _PERIOD_FRIENDLY_PREFIX = {"weekly": "week ending ", "monthly": "month ending ", "yearly": "year ending "}
+
+
+def _build_ranking_block(values: List[Dict]) -> Dict:
+    """Compute warm/cold rank of the most recent year against the full series."""
+    scored = [(v["year"], v["temperature"]) for v in values if v.get("temperature") is not None]
+    if not scored:
+        return {"warm": 1, "cold": 1, "total": 0}
+    current_year = max(y for y, _ in scored)
+    by_warm = sorted(scored, key=lambda x: x[1], reverse=True)
+    by_cold = sorted(scored, key=lambda x: x[1])
+    warm_rank = next(i + 1 for i, (y, _) in enumerate(by_warm) if y == current_year)
+    cold_rank = next(i + 1 for i, (y, _) in enumerate(by_cold) if y == current_year)
+    return {"warm": warm_rank, "cold": cold_rank, "total": len(scored)}
 
 
 def _build_summary_text(
@@ -1849,7 +1863,8 @@ async def get_record_meta(
             period, location, identifier, redis_client, invalid_location_cache, unit_group
         )
 
-        # Combine summary, average and trend into a single response
+        # Combine summary, average, trend and ranking into a single response
+        ranking_data = _build_ranking_block(record_data.get("values", []))
         response_data = MetaResponse(
             period=record_data["period"],
             location=record_data["location"],
@@ -1858,6 +1873,7 @@ async def get_record_meta(
                 summary=record_data["summary"],
                 average=record_data["average"],
                 trend=record_data["trend"],
+                ranking=ranking_data,
             ),
             metadata=record_data["metadata"],
             timezone=record_data.get("timezone"),

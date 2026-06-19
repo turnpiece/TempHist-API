@@ -179,6 +179,12 @@ class TestV1RecordsEndpoints:
                 assert "summary" in data["data"]
                 assert "average" in data["data"]
                 assert "trend" in data["data"]
+                assert "ranking" in data["data"]
+                r = data["data"]["ranking"]
+                assert r["warm"] >= 1
+                assert r["cold"] >= 1
+                assert r["total"] >= 1
+                assert r["warm"] + r["cold"] == r["total"] + 1
 
     def test_removed_endpoints_return_410(self, client):
         """Test that removed legacy endpoints return 410 Gone"""
