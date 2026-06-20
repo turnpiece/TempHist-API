@@ -108,6 +108,9 @@ class MetaData(BaseModel):
     average: AverageData = Field(..., description="Average temperature statistics")
     trend: TrendData = Field(..., description="Temperature trend analysis")
     ranking: RankingData = Field(..., description="Rank of the most recent year within the historical record")
+    current_anomaly: Optional[float] = Field(
+        None, description="Current year's temperature deviation from the historical mean"
+    )
 
 
 class MetaResponse(BaseModel):

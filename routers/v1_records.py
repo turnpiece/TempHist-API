@@ -1864,7 +1864,10 @@ async def get_record_meta(
         )
 
         # Combine summary, average, trend and ranking into a single response
-        ranking_data = _build_ranking_block(record_data.get("values", []))
+        values = record_data.get("values", [])
+        ranking_data = _build_ranking_block(values)
+        current_val = next((v for v in values if v.get("year") == current_year), None)
+        current_anomaly = current_val.get("anomaly") if current_val else None
         response_data = MetaResponse(
             period=record_data["period"],
             location=record_data["location"],
@@ -1874,6 +1877,7 @@ async def get_record_meta(
                 average=record_data["average"],
                 trend=record_data["trend"],
                 ranking=ranking_data,
+                current_anomaly=current_anomaly,
             ),
             metadata=record_data["metadata"],
             timezone=record_data.get("timezone"),
