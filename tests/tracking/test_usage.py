@@ -143,7 +143,7 @@ class TestGetPopularFromSelections:
 
         # 3 daily keys should be passed to zunionstore on the 2nd pipeline.
         ops_pipe = pipes[1]
-        args, kwargs = ops_pipe.zunionstore.call_args
+        args, _ = ops_pipe.zunionstore.call_args
         assert len(args[1]) == 3
 
 
