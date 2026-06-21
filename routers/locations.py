@@ -19,6 +19,7 @@ from urllib.parse import quote
 import aiohttp
 import anyio
 import pycountry
+from timezonefinder import TimezoneFinder
 import redis
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -39,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 if not MAPBOX_TOKEN:
     logger.warning("MAPBOX_TOKEN is not set — location search will only cover the preapproved list")
+
+# Timezone lookup from coordinates (loaded once at import time)
+_tf = TimezoneFinder()
 
 # Constants
 CACHE_TTL = 604800  # 7 days (data changes infrequently)
@@ -200,6 +204,15 @@ class SelectionRequest(BaseModel):
         ge=-180,
         le=180,
         description="Longitude of the selected location, if known (e.g. from geocoding search results).",
+    )
+    timezone: Optional[str] = Field(
+        None,
+        max_length=64,
+        description=(
+            "IANA timezone identifier (e.g. 'America/New_York'). "
+            "Used only as a fallback when coordinates are not provided; "
+            "when coordinates are present the server derives timezone authoritatively."
+        ),
     )
 
     @model_validator(mode="after")
@@ -1079,18 +1092,35 @@ async def record_location_selection(request: Request, body: SelectionRequest):
 
     tracker.record_selection(canonical_id, uid)
 
-    if canonical_id not in loc_by_id and body.name and not tracker.get_location_metadata(canonical_id):
-        country_code, country_name = _resolve_country_fields(body.country_code, body.country_name)
-        tracker.store_location_metadata(canonical_id, {
-            "id": canonical_id,
-            "slug": canonical_id,
-            "name": body.name,
-            "admin1": body.admin1,
-            "country_name": country_name,
-            "country_code": country_code,
-            "latitude": body.latitude,
-            "longitude": body.longitude,
-        })
+    # Derive timezone authoritatively from coordinates when available; fall back
+    # to the client-submitted value only when we have no coordinates to check.
+    tz: Optional[str] = None
+    if has_coords:
+        tz = _tf.timezone_at(lng=body.longitude, lat=body.latitude)
+    if tz is None:
+        tz = body.timezone
+
+    if canonical_id not in loc_by_id:
+        if body.name and not tracker.get_location_metadata(canonical_id):
+            country_code, country_name = _resolve_country_fields(body.country_code, body.country_name)
+            tracker.store_location_metadata(canonical_id, {
+                "id": canonical_id,
+                "slug": canonical_id,
+                "name": body.name,
+                "admin1": body.admin1,
+                "country_name": country_name,
+                "country_code": country_code,
+                "latitude": body.latitude,
+                "longitude": body.longitude,
+                "timezone": tz,
+            })
+        elif tz is not None or has_coords:
+            # Enrich existing metadata with fields that were absent on first write
+            tracker.enrich_location_metadata(canonical_id, {
+                "latitude": body.latitude,
+                "longitude": body.longitude,
+                "timezone": tz,
+            })
 
     display = _build_display_string(body)
     if display:

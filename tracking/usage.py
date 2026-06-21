@@ -287,6 +287,24 @@ class LocationUsageTracker:
             logger.debug("Could not seed geo-index with %d anchors: %s", len(anchors), _e)
             return 0
 
+    def enrich_location_metadata(self, location_id: str, extra: dict) -> None:
+        """Update stored metadata with fields that are currently absent or null.
+
+        Only fields whose stored value is None or missing are updated; existing
+        non-null values are never overwritten.  Silently no-ops when nothing
+        needs updating or the tracker is disabled.
+        """
+        if not USAGE_TRACKING_ENABLED:
+            return
+        existing = self.get_location_metadata(location_id) or {}
+        changed = False
+        for k, v in extra.items():
+            if v is not None and existing.get(k) is None:
+                existing[k] = v
+                changed = True
+        if changed:
+            self.store_location_metadata(location_id, existing)
+
     def get_location_metadata(self, location_id: str) -> Optional[dict]:
         """Retrieve stored minimal metadata for a location ID, or None."""
         if not USAGE_TRACKING_ENABLED:
