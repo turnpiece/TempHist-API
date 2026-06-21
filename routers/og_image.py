@@ -218,6 +218,12 @@ def _bar_color_for_z_score(z: float) -> tuple:
     return _lerp_color(_NEUTRAL_RGB, _WARM_RGB if z >= 0 else _COOL_RGB, blend)
 
 
+def _color_for_temp(t: float, mean: float, std_dev: float) -> tuple:
+    if std_dev > 0:
+        return _bar_color_for_z_score((t - mean) / std_dev)
+    return tuple(c / 255 for c in _NEUTRAL_RGB)
+
+
 def _compute_bar_colors(years: list, temps: list, ref_year) -> list:
     """Return one matplotlib color per bar using the climate-stripes Z-score scheme."""
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
@@ -227,13 +233,7 @@ def _compute_bar_colors(years: list, temps: list, ref_year) -> list:
     # Population std dev — matches calculate_standard_deviation() in utils/temperature.py
     variance = sum((t - mean) ** 2 for t in hist_temps) / len(hist_temps)
     std_dev = variance**0.5
-    colors = []
-    for t in temps:
-        if std_dev > 0:
-            colors.append(_bar_color_for_z_score((t - mean) / std_dev))
-        else:
-            colors.append(tuple(c / 255 for c in _NEUTRAL_RGB))
-    return colors
+    return [_color_for_temp(t, mean, std_dev) for t in temps]
 
 
 def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:

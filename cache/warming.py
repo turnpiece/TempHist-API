@@ -85,6 +85,44 @@ class CacheWarmer:
         self.last_tier1: List[Dict] = []
         self.last_tier2: List[Dict] = []
 
+    def _fill_tier1(self, add_location, locations: List[str], tier1_records: List[Dict], tier1_ids: set):
+        """Populate tier 1 from usage signal then pad with preapproved list."""
+        if self.usage_tracker and USAGE_TRACKING_ENABLED:
+            weighted = self.usage_tracker.get_weighted_popular_display_strings(limit=CACHE_WARMING_TIER1_SIZE)
+            for location_id, display, score in weighted:
+                if add_location(display):
+                    tier1_ids.add(location_id)
+                    tier1_records.append({"id": location_id, "display": display, "score": score})
+            if DEBUG and weighted:
+                logger.info(f"🔥 CACHE WARMING: {len(tier1_records)} Tier 1 locations from weighted signal")
+
+        if len(locations) < CACHE_WARMING_TIER1_SIZE:
+            for loc in self.get_preapproved_locations():
+                if len(locations) >= CACHE_WARMING_TIER1_SIZE:
+                    break
+                if add_location(loc):
+                    tier1_records.append({"id": None, "display": loc, "score": None, "source": "preapproved"})
+            if DEBUG:
+                logger.info(f"🔥 CACHE WARMING: padded Tier 1 to {len(locations)} with preapproved list")
+
+    def _fill_tier2(self, add_location, tier1_ids: set, tier2_records: List[Dict]):
+        """Populate tier 2 from locations active in the last 24h."""
+        if not (self.usage_tracker and USAGE_TRACKING_ENABLED and CACHE_WARMING_TIER2_MAX > 0):
+            return
+        for location_id, last_seen in self.usage_tracker.get_recent_active_locations():
+            if location_id in tier1_ids:
+                continue
+            raw_display = self.redis_client.get(f"loc_display:{location_id}") if self.redis_client else None
+            if not raw_display:
+                continue
+            display = raw_display.decode() if isinstance(raw_display, bytes) else raw_display
+            if add_location(display):
+                tier2_records.append({"id": location_id, "display": display, "last_seen": last_seen})
+            if len(tier2_records) >= CACHE_WARMING_TIER2_MAX:
+                break
+        if DEBUG and tier2_records:
+            logger.info(f"🔥 CACHE WARMING: {len(tier2_records)} Tier 2 locations from 24h recency")
+
     def get_locations_to_warm(self) -> List[str]:
         locations: List[str] = []
         seen_normalized: set = set()
@@ -102,58 +140,17 @@ class CacheWarmer:
             locations.append(candidate)
             return True
 
-        # ------------------------------------------------------------------
-        # Tier 1 — top locations by recency-weighted score (7d/30d/90d)
-        # ------------------------------------------------------------------
-        if self.usage_tracker and USAGE_TRACKING_ENABLED:
-            weighted = self.usage_tracker.get_weighted_popular_display_strings(
-                limit=CACHE_WARMING_TIER1_SIZE
-            )
-            for location_id, display, score in weighted:
-                if add_location(display):
-                    tier1_ids.add(location_id)
-                    tier1_records.append({"id": location_id, "display": display, "score": score})
-            if DEBUG and weighted:
-                logger.info(f"🔥 CACHE WARMING: {len(tier1_records)} Tier 1 locations from weighted signal")
-
-        # Pad Tier 1 with preapproved list when signal is sparse — preserves
-        # the safety net the old code provided.
-        if len(locations) < CACHE_WARMING_TIER1_SIZE:
-            preapproved = self.get_preapproved_locations()
-            for loc in preapproved:
-                if len(locations) >= CACHE_WARMING_TIER1_SIZE:
-                    break
-                if add_location(loc):
-                    tier1_records.append({"id": None, "display": loc, "score": None, "source": "preapproved"})
-            if DEBUG:
-                logger.info(f"🔥 CACHE WARMING: padded Tier 1 to {len(locations)} with preapproved list")
+        self._fill_tier1(add_location, locations, tier1_records, tier1_ids)
 
         # Trim Tier 1 to its budget (in case weighted signal overflowed).
         if len(locations) > CACHE_WARMING_TIER1_SIZE:
-            locations = locations[:CACHE_WARMING_TIER1_SIZE]
-            tier1_records = tier1_records[:CACHE_WARMING_TIER1_SIZE]
-            seen_normalized = {normalize_location_for_cache(loc) for loc in locations}
+            locations[:] = locations[:CACHE_WARMING_TIER1_SIZE]
+            tier1_records[:] = tier1_records[:CACHE_WARMING_TIER1_SIZE]
+            seen_normalized.clear()
+            seen_normalized.update(normalize_location_for_cache(loc) for loc in locations)
 
-        # ------------------------------------------------------------------
-        # Tier 2 — locations seen in the last 24h that didn't make Tier 1
-        # ------------------------------------------------------------------
-        if self.usage_tracker and USAGE_TRACKING_ENABLED and CACHE_WARMING_TIER2_MAX > 0:
-            recent = self.usage_tracker.get_recent_active_locations()
-            for location_id, last_seen in recent:
-                if location_id in tier1_ids:
-                    continue
-                raw_display = self.redis_client.get(f"loc_display:{location_id}") if self.redis_client else None
-                if not raw_display:
-                    continue
-                display = raw_display.decode() if isinstance(raw_display, bytes) else raw_display
-                if add_location(display):
-                    tier2_records.append({"id": location_id, "display": display, "last_seen": last_seen})
-                if len(tier2_records) >= CACHE_WARMING_TIER2_MAX:
-                    break
-            if DEBUG and tier2_records:
-                logger.info(f"🔥 CACHE WARMING: {len(tier2_records)} Tier 2 locations from 24h recency")
+        self._fill_tier2(add_location, tier1_ids, tier2_records)
 
-        # Snapshot tiers for inspection endpoints.
         self.last_tier1 = tier1_records
         self.last_tier2 = tier2_records
 
@@ -304,6 +301,46 @@ class CacheWarmer:
 
         return results
 
+    async def _warm_preapproved_endpoint(self, session: aiohttp.ClientSession) -> None:
+        try:
+            async with session.get(f"{BASE_URL}/v1/locations/preapproved") as resp:
+                if DEBUG:
+                    msg = (
+                        "✅ PREAPPROVED ENDPOINT: Warmed successfully"
+                        if resp.status == 200
+                        else f"⚠️  PREAPPROVED ENDPOINT: HTTP {resp.status}"
+                    )
+                    logger.info(msg)
+        except aiohttp.ClientConnectorError as e:
+            logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Cannot connect to {BASE_URL} - {e}")
+            logger.info("💡  TIP: Set BASE_URL environment variable to your API server URL")
+        except asyncio.TimeoutError:
+            logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Request timeout to {BASE_URL}")
+        except Exception as e:
+            logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {e}")
+
+    @staticmethod
+    def _aggregate_warming_results(results) -> tuple:
+        successful_locations = total_endpoints = total_errors = 0
+        for result in results:
+            if isinstance(result, dict):
+                if result.get("warmed_endpoints"):
+                    successful_locations += 1
+                    total_endpoints += len(result["warmed_endpoints"])
+                total_errors += len(result.get("errors", []))
+            else:
+                total_errors += 1
+        return successful_locations, total_endpoints, total_errors
+
+    def _persist_warming_stats(self) -> None:
+        try:
+            self.redis_client.set(
+                "cache_warming:stats",
+                json.dumps({"last_warming_time": self.last_warming_time.isoformat(), **self.warming_stats}),
+            )
+        except Exception as _e:
+            logger.debug("Could not persist warming stats to Redis: %s", _e)
+
     async def warm_all_locations(self) -> Dict:
         if self.warming_in_progress:
             return {"status": "already_in_progress", "message": "Cache warming already in progress"}
@@ -338,46 +375,17 @@ class CacheWarmer:
                     "duration_seconds": time.time() - start_time,
                 }
 
+            semaphore = asyncio.Semaphore(CACHE_WARMING_CONCURRENT_REQUESTS)
             async with self._create_warming_session(auth_token) as session:
-                try:
-                    async with session.get(f"{BASE_URL}/v1/locations/preapproved") as resp:
-                        if DEBUG:
-                            msg = (
-                                "✅ PREAPPROVED ENDPOINT: Warmed successfully"
-                                if resp.status == 200
-                                else f"⚠️  PREAPPROVED ENDPOINT: HTTP {resp.status}"
-                            )
-                            logger.info(msg)
-                except aiohttp.ClientConnectorError as e:
-                    logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Cannot connect to {BASE_URL} - {e}")
-                    logger.info("💡  TIP: Set BASE_URL environment variable to your API server URL")
-                except asyncio.TimeoutError:
-                    logger.warning(f"⚠️  PREAPPROVED ENDPOINT: Request timeout to {BASE_URL}")
-                except Exception as e:
-                    logger.warning(f"⚠️  PREAPPROVED ENDPOINT: {e}")
-
-                semaphore = asyncio.Semaphore(CACHE_WARMING_CONCURRENT_REQUESTS)
+                await self._warm_preapproved_endpoint(session)
 
                 async def warm_with_semaphore(loc):
                     async with semaphore:
                         return await self.warm_location_data(loc, session)
 
-                results = await asyncio.gather(
-                    *[warm_with_semaphore(loc) for loc in locations], return_exceptions=True
-                )
+                results = await asyncio.gather(*[warm_with_semaphore(loc) for loc in locations], return_exceptions=True)
 
-            successful_locations = 0
-            total_endpoints = 0
-            total_errors = 0
-            for result in results:
-                if isinstance(result, dict):
-                    if result.get("warmed_endpoints"):
-                        successful_locations += 1
-                        total_endpoints += len(result["warmed_endpoints"])
-                    total_errors += len(result.get("errors", []))
-                else:
-                    total_errors += 1
-
+            successful_locations, total_endpoints, total_errors = self._aggregate_warming_results(results)
             duration = time.time() - start_time
             self.warming_stats.update(
                 {
@@ -388,18 +396,7 @@ class CacheWarmer:
                 }
             )
             self.last_warming_time = datetime.now()
-            try:
-                self.redis_client.set(
-                    "cache_warming:stats",
-                    json.dumps(
-                        {
-                            "last_warming_time": self.last_warming_time.isoformat(),
-                            **self.warming_stats,
-                        }
-                    ),
-                )
-            except Exception as _e:
-                logger.debug("Could not persist warming stats to Redis: %s", _e)
+            self._persist_warming_stats()
 
             if DEBUG:
                 logger.info(

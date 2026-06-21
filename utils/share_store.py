@@ -159,50 +159,41 @@ class ShareStore:
                 fetch_limit,
             )
 
+        def _is_duplicate_share(row, accepted: List[dict]) -> bool:
+            r_lat, r_lon = row["latitude"], row["longitude"]
+            r_period, r_identifier, r_location = row["period"], row["identifier"], row["location"]
+            for acc in accepted:
+                if acc["period"] != r_period or acc["identifier"] != r_identifier:
+                    continue
+                a_lat, a_lon = acc["_lat"], acc["_lon"]
+                if r_lat is not None and r_lon is not None and a_lat is not None and a_lon is not None:
+                    if _haversine_km(r_lat, r_lon, a_lat, a_lon) <= _DEDUP_PROXIMITY_KM:
+                        return True
+                elif acc["location"] == r_location:
+                    return True
+            return False
+
         # Proximity deduplication: for each candidate (most-recent first), keep it
         # only if no already-accepted row has the same (period, identifier) AND a
         # location within _DEDUP_PROXIMITY_KM km.  When either row lacks coordinates,
         # fall back to exact location string comparison.
         accepted: List[dict] = []
         for row in rows:
-            r_lat = row["latitude"]
-            r_lon = row["longitude"]
-            r_period = row["period"]
-            r_identifier = row["identifier"]
-            r_location = row["location"]
-
-            duplicate = False
-            for acc in accepted:
-                if acc["period"] != r_period or acc["identifier"] != r_identifier:
-                    continue
-                # Same period + identifier — check location proximity
-                a_lat = acc["_lat"]
-                a_lon = acc["_lon"]
-                if r_lat is not None and r_lon is not None and a_lat is not None and a_lon is not None:
-                    if _haversine_km(r_lat, r_lon, a_lat, a_lon) <= _DEDUP_PROXIMITY_KM:
-                        duplicate = True
-                        break
-                else:
-                    # No coordinates on one or both rows — exact string fallback
-                    if acc["location"] == r_location:
-                        duplicate = True
-                        break
-
-            if not duplicate:
+            if not _is_duplicate_share(row, accepted):
                 accepted.append(
                     {
                         "id": row["id"],
-                        "location": r_location,
-                        "period": r_period,
-                        "identifier": r_identifier,
+                        "location": row["location"],
+                        "period": row["period"],
+                        "identifier": row["identifier"],
                         "ref_year": row["ref_year"],
                         "unit": row["unit"],
                         "created_at": row["created_at"].isoformat(),
                         "og_image_url": f"/v1/og/{row['id']}.png",
                         "share_url": f"/s/{row['id']}",
                         # Private fields used only during dedup — stripped before return
-                        "_lat": r_lat,
-                        "_lon": r_lon,
+                        "_lat": row["latitude"],
+                        "_lon": row["longitude"],
                     }
                 )
 

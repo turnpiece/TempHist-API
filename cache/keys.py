@@ -32,6 +32,27 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+_DEFAULT_SKIPS = {
+    "unit_group": {"celsius"},
+    "month_mode": {"rolling1m"},
+    "days_back": {"7", "0"},
+}
+_COORD_KEYS = {"lat", "lon", "latitude", "longitude"}
+
+
+def _normalize_coord_value(str_value: str) -> str:
+    try:
+        coord = float(str_value)
+        return f"{coord:.{COORD_PRECISION}f}"
+    except (ValueError, TypeError):
+        return str_value
+
+
+def _is_default_skip(key: str, str_value: str) -> bool:
+    skips = _DEFAULT_SKIPS.get(key)
+    return skips is not None and str_value in skips
+
+
 class CacheKeyBuilder:
     """Build canonical cache keys with normalized parameters."""
 
@@ -46,17 +67,9 @@ class CacheKeyBuilder:
                 continue
             if key in ["location"]:
                 str_value = str_value.lower().replace(" ", "_").replace(",", "_")
-            if key in ["lat", "lon", "latitude", "longitude"]:
-                try:
-                    coord = float(str_value)
-                    str_value = f"{coord:.{COORD_PRECISION}f}"
-                except (ValueError, TypeError):
-                    pass
-            if key == "unit_group" and str_value == "celsius":
-                continue
-            if key == "month_mode" and str_value == "rolling1m":
-                continue
-            if key == "days_back" and str_value in ["7", "0"]:
+            if key in _COORD_KEYS:
+                str_value = _normalize_coord_value(str_value)
+            if _is_default_skip(key, str_value):
                 continue
             normalized[key] = str_value
         return normalized
@@ -134,19 +147,25 @@ def compute_bundle_etag(year_etags: Dict[int, str]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_redis_client(redis_client: Optional[redis.Redis]) -> Optional[redis.Redis]:
+    """Return the supplied client, or lazy-load one from the cache accessor."""
+    if redis_client is not None:
+        return redis_client
+    try:
+        from cache.accessors import get_cache  # lazy to avoid circular import
+
+        return get_cache().redis
+    except Exception:
+        return None
+
+
 def _get_location_timezone_from_cache(
     location: str,
     redis_client: Optional[redis.Redis] = None,
 ) -> Optional[str]:
     """Get timezone for a location from Redis cache."""
     try:
-        if redis_client is None:
-            try:
-                from cache.accessors import get_cache  # lazy to avoid circular import
-
-                redis_client = get_cache().redis
-            except Exception:
-                return None
+        redis_client = _resolve_redis_client(redis_client)
         if not redis_client:
             return None
         normalized = normalize_location_for_cache(location)
@@ -174,13 +193,7 @@ def store_location_timezone(
     cache instead of falling through to `None`.
     """
     try:
-        if redis_client is None:
-            try:
-                from cache.accessors import get_cache  # lazy
-
-                redis_client = get_cache().redis
-            except Exception:
-                return
+        redis_client = _resolve_redis_client(redis_client)
         if not redis_client:
             return
         normalized = normalize_location_for_cache(location)
@@ -247,6 +260,25 @@ def get_local_today(
 # ---------------------------------------------------------------------------
 
 
+def _copy_key_with_ttl(redis_client: redis.Redis, old_key: str, new_key: str) -> bool:
+    """Copy old_key to new_key preserving TTL, then delete old_key. Returns success."""
+    try:
+        ttl = redis_client.ttl(old_key)
+        value = redis_client.get(old_key)
+        if value is None:
+            return False
+        if ttl and ttl > 0:
+            redis_client.setex(new_key, ttl, value)
+        else:
+            redis_client.set(new_key, value)
+        redis_client.delete(old_key)
+        return True
+    except Exception as exc:
+        if DEBUG:
+            logger.debug("Could not migrate cache key %s -> %s: %s", old_key, new_key, exc)
+        return False
+
+
 def migrate_redis_key(redis_client: redis.Redis, old_key: str, new_key: str) -> bool:
     """Rename a Redis key to its canonical form, preserving TTL when possible."""
     if old_key == new_key or not redis_client.exists(old_key):
@@ -258,21 +290,7 @@ def migrate_redis_key(redis_client: redis.Redis, old_key: str, new_key: str) -> 
         redis_client.rename(old_key, new_key)
         return True
     except redis.RedisError:
-        try:
-            ttl = redis_client.ttl(old_key)
-            value = redis_client.get(old_key)
-            if value is None:
-                return False
-            if ttl and ttl > 0:
-                redis_client.setex(new_key, ttl, value)
-            else:
-                redis_client.set(new_key, value)
-            redis_client.delete(old_key)
-            return True
-        except Exception as exc:
-            if DEBUG:
-                logger.debug("Could not migrate cache key %s -> %s: %s", old_key, new_key, exc)
-            return False
+        return _copy_key_with_ttl(redis_client, old_key, new_key)
 
 
 def migrate_bundle_slug(

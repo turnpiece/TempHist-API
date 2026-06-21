@@ -418,6 +418,59 @@ class EnhancedCache:
 # ---------------------------------------------------------------------------
 
 
+def _invalidation_status(dry_run: bool) -> str:
+    return "dry_run" if dry_run or CACHE_INVALIDATION_DRY_RUN else "success"
+
+
+def _accumulate_pattern_result(result: Dict, total_deleted: int, total_found: int):
+    status = result.get("status")
+    if status == "success":
+        total_deleted += result.get("deleted_count", 0)
+        total_found += result.get("total_found", 0)
+    elif status == "dry_run":
+        total_found += result.get("count", 0)
+    return total_deleted, total_found
+
+
+def _scan_all_redis_keys(redis_client: redis.Redis, max_keys: int = 100000) -> List:
+    """Scan every key in Redis up to max_keys. Raises on unexpected errors."""
+    all_keys: List = []
+    cursor = 0
+    try:
+        while cursor != 0 or len(all_keys) == 0:
+            cursor, keys = redis_client.scan(cursor, match="*", count=100)
+            all_keys.extend(keys)
+            if len(all_keys) > max_keys:
+                logger.warning(f"Found >{max_keys} keys, stopping scan")
+                break
+            if cursor == 0:
+                break
+    except Exception as e:
+        if "permissions" in str(e).lower() or "scan" in str(e).lower():
+            raise PermissionError(REDIS_SCAN_FORBIDDEN_MSG) from e
+        raise
+    return all_keys
+
+
+def _scan_pattern_count(
+    redis_client: redis.Redis, pattern: str, max_keys: int, hint: int
+) -> "int | str":
+    """Return the number of keys matching pattern, or an error string on failure."""
+    try:
+        matching_keys: List = []
+        cursor = 0
+        while cursor != 0 or len(matching_keys) == 0:
+            cursor, keys = redis_client.scan(cursor, match=pattern, count=hint)
+            matching_keys.extend(keys)
+            if len(matching_keys) > max_keys or cursor == 0:
+                break
+        return len(matching_keys)
+    except Exception as e:
+        if "permissions" in str(e).lower() or "scan" in str(e).lower():
+            return "N/A (permissions required)"
+        return f"N/A (error: {str(e)[:50]})"
+
+
 class CacheInvalidator:
     """Manage cache invalidation with various strategies and patterns."""
 
@@ -438,14 +491,13 @@ class CacheInvalidator:
                     "exists": bool(exists),
                     "action": "would_delete" if exists else "no_action",
                 }
-            else:
-                deleted = self.redis_client.delete(cache_key)
-                return {
-                    "status": "success",
-                    "cache_key": cache_key,
-                    "deleted": bool(deleted),
-                    "action": "deleted" if deleted else "not_found",
-                }
+            deleted = self.redis_client.delete(cache_key)
+            return {
+                "status": "success",
+                "cache_key": cache_key,
+                "deleted": bool(deleted),
+                "action": "deleted" if deleted else "not_found",
+            }
         except Exception as e:
             return {"status": "error", "cache_key": cache_key, "error": str(e)}
 
@@ -531,13 +583,9 @@ class CacheInvalidator:
         for pattern in date_patterns:
             result = self.invalidate_by_pattern(pattern, dry_run)
             results.append(result)
-            if result.get("status") == "success":
-                total_deleted += result.get("deleted_count", 0)
-                total_found += result.get("total_found", 0)
-            elif result.get("status") == "dry_run":
-                total_found += result.get("count", 0)
+            total_deleted, total_found = _accumulate_pattern_result(result, total_deleted, total_found)
         return {
-            "status": "success" if not dry_run and not CACHE_INVALIDATION_DRY_RUN else "dry_run",
+            "status": _invalidation_status(dry_run),
             "date": date,
             "patterns_checked": len(date_patterns),
             "total_deleted": total_deleted,
@@ -558,7 +606,7 @@ class CacheInvalidator:
         today_pattern = today.strftime("%m_%d")
         results = [self.invalidate_by_date(fmt, dry_run) for fmt in [today_str, today_pattern]]
         return {
-            "status": "success" if not dry_run and not CACHE_INVALIDATION_DRY_RUN else "dry_run",
+            "status": _invalidation_status(dry_run),
             "date": today_str,
             "results": results,
         }
@@ -567,43 +615,15 @@ class CacheInvalidator:
         if not CACHE_INVALIDATION_ENABLED:
             return {"status": "disabled", "message": CACHE_INVALIDATION_DISABLED_MSG}
         try:
-            all_keys = []
-            cursor = 0
-            max_keys = 100000
-            try:
-                while cursor != 0 or len(all_keys) == 0:
-                    cursor, keys = self.redis_client.scan(cursor, match="*", count=100)
-                    all_keys.extend(keys)
-                    if len(all_keys) > max_keys:
-                        logger.warning(f"Found >{max_keys} keys, stopping scan")
-                        break
-                    if cursor == 0:
-                        break
-            except Exception as e:
-                if "permissions" in str(e).lower() or "scan" in str(e).lower():
-                    return {
-                        "status": "error",
-                        "error": REDIS_SCAN_FORBIDDEN_MSG,
-                        "message": "Expired key invalidation is not available on managed Redis services",
-                    }
-                raise e
-
+            all_keys = _scan_all_redis_keys(self.redis_client)
             expired_keys = [k for k in all_keys if self.redis_client.ttl(k) == 0]
+            decoded = [k.decode() if isinstance(k, bytes) else k for k in expired_keys]
             if dry_run or CACHE_INVALIDATION_DRY_RUN:
-                return {
-                    "status": "dry_run",
-                    "expired_keys": [k.decode() if isinstance(k, bytes) else k for k in expired_keys],
-                    "count": len(expired_keys),
-                    "action": "would_delete",
-                }
-            else:
-                deleted_count = self.redis_client.delete(*expired_keys) if expired_keys else 0
-                return {
-                    "status": "success",
-                    "expired_keys": [k.decode() if isinstance(k, bytes) else k for k in expired_keys],
-                    "deleted_count": deleted_count,
-                    "total_found": len(expired_keys),
-                }
+                return {"status": "dry_run", "expired_keys": decoded, "count": len(expired_keys), "action": "would_delete"}
+            deleted_count = self.redis_client.delete(*expired_keys) if expired_keys else 0
+            return {"status": "success", "expired_keys": decoded, "deleted_count": deleted_count, "total_found": len(expired_keys)}
+        except PermissionError as e:
+            return {"status": "error", "error": str(e), "message": "Expired key invalidation is not available on managed Redis services"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -627,25 +647,10 @@ class CacheInvalidator:
             }
             max_keys_per_pattern = 10000
             scan_count_hint = 500
-            pattern_counts = {}
-            for name, pattern in patterns.items():
-                try:
-                    matching_keys = []
-                    cursor = 0
-                    while cursor != 0 or len(matching_keys) == 0:
-                        cursor, keys = self.redis_client.scan(
-                            cursor, match=pattern, count=scan_count_hint
-                        )
-                        matching_keys.extend(keys)
-                        if len(matching_keys) > max_keys_per_pattern or cursor == 0:
-                            break
-                    pattern_counts[name] = len(matching_keys)
-                except Exception as e:
-                    pattern_counts[name] = (
-                        "N/A (permissions required)"
-                        if "permissions" in str(e).lower() or "scan" in str(e).lower()
-                        else f"N/A (error: {str(e)[:50]})"
-                    )
+            pattern_counts = {
+                name: _scan_pattern_count(self.redis_client, pattern, max_keys_per_pattern, scan_count_hint)
+                for name, pattern in patterns.items()
+            }
             return {
                 "redis_info": {
                     "used_memory": info.get("used_memory_human", "unknown"),

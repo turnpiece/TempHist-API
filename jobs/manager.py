@@ -53,6 +53,14 @@ class SingleFlightLock:
             logger.warning(f"Redis error releasing lock for {key}: {e}")
 
 
+_DEDUP_STATUSES = {
+    JobStatus.PENDING,
+    JobStatus.PROCESSING,
+    JobStatus.READY,
+    JobStatus.ERROR,
+}
+
+
 class JobManager:
     """Manage async job processing with Redis storage."""
 
@@ -61,6 +69,20 @@ class JobManager:
         self.job_prefix = "job:"
         self.result_prefix = "result:"
         self.job_ttl = _CACHE_TTL_JOB
+
+    def _find_dedup_job_id(self, dedup_key: str) -> Optional[str]:
+        raw = self.redis.get(dedup_key)
+        if not raw:
+            return None
+        existing_id = raw.decode() if isinstance(raw, bytes) else raw
+        job_data = self.redis.get(f"{self.job_prefix}{existing_id}")
+        if not job_data:
+            return None
+        status = json.loads(job_data).get("status")
+        if status in _DEDUP_STATUSES:
+            logger.info(f"Deduplicated job {existing_id}: identical job already {status}")
+            return existing_id
+        return None
 
     def create_job(self, job_type: str, params: Dict[str, Any]) -> str:
         """
@@ -72,25 +94,9 @@ class JobManager:
             params_hash = hashlib.sha256(str(params).encode()).hexdigest()[:16]
             dedup_key = f"job:dedup:{job_type}:{params_hash}"
 
-            existing_job_id = self.redis.get(dedup_key)
+            existing_job_id = self._find_dedup_job_id(dedup_key)
             if existing_job_id:
-                existing_job_id = existing_job_id.decode() if isinstance(existing_job_id, bytes) else existing_job_id
-                job_key = f"{self.job_prefix}{existing_job_id}"
-                job_data = self.redis.get(job_key)
-                if job_data:
-                    job = json.loads(job_data)
-                    status = job.get("status")
-                    if status in [JobStatus.PENDING, JobStatus.PROCESSING]:
-                        logger.info(f"Deduplicated job {existing_job_id}: identical job already {status}")
-                        return existing_job_id
-                    if status == JobStatus.READY:
-                        logger.info(f"Deduplicated job {existing_job_id}: identical job already completed")
-                        return existing_job_id
-                    if status == JobStatus.ERROR:
-                        logger.info(
-                            f"Deduplicated job {existing_job_id}: identical job recently failed, skipping re-enqueue"
-                        )
-                        return existing_job_id
+                return existing_job_id
 
             queue_length = self.redis.llen("job_queue")
             if queue_length >= MAX_JOB_QUEUE_SIZE:

@@ -340,6 +340,18 @@ class CachePrewarmer:
         return {"total_time": total_time, "stats": stats, "location_results": results}
 
 
+async def _load_locations_from_args(args, api_token: Optional[str]) -> List[str]:
+    """Resolve the list of locations to warm based on CLI args."""
+    if not args.locations_file:
+        return load_locations_to_prewarm(args.base_url, api_token, args.locations)
+    if args.locations_file.endswith(".json"):
+        locs = load_preapproved_locations(args.locations_file)
+        return locs[: args.locations] if locs else []
+    async with await anyio.open_file(args.locations_file, "r") as f:
+        content = await f.read()
+    return [line.strip() for line in content.splitlines() if line.strip()][: args.locations]
+
+
 async def main():
     """Main prewarming function."""
     parser = argparse.ArgumentParser(description="Prewarm TempHist API cache")
@@ -360,28 +372,13 @@ async def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Resolve API token first — needed for both location loading and prewarming requests
     api_token = args.api_token or DEFAULT_API_TOKEN
     if api_token:
         logger.info("Using bearer token authentication for prewarming requests.")
     else:
         logger.warning("No API token provided. Secured endpoints may respond with 401 Unauthorized.")
 
-    # Load locations
-    if args.locations_file:
-        # Explicit file overrides the popular-API lookup
-        if args.locations_file.endswith(".json"):
-            locs = load_preapproved_locations(args.locations_file)
-            locations = locs[: args.locations] if locs else []
-        else:
-            # Simple text file with one location per line
-            async with await anyio.open_file(args.locations_file, "r") as f:
-                content = await f.read()
-            locations = [line.strip() for line in content.splitlines() if line.strip()][: args.locations]
-    else:
-        # Query /v1/locations/popular first; fall back to preapproved list
-        locations = load_locations_to_prewarm(args.base_url, api_token, args.locations)
-
+    locations = await _load_locations_from_args(args, api_token)
     if not locations:
         logger.warning(
             "No locations to prewarm. Check that preapproved_locations.json exists and contains valid entries."
@@ -390,18 +387,15 @@ async def main():
 
     prewarmer = CachePrewarmer(args.base_url, args.redis_url, api_token=api_token)
 
-    # Run prewarming
     try:
         results = await prewarmer.prewarm_popular_locations(locations, args.endpoints, args.days)
 
-        # Save results to file
         results_file = f"prewarm_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         async with await anyio.open_file(results_file, "w") as f:
             await f.write(json.dumps(results, indent=2))
 
         logger.info(f"📄 Results saved to: {results_file}")
 
-        # Exit with appropriate code
         if results["stats"]["failed_requests"] > 0:
             sys.exit(1)
         else:

@@ -205,92 +205,111 @@ async def create_rolling_bundle_job(
     )
 
 
+def _parse_heartbeat_age(heartbeat) -> float | None:
+    try:
+        if isinstance(heartbeat, bytes):
+            heartbeat = heartbeat.decode("utf-8")
+        heartbeat_dt = datetime.fromisoformat(heartbeat.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - heartbeat_dt).total_seconds()
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _examine_job(redis_client: redis.Redis, job_id: str, now: datetime) -> dict | None:
+    """Return a job-age entry dict for diagnostics, or None on failure."""
+    try:
+        job_data = redis_client.get(f"job:{job_id}")
+        if not job_data:
+            return None
+        if isinstance(job_data, bytes):
+            job_data = job_data.decode("utf-8")
+        job = json.loads(job_data)
+        created = job.get("created_at")
+        if not created:
+            return None
+        created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        age = (now - created_dt).total_seconds()
+        return {
+            "job_id": job.get("id"),
+            "status": job.get("status", "unknown"),
+            "age_seconds": int(age),
+            "type": job.get("type"),
+            "params": job.get("params", {}),
+        }
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def _get_job_debug_info(redis_client: redis.Redis, job_id: str, now: datetime) -> dict:
+    """Return debug info dict for a single job."""
+    job_data = redis_client.get(f"job:{job_id}")
+    if not job_data:
+        return {"exists": False}
+    try:
+        if isinstance(job_data, bytes):
+            job_data = job_data.decode("utf-8")
+        job = json.loads(job_data)
+        created_str = job.get("created_at")
+        elapsed_seconds = None
+        if created_str:
+            try:
+                created_at = datetime.fromisoformat(created_str)
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                elapsed_seconds = round((now - created_at).total_seconds())
+            except (ValueError, TypeError):
+                pass
+        return {
+            "exists": True,
+            "status": job.get("status", "unknown"),
+            "created_at": created_str,
+            "elapsed_seconds": elapsed_seconds,
+            "params": job.get("params", {}),
+        }
+    except (json.JSONDecodeError, ValueError, TypeError, UnicodeDecodeError):
+        return {"exists": True, "error": "invalid JSON"}
+
+
 @router.get("/v1/jobs/diagnostics/worker-status")
 async def get_worker_diagnostics(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Get diagnostic information about the background worker and job queue."""
     try:
-        # Check worker heartbeat
         heartbeat = redis_client.get("worker:heartbeat")
         worker_alive = heartbeat is not None
-
-        # Get queue status
         queue_length = redis_client.llen("job_queue")
+        now = datetime.now(timezone.utc)
 
-        # Get jobs from the queue (without KEYS command)
-        # We'll examine jobs in the queue since we can't scan all keys
         jobs_by_status = {"pending": 0, "processing": 0, "ready": 0, "error": 0}
+        stuck_jobs: list = []
+        long_pending_jobs: list = []
+        jobs_examined: list = []
 
-        stuck_jobs = []
-        long_pending_jobs = []
-        jobs_examined = []
+        for i in range(min(queue_length, 100)):
+            raw_id = redis_client.lindex("job_queue", i)
+            if raw_id:
+                jobs_examined.append(raw_id.decode("utf-8") if isinstance(raw_id, bytes) else raw_id)
 
-        # Get all job IDs from the queue
-        if queue_length > 0:
-            # Get up to 100 jobs from the queue
-            for i in range(min(queue_length, 100)):
-                job_id = redis_client.lindex("job_queue", i)
-                if job_id:
-                    if isinstance(job_id, bytes):
-                        job_id = job_id.decode("utf-8")
-                    jobs_examined.append(job_id)
-
-        # Examine each job in the queue
         for job_id in jobs_examined:
             try:
-                job_key = f"job:{job_id}"
-                job_data = redis_client.get(job_key)
-                if job_data:
-                    if isinstance(job_data, bytes):
-                        job_data = job_data.decode("utf-8")
-                    job = json.loads(job_data)
-                    status = job.get("status", "unknown")
-
+                entry = _examine_job(redis_client, job_id, now)
+                if entry:
+                    status = entry["status"]
                     if status in jobs_by_status:
                         jobs_by_status[status] += 1
-
-                    # Check for genuinely stuck jobs: PROCESSING jobs older than 5 minutes.
-                    # Pending jobs are just waiting their turn — long wait ≠ stuck.
-                    created = job.get("created_at")
-                    if created:
-                        try:
-                            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                            age = (datetime.now(timezone.utc) - created_dt).total_seconds()
-                            entry = {
-                                "job_id": job.get("id"),
-                                "status": status,
-                                "age_seconds": int(age),
-                                "type": job.get("type"),
-                                "params": job.get("params", {}),
-                            }
-                            if status == "processing" and age > STUCK_JOB_THRESHOLD_SECONDS:
-                                stuck_jobs.append(entry)
-                            elif status == "pending" and age > STUCK_JOB_THRESHOLD_SECONDS:
-                                long_pending_jobs.append(entry)
-                        except (ValueError, TypeError, KeyError):
-                            pass
+                    if entry["age_seconds"] > STUCK_JOB_THRESHOLD_SECONDS:
+                        (stuck_jobs if status == "processing" else long_pending_jobs if status == "pending" else []).append(entry)
             except Exception as job_error:
                 logger.warning(f"Error examining job {job_id}: {job_error}")
 
-        # Parse heartbeat time if available
-        heartbeat_age = None
-        if heartbeat:
-            try:
-                if isinstance(heartbeat, bytes):
-                    heartbeat = heartbeat.decode("utf-8")
-                heartbeat_dt = datetime.fromisoformat(heartbeat.replace("Z", "+00:00"))
-                heartbeat_age = (datetime.now(timezone.utc) - heartbeat_dt).total_seconds()
-            except (ValueError, TypeError, AttributeError):
-                # Invalid heartbeat timestamp format
-                pass
+        heartbeat_age = _parse_heartbeat_age(heartbeat) if heartbeat else None
+        worker_healthy = worker_alive and (heartbeat_age is None or heartbeat_age < WORKER_HEARTBEAT_TIMEOUT_SECONDS)
 
         return {
             "worker": {
                 "alive": worker_alive,
                 "heartbeat": heartbeat,
                 "heartbeat_age_seconds": heartbeat_age,
-                "status": "healthy"
-                if worker_alive and (heartbeat_age is None or heartbeat_age < WORKER_HEARTBEAT_TIMEOUT_SECONDS)
-                else "unhealthy",
+                "status": "healthy" if worker_healthy else "unhealthy",
             },
             "queue": {"length": queue_length, "jobs_examined": len(jobs_examined)},
             "jobs": {
@@ -329,7 +348,6 @@ async def debug_jobs_endpoint(redis_client: Annotated[redis.Redis, Depends(get_r
             "timestamp": now.isoformat(),
         }
 
-        # Test Redis connection
         try:
             redis_client.ping()
             debug_info["redis_connection"] = "OK"
@@ -337,11 +355,9 @@ async def debug_jobs_endpoint(redis_client: Annotated[redis.Redis, Depends(get_r
             debug_info["redis_connection"] = f"FAILED: {e}"
             return debug_info
 
-        # Check job queue
         queue_key = "job_queue"
         queue_length = redis_client.llen(queue_key)
         debug_info["queue_length"] = queue_length
-
         show_count = min(queue_length, 10)
         debug_info["showing"] = show_count
 
@@ -350,49 +366,16 @@ async def debug_jobs_endpoint(redis_client: Annotated[redis.Redis, Depends(get_r
             longest_seconds = None
 
             for i in range(show_count):
-                job_id = redis_client.lindex(queue_key, i)
-                if not job_id:
+                raw_id = redis_client.lindex(queue_key, i)
+                if not raw_id:
                     continue
-                if isinstance(job_id, bytes):
-                    job_id = job_id.decode("utf-8")
-
+                job_id = raw_id.decode("utf-8") if isinstance(raw_id, bytes) else raw_id
                 jobs_in_queue.append(job_id)
-
-                job_key = f"job:{job_id}"
-                job_data = redis_client.get(job_key)
-
-                if job_data:
-                    try:
-                        if isinstance(job_data, bytes):
-                            job_data = job_data.decode("utf-8")
-                        job = json.loads(job_data)
-                        status = job.get("status", "unknown")
-                        created_str = job.get("created_at")
-                        params = job.get("params", {})
-
-                        elapsed_seconds = None
-                        if created_str:
-                            try:
-                                created_at = datetime.fromisoformat(created_str)
-                                if created_at.tzinfo is None:
-                                    created_at = created_at.replace(tzinfo=timezone.utc)
-                                elapsed_seconds = round((now - created_at).total_seconds())
-                                if longest_seconds is None or elapsed_seconds > longest_seconds:
-                                    longest_seconds = elapsed_seconds
-                            except (ValueError, TypeError):
-                                pass
-
-                        debug_info["job_data_status"][job_id] = {
-                            "exists": True,
-                            "status": status,
-                            "created_at": created_str,
-                            "elapsed_seconds": elapsed_seconds,
-                            "params": params,
-                        }
-                    except (json.JSONDecodeError, ValueError, TypeError, UnicodeDecodeError):
-                        debug_info["job_data_status"][job_id] = {"exists": True, "error": "invalid JSON"}
-                else:
-                    debug_info["job_data_status"][job_id] = {"exists": False}
+                info = _get_job_debug_info(redis_client, job_id, now)
+                debug_info["job_data_status"][job_id] = info
+                elapsed = info.get("elapsed_seconds")
+                if elapsed is not None and (longest_seconds is None or elapsed > longest_seconds):
+                    longest_seconds = elapsed
 
             debug_info["jobs_in_queue"] = jobs_in_queue
             debug_info["longest_running_seconds"] = longest_seconds
