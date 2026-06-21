@@ -158,9 +158,8 @@ def register_exception_handlers(app):
         request_id = getattr(request.state, "request_id", None)
 
         # Log full error details server-side
-        logger.error(
-            f"❌ UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)} | Path={request.url.path} | Request-ID={request_id}",
-            exc_info=True,
+        logger.exception(
+            f"❌ UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)} | Path={request.url.path} | Request-ID={request_id}"
         )
 
         # Return generic error to client (don't expose internal details)

@@ -508,7 +508,7 @@ async def og_image(
     try:
         png = _render_chart(share, records, show_title=show_title) if records else _render_placeholder(share)
     except Exception as exc:
-        logger.error("OG image render failed for share %s: %s", share_id, exc, exc_info=True)
+        logger.exception("OG image render failed for share %s", share_id)
         try:
             png = _render_placeholder(share)
         except Exception:
