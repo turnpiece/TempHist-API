@@ -109,6 +109,151 @@ def get_friendly_date(date: datetime) -> str:
     return f"{day}{suffix} {date.strftime('%B')}"
 
 
+# ---------------------------------------------------------------------------
+# Private helpers for generate_summary
+# ---------------------------------------------------------------------------
+
+
+def _ordinal_suffix(day: int) -> str:
+    return "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+
+
+def _period_includes_today(period: str, target_date: dt_date, today: dt_date) -> bool:
+    if period == "weekly":
+        return target_date - timedelta(days=6) <= today <= target_date
+    if period == "monthly":
+        month_start = target_date.replace(day=1)
+        month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        return month_start <= today <= month_end
+    if period == "yearly":
+        return target_date.year == today.year
+    return target_date == today
+
+
+def _get_tense(period: str, target_date: dt_date, today: dt_date) -> str:
+    """Return the appropriate tense string for a period and date."""
+    if period == "daily":
+        return "is" if target_date == today else "was"
+    return "has been" if _period_includes_today(period, target_date, today) else "was"
+
+
+def _get_period_context(period: str, target_date: dt_date, tense: str, today: dt_date) -> tuple[str, str]:
+    """Return (period_context, period_context_alt) strings for summary phrasing."""
+    if period == "daily":
+        yesterday = today - timedelta(days=1)
+        if target_date == today:
+            return "today", "the time of year"
+        if target_date == yesterday:
+            return "yesterday", "the time of year"
+        return "it", "the time of year"
+
+    if tense == "has been":
+        labels = {"weekly": "this week", "monthly": "this month", "yearly": "this year"}
+        label = labels.get(period, "this period")
+        return label, label
+
+    day = target_date.day
+    suffix = _ordinal_suffix(day)
+    if period == "weekly":
+        ctx = f"the week ending {day}{suffix} {target_date.strftime('%B')}"
+    elif period == "monthly":
+        ctx = f"the month ending {day}{suffix} {target_date.strftime('%B')}"
+    elif period == "yearly":
+        ctx = f"the year ending {day}{suffix} {target_date.strftime('%B %Y')}"
+    else:
+        return "that period", "that period"
+    return ctx, ctx
+
+
+def _summarise_warmer_than_last(
+    latest: dict, previous: list, tense: str, friendly_date: str, is_above_average: bool
+) -> tuple[str, str]:
+    """Summaries for the case where the current year is warmer than the previous year."""
+    last_warmer = next((p["x"] for p in reversed(previous) if p["y"] > latest["y"]), None)
+    if last_warmer is None:
+        if is_above_average:
+            return "It's warmer than last year.", ""
+        return "", "It's not as cold as last year."
+    years_since = int(latest["x"] - last_warmer)
+    if years_since == 2:
+        if is_above_average:
+            return f"It's warmer than last year but not as warm as {last_warmer}.", ""
+        return "", f"It's not as cold as last year but cooler than {last_warmer}."
+    if years_since <= 10:
+        return f"This {tense} the warmest {friendly_date} since {last_warmer}.", ""
+    return f"This {tense} the warmest {friendly_date} in {years_since} years.", ""
+
+
+def _summarise_colder_than_last(
+    latest: dict, previous: list, tense: str, friendly_date: str, is_above_average: bool
+) -> tuple[str, str]:
+    """Summaries for the case where the current year is colder than the previous year."""
+    last_colder = next((p["x"] for p in reversed(previous) if p["y"] < latest["y"]), None)
+    if last_colder is None:
+        if is_above_average:
+            return "It's not as warm as last year.", ""
+        return "", "It's colder than last year."
+    years_since = int(latest["x"] - last_colder)
+    if years_since == 2:
+        if is_above_average:
+            return f"It's not as warm as last year but warmer than {last_colder}.", ""
+        return "", f"It's colder than last year but not as cold as {last_colder}."
+    if years_since <= 10:
+        return "", f"This {tense} the coldest {friendly_date} since {last_colder}."
+    return "", f"This {tense} the coldest {friendly_date} in {years_since} years."
+
+
+def _compare_against_years(
+    latest: dict, previous: list, tense: str, friendly_date: str, is_above_average: bool
+) -> tuple[str, str]:
+    """Return (warm_summary, cold_summary) from year-by-year comparison."""
+    is_warmest = bool(previous) and all(latest["y"] > p["y"] for p in previous)
+    is_coldest = bool(previous) and all(latest["y"] < p["y"] for p in previous)
+    if is_warmest:
+        return f"This {tense} the warmest {friendly_date} on record.", ""
+    if is_coldest:
+        return "", f"This {tense} the coldest {friendly_date} on record."
+    last_year_temp = next((p["y"] for p in reversed(previous) if p["x"] == latest["x"] - 1), None)
+    if last_year_temp is None:
+        return "", ""
+    if latest["y"] > last_year_temp:
+        return _summarise_warmer_than_last(latest, previous, tense, friendly_date, is_above_average)
+    if latest["y"] < last_year_temp:
+        return _summarise_colder_than_last(latest, previous, tense, friendly_date, is_above_average)
+    return "", ""
+
+
+def _build_avg_summary(
+    diff: float,
+    rounded_diff,
+    period: str,
+    period_context: str,
+    period_context_alt: str,
+    tense: str,
+    warm_summary: str,
+    cold_summary: str,
+    unit_symbol: str,
+) -> str:
+    """Build the sentence comparing current temperature to the historical average."""
+    if rounded_diff == 0:
+        if period == "yearly":
+            return f"It {tense} an average year."
+        return f"It {tense} about average for {period_context_alt}."
+
+    amount = abs(rounded_diff)
+    direction = "warmer" if diff > 0 else "cooler"
+    contrary = cold_summary if diff > 0 else warm_summary
+
+    if period in ("weekly", "monthly", "yearly"):
+        prefix = "However, it" if contrary else "It"
+        return f"{prefix} was {amount}{unit_symbol} {direction} than average."
+
+    # daily
+    if contrary:
+        return f"However, {period_context.lower()} {tense} {amount}{unit_symbol} {direction} than average for the time of year."
+    return f"{period_context.capitalize()} {tense} {amount}{unit_symbol} {direction} than average for the time of year."
+
+
 def generate_summary(
     data: List[Dict[str, float]],
     date: datetime,
@@ -135,23 +280,16 @@ def generate_summary(
     Note: Time-sensitive summaries (e.g., "the past week/month/year") should have
     very short cache durations (minutes) as they become invalid quickly.
     """
-    # Determine unit symbol
     unit_symbol = "°F" if unit_group.lower() == "fahrenheit" else "°C"
 
-    # Filter out data points with None temperature
     data = [d for d in data if d.get("y") is not None]
     if not data or len(data) < 2:
         return "Not enough data to generate summary."
 
-    # Check if we have data for the expected year (from the date parameter)
     expected_year = date.year
     latest = data[-1]
-
-    # Verify the latest data point is actually for the expected year
     if latest.get("x") != expected_year:
-        # Current year data is missing - don't generate a misleading summary
         return f"Temperature data for {date.year} is not yet available."
-
     if latest.get("y") is None:
         return "No valid temperature data for the latest year."
 
@@ -162,197 +300,19 @@ def generate_summary(
     rounded_diff = int(round(diff, 0)) if is_fahrenheit else round(diff, 1)
     latest_temp = int(round(latest["y"], 0)) if is_fahrenheit else round(latest["y"], 1)
 
-    friendly_date = get_friendly_date(date)
-    warm_summary = ""
-    cold_summary = ""
-    temperature = f"{latest_temp}{unit_symbol}."
-
-    # Determine tense based on date and period.
-    # Use the caller-supplied local_today (location's timezone) when available so
-    # "today"/"yesterday" reflect the user's local date, not the server's.
     today = local_today if local_today is not None else datetime.now().date()
-    yesterday = today - timedelta(days=1)
     target_date = date.date()
-
-    # For non-daily periods, determine if the period includes today or ended recently
-    if period == "daily":
-        if target_date == today:
-            # Today - use present tense
-            tense_context = "is"
-            tense_context_alt = "is"
-            tense_warm_cold = "is"
-        elif target_date == yesterday:
-            # Yesterday - use past tense but keep the actual date
-            tense_context = "was"
-            tense_context_alt = "was"
-            tense_warm_cold = "was"
-        else:
-            # Past date - use past tense
-            tense_context = "was"
-            tense_context_alt = "was"
-            tense_warm_cold = "was"
-    else:
-        # For weekly, monthly, yearly periods
-        if period == "weekly":
-            # Check if the week ending on target_date includes today
-            week_start = target_date - timedelta(days=6)
-            period_includes_today = week_start <= today <= target_date
-        elif period == "monthly":
-            # Check if the month containing target_date includes today
-            month_start = target_date.replace(day=1)
-            next_month = (month_start + timedelta(days=32)).replace(day=1)
-            month_end = next_month - timedelta(days=1)
-            period_includes_today = month_start <= today <= month_end
-        elif period == "yearly":
-            # Check if the target year is the current year
-            period_includes_today = target_date.year == today.year
-        else:
-            # Default for other periods
-            period_includes_today = target_date == today
-
-        if period_includes_today:
-            # Period includes today - use present perfect for consistency
-            tense_context = "has been"
-            tense_context_alt = "has been"
-            tense_warm_cold = "has been"
-        else:
-            # Period ended recently or is in the past - use simple past tense
-            tense_context = "was"
-            tense_context_alt = "was"
-            tense_warm_cold = "was"
+    tense = _get_tense(period, target_date, today)
 
     previous = [p for p in data[:-1] if p.get("y") is not None]
-    is_warmest = bool(previous) and all(latest["y"] > p["y"] for p in previous)
-    is_coldest = bool(previous) and all(latest["y"] < p["y"] for p in previous)
+    friendly_date = get_friendly_date(date)
+    warm_summary, cold_summary = _compare_against_years(latest, previous, tense, friendly_date, is_above_average)
 
-    # Check against last year first for consistency
-    last_year_temp = next((p["y"] for p in reversed(previous) if p["x"] == latest["x"] - 1), None)
+    period_context, period_context_alt = _get_period_context(period, target_date, tense, today)
 
-    # Generate mutually exclusive summaries to avoid contradictions
-    if is_warmest:
-        warm_summary = f"This {tense_warm_cold} the warmest {friendly_date} on record."
-    elif is_coldest:
-        cold_summary = f"This {tense_warm_cold} the coldest {friendly_date} on record."
-    elif last_year_temp is not None:
-        # Compare against last year first
-        if latest["y"] > last_year_temp:
-            # Warmer than last year - find last warmer year
-            last_warmer = next((p["x"] for p in reversed(previous) if p["y"] > latest["y"]), None)
-            if last_warmer:
-                years_since = int(latest["x"] - last_warmer)
-                if years_since == 2:
-                    if is_above_average:
-                        warm_summary = f"It's warmer than last year but not as warm as {last_warmer}."
-                    else:
-                        cold_summary = f"It's not as cold as last year but cooler than {last_warmer}."
-                elif years_since <= 10:
-                    warm_summary = f"This {tense_warm_cold} the warmest {friendly_date} since {last_warmer}."
-                else:
-                    warm_summary = f"This {tense_warm_cold} the warmest {friendly_date} in {years_since} years."
-            else:
-                if is_above_average:
-                    warm_summary = "It's warmer than last year."
-                else:
-                    cold_summary = "It's not as cold as last year."
-        elif latest["y"] < last_year_temp:
-            # Colder than last year - find last colder year
-            last_colder = next((p["x"] for p in reversed(previous) if p["y"] < latest["y"]), None)
-            if last_colder:
-                years_since = int(latest["x"] - last_colder)
-                if years_since == 2:
-                    if is_above_average:
-                        warm_summary = f"It's not as warm as last year but warmer than {last_colder}."
-                    else:
-                        cold_summary = f"It's colder than last year but not as cold as {last_colder}."
-                elif years_since <= 10:
-                    cold_summary = f"This {tense_warm_cold} the coldest {friendly_date} since {last_colder}."
-                else:
-                    cold_summary = f"This {tense_warm_cold} the coldest {friendly_date} in {years_since} years."
-            else:
-                if is_above_average:
-                    warm_summary = "It's not as warm as last year."
-                else:
-                    cold_summary = "It's colder than last year."
-
-    # Generate period-appropriate language with correct tense and context
-    if period == "daily":
-        if target_date == today:
-            period_context = "today"
-            period_context_alt = "the time of year"
-        elif target_date == yesterday:
-            period_context = "yesterday"
-            period_context_alt = "the time of year"
-        else:
-            period_context = "it"
-            period_context_alt = "the time of year"
-    elif period == "weekly":
-        if tense_context == "has been":
-            period_context = "this week"
-            period_context_alt = "this week"
-        else:
-            day = target_date.day
-            suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-            period_context = f"the week ending {day}{suffix} {target_date.strftime('%B')}"
-            period_context_alt = period_context
-    elif period == "monthly":
-        if tense_context == "has been":
-            period_context = "this month"
-            period_context_alt = "this month"
-        else:
-            day = target_date.day
-            suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-            period_context = f"the month ending {day}{suffix} {target_date.strftime('%B')}"
-            period_context_alt = period_context
-    elif period == "yearly":
-        if tense_context == "has been":
-            period_context = "this year"
-            period_context_alt = "this year"
-        else:
-            day = target_date.day
-            suffix = "th" if 11 <= day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-            period_context = f"the year ending {day}{suffix} {target_date.strftime('%B %Y')}"
-            period_context_alt = period_context
-    else:
-        if tense_context == "has been":
-            period_context = "this period"
-            period_context_alt = "this period"
-        else:
-            period_context = "that period"
-            period_context_alt = "that period"
-
-    if rounded_diff == 0:
-        # Special case for yearly summaries to sound more natural
-        if period == "yearly":
-            avg_summary = f"It {tense_context_alt} an average year."
-        else:
-            avg_summary = f"It {tense_context_alt} about average for {period_context_alt}."
-    elif diff > 0:
-        # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
-        if period in ["weekly", "monthly", "yearly"]:
-            avg_summary = "However, " if cold_summary else ""
-            avg_summary += f"{'it' if cold_summary else 'It'} was {rounded_diff}{unit_symbol} warmer than average."
-        else:
-            # For daily periods, use the period context
-            avg_summary = "However, " if cold_summary else ""
-            if cold_summary:
-                period_lower = period_context.lower()
-                avg_summary += f"{period_lower} {tense_context} {rounded_diff}{unit_symbol} warmer than average for the time of year."
-            else:
-                period_capitalised = period_context.capitalize()
-                avg_summary += f"{period_capitalised} {tense_context} {rounded_diff}{unit_symbol} warmer than average for the time of year."
-    else:
-        # For weekly/monthly/yearly periods, use "It was" to avoid repetition with "has been"
-        if period in ["weekly", "monthly", "yearly"]:
-            avg_summary = "However, " if warm_summary else ""
-            avg_summary += f"{'it' if warm_summary else 'It'} was {abs(rounded_diff)}{unit_symbol} cooler than average."
-        else:
-            # For daily periods, use the period context
-            avg_summary = "However, " if warm_summary else ""
-            if warm_summary:
-                period_lower = period_context.lower()
-                avg_summary += f"{period_lower} {tense_context} {abs(rounded_diff)}{unit_symbol} cooler than average for the time of year."
-            else:
-                period_capitalised = period_context.capitalize()
-                avg_summary += f"{period_capitalised} {tense_context} {abs(rounded_diff)}{unit_symbol} cooler than average for the time of year."
+    temperature = f"{latest_temp}{unit_symbol}."
+    avg_summary = _build_avg_summary(
+        diff, rounded_diff, period, period_context, period_context_alt, tense, warm_summary, cold_summary, unit_symbol
+    )
 
     return " ".join(filter(None, [temperature, warm_summary, cold_summary, avg_summary]))
