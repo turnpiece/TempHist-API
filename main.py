@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from firebase_admin import app_check, auth
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, Response
 
 # Load .env and populate os.environ before routers (see config.DOTENV_PATH).
 import config  # noqa: F401
@@ -481,155 +481,170 @@ app.middleware("http")(add_security_headers)
 app.middleware("http")(request_size_middleware)
 
 
-@app.middleware("http")
-async def verify_token_middleware(request: Request, call_next):
-    """Middleware to verify Firebase tokens and apply rate limiting for protected routes."""
+def _check_ip_blacklist(request: Request, client_ip: str) -> Optional[JSONResponse]:
+    """Block blacklisted IPs except for health and analytics endpoints."""
+    if not is_ip_blacklisted(client_ip):
+        return None
+    if request.url.path in ("/health",) or request.url.path.startswith("/analytics"):
+        return None
     if DEBUG:
-        logger.debug(f"[DEBUG] Middleware: Processing {request.method} request to {request.url.path}")
+        logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {client_ip} | {request.method} {request.url.path}")
+    return JSONResponse(status_code=403, content={"detail": "Access denied", "reason": "IP address is blacklisted"})
 
-    # Allow OPTIONS requests for CORS preflight
-    if request.method == "OPTIONS":
-        if DEBUG:
-            logger.debug("[DEBUG] Middleware: OPTIONS request, allowing through")
-        return await call_next(request)
 
-    # Get client IP for security checks
-    client_ip = get_client_ip(request)
+_PUBLIC_PATHS = frozenset([
+    "/",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/test-cors",
+    "/test-redis",
+    "/rate-limit-status",
+    "/analytics",
+    "/health",
+    "/health/detailed",
+    "/v1/jobs/diagnostics/worker-status",
+])
+
+_PUBLIC_PREFIXES = ("/static", "/analytics", "/data", "/v1/shares/", "/v1/og/")
+
+
+def _is_public_path(request: Request) -> bool:
+    """Return True for paths that require no auth or rate limiting."""
+    path = request.url.path
+    if path == "/v1/shares" and request.method == "GET":
+        return True
+    return path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES)
+
+
+async def _check_admin_auth(request: Request, call_next) -> Optional[Response]:
+    """Validate X-Admin-Key for admin paths.
+
+    Returns a Response (error or successful call_next result) for admin paths,
+    or None if the path is not an admin path.
+    """
+    if not is_admin_path(request.url.path, request.method):
+        return None
+    admin_key = request.headers.get("X-Admin-Key")
+    if not ADMIN_API_KEY:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Admin API not configured (ADMIN_API_KEY not set)"},
+        )
+    if not admin_key_is_valid(admin_key):
+        return JSONResponse(status_code=401, content={"detail": "Missing or invalid admin key"})
+    request.state.user = {"uid": "admin", "system": True, "source": "admin_key"}
     if DEBUG:
-        logger.debug(f"[DEBUG] Middleware: Client IP: {client_ip}")
+        logger.debug("[DEBUG] Middleware: Admin path, X-Admin-Key verified")
+    return await call_next(request)
 
-    # Check if IP is blacklisted (block entirely, except for health checks and analytics)
-    if (
-        is_ip_blacklisted(client_ip)
-        and request.url.path not in ["/health"]
-        and not request.url.path.startswith("/analytics")
-    ):
-        if DEBUG:
-            logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {client_ip} | {request.method} {request.url.path}")
-        return JSONResponse(status_code=403, content={"detail": "Access denied", "reason": "IP address is blacklisted"})
 
-    # Public paths that don't require a token or rate limiting
-    # Note: Stats endpoints removed - they require authentication (HIGH-012)
-    public_paths = [
-        "/",
-        "/docs",
-        "/openapi.json",
-        "/redoc",
-        "/test-cors",
-        "/test-redis",
-        "/rate-limit-status",
-        "/analytics",
-        "/health",
-        "/health/detailed",
-        "/v1/jobs/diagnostics/worker-status",
-    ]
-    # GET /v1/shares (feed) is public; POST /v1/shares still requires Firebase auth
-    if request.url.path == "/v1/shares" and request.method == "GET":
-        return await call_next(request)
-    if request.url.path in public_paths or any(
-        request.url.path.startswith(p) for p in ["/static", "/analytics", "/data", "/v1/shares/", "/v1/og/"]
-    ):
-        if DEBUG:
-            logger.debug("[DEBUG] Middleware: Public path, allowing through")
-        return await call_next(request)
+def _detect_service_job(auth_header: Optional[str], request: Request, client_ip: str) -> bool:
+    """Return True if the request uses the API_ACCESS_TOKEN service bypass."""
+    if not (auth_header and auth_header.startswith("Bearer ")):
+        return False
+    token = auth_header.split(" ")[1]
+    if not (API_ACCESS_TOKEN and token == API_ACCESS_TOKEN):
+        return False
+    if DEBUG:
+        logger.info(f"🔧 SERVICE JOB DETECTED: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
+    return True
 
-    # Admin paths require X-Admin-Key only (not Firebase or API_ACCESS_TOKEN)
-    if is_admin_path(request.url.path, request.method):
-        admin_key = request.headers.get("X-Admin-Key")
-        if not ADMIN_API_KEY:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Admin API not configured (ADMIN_API_KEY not set)"},
-            )
-        if not admin_key_is_valid(admin_key):
-            return JSONResponse(status_code=401, content={"detail": "Missing or invalid admin key"})
-        request.state.user = {"uid": "admin", "system": True, "source": "admin_key"}
-        if DEBUG:
-            logger.debug("[DEBUG] Middleware: Admin path, X-Admin-Key verified")
-        return await call_next(request)
 
-    # Check if this is a service job using API_ACCESS_TOKEN (bypass rate limiting)
-    auth_header = request.headers.get("Authorization")
-    is_service_job = False
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        if API_ACCESS_TOKEN and token == API_ACCESS_TOKEN:
-            is_service_job = True
-            if DEBUG:
-                logger.info(
-                    f"🔧 SERVICE JOB DETECTED: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed"
-                )
-
-    # Define endpoints that actually query Visual Crossing API (cost money)
-    vc_api_paths = ["/weather/", "/forecast/", "/v1/records/"]
-    is_vc_api_endpoint = any(request.url.path.startswith(path) for path in vc_api_paths)
-
-    # Apply rate limiting only to Visual Crossing API endpoints
-    # Skip rate limiting for: whitelisted IPs, service jobs (API_ACCESS_TOKEN)
-    if (
+def _check_rate_limits(
+    request: Request, client_ip: str, is_service_job: bool
+) -> Optional[JSONResponse]:
+    """Apply request-rate and location-diversity limits for VC API endpoints."""
+    rate_limiting_active = (
         RATE_LIMIT_ENABLED
         and location_monitor
         and request_monitor
         and not is_ip_whitelisted(client_ip)
         and not is_service_job
-    ):
-        if is_vc_api_endpoint:
-            # Check request rate first
-            rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
-            if not rate_allowed:
-                if DEBUG:
-                    logger.warning(
-                        f"🚫 RATE LIMIT EXCEEDED: {client_ip} | {request.method} {request.url.path} | {rate_reason}"
-                    )
-                return JSONResponse(
-                    status_code=429,
-                    content={
-                        "detail": "Rate limit exceeded",
-                        "reason": rate_reason,
-                        "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600,
-                    },
-                    headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)},
+    )
+    if not rate_limiting_active:
+        if is_ip_whitelisted(client_ip) and DEBUG:
+            logger.info(f"⭐ WHITELISTED IP: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
+        return None
+
+    vc_api_paths = ("/weather/", "/forecast/", "/v1/records/")
+    if not any(request.url.path.startswith(p) for p in vc_api_paths):
+        if DEBUG:
+            logger.debug(f"ℹ️  NON-VC ENDPOINT: {client_ip} | {request.method} {request.url.path} | Rate limiting skipped")
+        return None
+
+    rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
+    if not rate_allowed:
+        if DEBUG:
+            logger.warning(f"🚫 RATE LIMIT EXCEEDED: {client_ip} | {request.method} {request.url.path} | {rate_reason}")
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "Rate limit exceeded",
+                "reason": rate_reason,
+                "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600,
+            },
+            headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)},
+        )
+    if DEBUG:
+        logger.debug(f"✅ RATE LIMIT CHECK: {client_ip} | {request.method} {request.url.path} | Rate: OK")
+
+    location, _endpoint = extract_location_from_path(request.url.path)
+    if location:
+        location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
+        if not location_allowed:
+            if DEBUG:
+                logger.warning(
+                    f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {sanitize_for_logging(location_reason)}"
                 )
-            elif DEBUG:
-                logger.debug(f"✅ RATE LIMIT CHECK: {client_ip} | {request.method} {request.url.path} | Rate: OK")
-
-            # Check location diversity for Visual Crossing API endpoints
-            if location_monitor:
-                location, _endpoint = extract_location_from_path(request.url.path)
-                if location:
-                    location_allowed, location_reason = location_monitor.check_location_diversity(client_ip, location)
-                    if not location_allowed:
-                        if DEBUG:
-                            logger.warning(
-                                f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {sanitize_for_logging(location_reason)}"
-                            )
-                        return JSONResponse(
-                            status_code=429,
-                            content={
-                                "detail": "Location diversity limit exceeded",
-                                "reason": location_reason,
-                                "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600,
-                            },
-                            headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)},
-                        )
-                    elif DEBUG:
-                        logger.debug(
-                            f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {sanitize_for_logging(location)} | OK"
-                        )
-        elif DEBUG:
-            logger.debug(
-                f"ℹ️  NON-VC ENDPOINT: {client_ip} | {request.method} {request.url.path} | Rate limiting skipped"
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Location diversity limit exceeded",
+                    "reason": location_reason,
+                    "retry_after": RATE_LIMIT_WINDOW_HOURS * 3600,
+                },
+                headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)},
             )
-    elif is_ip_whitelisted(client_ip) and DEBUG:
-        logger.info(f"⭐ WHITELISTED IP: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
-    elif is_service_job and not DEBUG:
-        # Log service job bypass in non-DEBUG mode (already logged in DEBUG mode above)
-        pass
+        if DEBUG:
+            logger.debug(
+                f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {sanitize_for_logging(location)} | OK"
+            )
 
+    return None
+
+
+def _check_app_check(request: Request, uid: str, client_ip: str) -> Optional[JSONResponse]:
+    """Verify the Firebase App Check token when enforcement is active."""
+    if APP_CHECK_ENFORCEMENT == "off":
+        return None
+    app_check_token = request.headers.get("X-Firebase-AppCheck")
+    app_check_valid = False
+    app_check_error = None
+    if app_check_token:
+        try:
+            app_check.verify_token(app_check_token)
+            app_check_valid = True
+        except Exception as ace:
+            app_check_error = str(ace)
+    if app_check_valid:
+        if DEBUG:
+            logger.debug(f"App Check: valid token | uid={uid}")
+        return None
+    reason = app_check_error or "missing X-Firebase-AppCheck header"
+    if APP_CHECK_ENFORCEMENT == "enforce":
+        logger.warning(f"App Check: BLOCKED uid={uid} ip={client_ip} path={request.url.path} reason={reason}")
+        return JSONResponse(status_code=403, content={"detail": "App Check verification failed"})
+    logger.warning(f"App Check: MONITOR uid={uid} ip={client_ip} path={request.url.path} reason={reason}")
+    return None
+
+
+async def _verify_firebase_auth(
+    request: Request, auth_header: Optional[str], client_ip: str, is_service_job: bool
+) -> Optional[JSONResponse]:
+    """Verify the Bearer token and set request.state.user. Returns a JSONResponse on auth failure."""
     if DEBUG:
         logger.debug("[DEBUG] Middleware: Protected path, checking Firebase token...")
-    # All other paths require a Firebase token
-    # Note: auth_header was already extracted earlier for service job detection
     if not auth_header or not auth_header.startswith("Bearer "):
         if DEBUG:
             logger.debug("[DEBUG] Middleware: No valid Authorization header")
@@ -637,58 +652,65 @@ async def verify_token_middleware(request: Request, call_next):
 
     id_token = auth_header.split(" ")[1]
 
-    # Production token bypass for automated systems (cron jobs, etc.)
     if is_service_job:
-        # Already verified this is API_ACCESS_TOKEN during rate limiting check
         if DEBUG:
             logger.debug("[DEBUG] Middleware: Using production token bypass")
         request.state.user = {"uid": "admin", "system": True, "source": "production_token"}
-    else:
-        logger.info("[DEBUG] Middleware: Verifying Firebase token...")
-        try:
-            decoded_token = auth.verify_id_token(id_token)
-            provider = decoded_token.get("firebase", {}).get("sign_in_provider", "unknown")
-            uid = decoded_token.get("uid", "unknown")
-            logger.info(f"Auth: uid={uid} provider={provider} ip={client_ip} path={request.url.path}")
-            request.state.user = decoded_token
+        return None
 
-            # Firebase App Check verification
-            if APP_CHECK_ENFORCEMENT != "off":
-                app_check_token = request.headers.get("X-Firebase-AppCheck")
-                app_check_valid = False
-                app_check_error = None
-                if app_check_token:
-                    try:
-                        app_check.verify_token(app_check_token)
-                        app_check_valid = True
-                    except Exception as ace:
-                        app_check_error = str(ace)
-                if app_check_valid:
-                    if DEBUG:
-                        logger.debug(f"App Check: valid token | uid={uid}")
-                elif APP_CHECK_ENFORCEMENT == "enforce":
-                    reason = app_check_error or "missing X-Firebase-AppCheck header"
-                    logger.warning(
-                        f"App Check: BLOCKED uid={uid} ip={client_ip} path={request.url.path} reason={reason}"
-                    )
-                    return JSONResponse(status_code=403, content={"detail": "App Check verification failed"})
-                else:  # monitor
-                    reason = app_check_error or "missing X-Firebase-AppCheck header"
-                    logger.warning(
-                        f"App Check: MONITOR uid={uid} ip={client_ip} path={request.url.path} reason={reason}"
-                    )
+    logger.info("[DEBUG] Middleware: Verifying Firebase token...")
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        provider = decoded_token.get("firebase", {}).get("sign_in_provider", "unknown")
+        uid = decoded_token.get("uid", "unknown")
+        logger.info(f"Auth: uid={uid} provider={provider} ip={client_ip} path={request.url.path}")
+        request.state.user = decoded_token
+        return _check_app_check(request, uid, client_ip)
+    except Exception as e:
+        logger.exception("Firebase token verification failed (type=%s)", type(e).__name__)
+        if DEBUG:
+            return JSONResponse(status_code=403, content={"detail": f"Invalid Firebase token: {str(e)}"})
+        return JSONResponse(status_code=403, content={"detail": "Authentication failed"})
 
-        except Exception as e:
-            # Log detailed error server-side only (with stack trace)
-            logger.exception("Firebase token verification failed (type=%s)", type(e).__name__)
 
-            # Return generic error message to client (don't expose internal details)
-            if DEBUG:
-                # In debug mode, provide more details
-                return JSONResponse(status_code=403, content={"detail": f"Invalid Firebase token: {str(e)}"})
-            else:
-                # In production, use generic error message
-                return JSONResponse(status_code=403, content={"detail": "Authentication failed"})
+@app.middleware("http")
+async def verify_token_middleware(request: Request, call_next):
+    """Middleware to verify Firebase tokens and apply rate limiting for protected routes."""
+    if DEBUG:
+        logger.debug(f"[DEBUG] Middleware: Processing {request.method} request to {request.url.path}")
+
+    if request.method == "OPTIONS":
+        if DEBUG:
+            logger.debug("[DEBUG] Middleware: OPTIONS request, allowing through")
+        return await call_next(request)
+
+    client_ip = get_client_ip(request)
+    if DEBUG:
+        logger.debug(f"[DEBUG] Middleware: Client IP: {client_ip}")
+
+    block = _check_ip_blacklist(request, client_ip)
+    if block:
+        return block
+
+    if _is_public_path(request):
+        if DEBUG:
+            logger.debug("[DEBUG] Middleware: Public path, allowing through")
+        return await call_next(request)
+
+    admin_response = await _check_admin_auth(request, call_next)
+    if admin_response is not None:
+        return admin_response
+
+    auth_header = request.headers.get("Authorization")
+    is_service_job = _detect_service_job(auth_header, request, client_ip)
+
+    block = _check_rate_limits(request, client_ip, is_service_job)
+    if block:
+        return block
+
+    block = await _verify_firebase_auth(request, auth_header, client_ip, is_service_job)
+    if block:
+        return block
 
     logger.info("[DEBUG] Middleware: Token verified, calling next handler...")
     response = await call_next(request)
