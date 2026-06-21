@@ -921,6 +921,36 @@ def _extract_per_year_records(full_data: Dict) -> Dict[int, Dict]:
     return per_year
 
 
+async def _compute_per_year_records_daily(
+    location: str,
+    month: int,
+    day: int,
+    years_to_fetch: List[int],
+    unit_group: str,
+    redis_client: Optional[redis.Redis],
+    missing_years: List[Dict],
+    per_year: Dict[int, Dict],
+) -> None:
+    """Fetch daily temperature series and populate ``per_year`` in-place."""
+    weather_data = await get_temperature_series(
+        location, month, day, redis_client, years=list(years_to_fetch)
+    )
+    if not (weather_data and "data" in weather_data):
+        return
+    if "metadata" in weather_data and "missing_years" in weather_data["metadata"]:
+        missing_years.extend(weather_data["metadata"]["missing_years"])
+    for data_point in weather_data["data"]:
+        year = int(data_point["x"])
+        temp = data_point["y"]
+        if temp is None:
+            continue
+        per_year[year] = TemperatureValue(
+            date=f"{year}-{month:02d}-{day:02d}",
+            year=year,
+            temperature=round(_convert_c_to_unit(temp, unit_group), 2),
+        ).model_dump()
+
+
 async def compute_per_year_records(
     location: str,
     period: str,
@@ -953,31 +983,11 @@ async def compute_per_year_records(
     coverage_details: List[Dict] = []
 
     if period == "daily":
-        weather_data = await get_temperature_series(
-            location, month, day, redis_client, years=list(years_to_fetch)
+        await _compute_per_year_records_daily(
+            location, month, day, years_to_fetch, unit_group, redis_client, missing_years, per_year
         )
-        if weather_data and "data" in weather_data:
-            if "metadata" in weather_data and "missing_years" in weather_data["metadata"]:
-                missing_years.extend(weather_data["metadata"]["missing_years"])
-
-            for data_point in weather_data["data"]:
-                year = int(data_point["x"])
-                temp = data_point["y"]
-                if temp is None:
-                    continue
-                converted = _convert_c_to_unit(temp, unit_group)
-                per_year[year] = TemperatureValue(
-                    date=f"{year}-{month:02d}-{day:02d}",
-                    year=year,
-                    temperature=round(converted, 2),
-                ).model_dump()
     elif period in ("weekly", "monthly", "yearly"):
-        (
-            window_values,
-            _aggregated,
-            window_missing,
-            window_coverage,
-        ) = await _collect_rolling_window_values(
+        window_values, _aggregated, window_missing, window_coverage = await _collect_rolling_window_values(
             location=location,
             period=period,  # type: ignore[arg-type]
             month=month,
@@ -1415,6 +1425,273 @@ async def _inline_fetch_missing_years(
             logger.warning("Error caching year %s: %s", year, e)
 
 
+async def _resolve_record_data_without_cache(
+    location: str,
+    period: str,
+    identifier: str,
+    redis_client: redis.Redis,
+    unit_group: str,
+    current_year: int,
+    years: List[int],
+    month: int,
+    day: int,
+) -> Tuple[Dict, List]:
+    """Fetch fresh data and rebuild the response when the cache is disabled."""
+    celsius_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+    per_year = _extract_per_year_records(celsius_data)
+    values_list = [per_year[y] for y in sorted(per_year.keys())]
+    if values_list:
+        data = _rebuild_full_response_from_values(
+            values_list, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+        )
+    else:
+        data = celsius_data
+    return data, values_list
+
+
+def _try_store_temporal_cache(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    end_date,
+    celsius_records: List,
+    location_identity,
+) -> None:
+    """Best-effort write of celsius records to the temporal cache; logs but does not raise on failure."""
+    try:
+        temporal_cache_set(
+            redis_client,
+            agg=period,
+            original_location=location,
+            end_date=end_date,
+            payload={"records": celsius_records},
+            canonical_name=location_identity.canonical_name,
+        )
+    except Exception as e:
+        logger.warning("Failed to store in temporal cache: %s", e)
+
+
+async def _fetch_fresh_and_build_cache(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    slug: str,
+    lookup_slugs: Tuple[str, ...],
+    current_year: int,
+    years: List[int],
+    month: int,
+    day: int,
+    unit_group: str,
+) -> Tuple[Dict, List, Optional[str]]:
+    """Cold path: fetch fresh data, store per-year records, assemble bundle if possible.
+
+    Returns (data, celsius_records, bundle_etag).
+    """
+    data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
+    per_year_records = _extract_per_year_records(data)
+    await _store_per_year_records(redis_client, period, slug, identifier, per_year_records, current_year)
+
+    current_year_missing = "metadata" in data and any(
+        e.get("year") == current_year for e in data["metadata"].get("missing_years", [])
+    )
+    bundle_etag = None
+    if not current_year_missing:
+        year_etags = await get_year_etags(
+            redis_client, period, slug, identifier, list(per_year_records.keys()), lookup_slugs=lookup_slugs
+        )
+        _, bundle_etag = await assemble_and_cache(redis_client, period, slug, identifier, per_year_records, year_etags)
+    elif DEBUG:
+        logger.debug("Not caching: current year %s missing from %s %s/%s", current_year, location, period, identifier)
+
+    values_list = [per_year_records[y] for y in sorted(per_year_records.keys())]
+    if values_list:
+        data = _rebuild_full_response_from_values(
+            values_list, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+        )
+    return data, values_list, bundle_etag
+
+
+async def _assemble_cached_record(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    slug: str,
+    lookup_slugs: Tuple[str, ...],
+    year_data: Dict[int, Dict],
+    missing_past: List[int],
+    missing_current: bool,
+    month: int,
+    day: int,
+    current_year: int,
+    years: List[int],
+    unit_group: str,
+    if_none_match: Optional[str],
+    response: Response,
+) -> Tuple[Optional[Dict], str, List, str]:
+    """Assemble a full response from cached per-year records, check the ETag, and rebuild.
+
+    Returns (data, cache_status, celsius_records, bundle_etag).
+    ``data`` is None when a 304 Not Modified has been signalled via ``response``.
+    """
+    from cache.core import ETagGenerator
+
+    year_etags = await get_year_etags(
+        redis_client, period, slug, identifier, list(year_data.keys()), lookup_slugs=lookup_slugs
+    )
+    _, bundle_etag = await assemble_and_cache(redis_client, period, slug, identifier, year_data, year_etags)
+
+    if if_none_match and ETagGenerator.matches_etag(bundle_etag, if_none_match):
+        response.status_code = 304
+        response.headers["ETag"] = bundle_etag
+        response.headers["X-Cache-Status"] = "HIT"
+        return None, "HIT", [], bundle_etag
+
+    values = [year_data[y] for y in sorted(year_data.keys())]
+    data = _rebuild_full_response_from_values(
+        values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
+    )
+    cache_status = "HIT" if not missing_past and not missing_current else "PARTIAL"
+    return data, cache_status, values, bundle_etag
+
+
+async def _handle_missing_cache_years(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    slug: str,
+    lookup_slugs: Tuple[str, ...],
+    month: int,
+    day: int,
+    current_year: int,
+    years: List[int],
+    unit_group: str,
+    if_none_match: Optional[str],
+    invalid_location_cache,
+    end_date,
+    response: Response,
+    missing_past: List[int],
+    missing_current: bool,
+    year_data: Dict[int, Dict],
+) -> Optional[Response]:
+    """Handle per-year cache misses: try stale bundle, enqueue refresh, then inline-fill.
+
+    Returns a stale Response (or None for a 304) when a stale bundle is served; None otherwise.
+    """
+    if not missing_past and missing_current:
+        stale_resp = await _try_serve_stale_bundle_for_current_year(
+            redis_client=redis_client, period=period, location=location, identifier=identifier,
+            slug=slug, lookup_slugs=lookup_slugs, month=month, day=day,
+            current_year=current_year, years=years, unit_group=unit_group,
+            if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
+            end_date=end_date, response=response,
+        )
+        if stale_resp is not None or response.status_code == 304:
+            return stale_resp
+        _enqueue_record_refresh_job(period, slug, identifier, current_year, location, "fetch current year")
+
+    # Fetch missing years inline. When only the current year is missing and there is no
+    # stale bundle to serve, we still need to fetch it inline — otherwise it gets left
+    # out of the assembled bundle.
+    await _inline_fetch_missing_years(
+        redis_client=redis_client, period=period, location=location, identifier=identifier,
+        slug=slug, current_year=current_year, missing_past=missing_past,
+        missing_current=missing_current, year_data=year_data,
+    )
+    return None
+
+
+async def _get_record_data(
+    *,
+    redis_client: redis.Redis,
+    period: str,
+    location: str,
+    identifier: str,
+    slug: str,
+    lookup_slugs: Tuple[str, ...],
+    month: int,
+    day: int,
+    current_year: int,
+    years: List[int],
+    unit_group: str,
+    if_none_match: Optional[str],
+    invalid_location_cache,
+    end_date,
+    location_identity,
+    response: Response,
+) -> Tuple[Optional[Response], Dict, str, List, Optional[str]]:
+    """Resolve record data through the full cache/fetch pipeline.
+
+    Returns (early_response, data, cache_status, celsius_records, bundle_etag).
+    ``early_response`` is non-None (or response.status_code==304) when the caller
+    should return it immediately without further processing.
+    """
+    if not CACHE_ENABLED:
+        data, celsius_records = await _resolve_record_data_without_cache(
+            location, period, identifier, redis_client, unit_group, current_year, years, month, day
+        )
+        return None, data, "DISABLED", celsius_records, None
+
+    bundle_resp = _try_serve_bundle_cache(
+        redis_client=redis_client, period=period, location=location, identifier=identifier,
+        slug=slug, lookup_slugs=lookup_slugs, month=month, day=day, current_year=current_year,
+        years=years, unit_group=unit_group, if_none_match=if_none_match,
+        invalid_location_cache=invalid_location_cache, end_date=end_date, response=response,
+    )
+    if bundle_resp is not None or response.status_code == 304:
+        return bundle_resp, {}, "HIT", [], None
+
+    temporal_resp = _try_serve_temporal_cache(
+        redis_client=redis_client, period=period, location=location, identifier=identifier,
+        month=month, day=day, current_year=current_year, years=years, unit_group=unit_group,
+        if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
+        location_identity=location_identity, end_date=end_date, response=response,
+    )
+    if temporal_resp is not None or response.status_code == 304:
+        return temporal_resp, {}, "HIT", [], None
+
+    year_data, missing_past, missing_current = await get_records(
+        redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
+    )
+
+    if missing_past or missing_current:
+        stale_resp = await _handle_missing_cache_years(
+            redis_client=redis_client, period=period, location=location, identifier=identifier,
+            slug=slug, lookup_slugs=lookup_slugs, month=month, day=day,
+            current_year=current_year, years=years, unit_group=unit_group,
+            if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
+            end_date=end_date, response=response,
+            missing_past=missing_past, missing_current=missing_current, year_data=year_data,
+        )
+        if stale_resp is not None or response.status_code == 304:
+            return stale_resp, {}, "STALE", [], None
+
+    if year_data:
+        data, cache_status, celsius_records, bundle_etag = await _assemble_cached_record(
+            redis_client=redis_client, period=period, location=location, identifier=identifier,
+            slug=slug, lookup_slugs=lookup_slugs, year_data=year_data,
+            missing_past=missing_past, missing_current=missing_current,
+            month=month, day=day, current_year=current_year, years=years,
+            unit_group=unit_group, if_none_match=if_none_match, response=response,
+        )
+        if data is None:  # 304 was signalled inside _assemble_cached_record
+            return None, {}, cache_status, [], bundle_etag
+        return None, data, cache_status, celsius_records, bundle_etag
+
+    data, celsius_records, bundle_etag = await _fetch_fresh_and_build_cache(
+        redis_client=redis_client, period=period, location=location, identifier=identifier,
+        slug=slug, lookup_slugs=lookup_slugs, current_year=current_year, years=years,
+        month=month, day=day, unit_group=unit_group,
+    )
+    return None, data, "MISS", celsius_records, bundle_etag
+
+
 @router.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
 async def get_record(
     request: Request,
@@ -1430,203 +1707,45 @@ async def get_record(
     try:
         location = _validate_record_location(location, invalid_location_cache)
 
-        # Parse identifier to get the end date for cache headers
         month, day, _ = parse_identifier(period, identifier)
         current_year = datetime.now(timezone.utc).year
         end_date = datetime(current_year, month, day).date()
-
         location_identity = await resolve_location_cache_identity(location)
         slug = location_identity.redis_slug
         lookup_slugs = location_identity.lookup_slugs or (slug,)
-
-        # Get year range (50 years back + current year)
         years = get_year_range(current_year)
-
-        # Check for ETag conditional request
         if_none_match = request.headers.get("if-none-match")
 
-        # Initialize variables for cache status tracking
-        year_data = {}
-        cache_status = "MISS"
-        bundle_etag_computed = None
-        celsius_records_for_temporal_cache = []
+        early_resp, data, cache_status, celsius_records, bundle_etag = await _get_record_data(
+            redis_client=redis_client, period=period, location=location, identifier=identifier,
+            slug=slug, lookup_slugs=lookup_slugs, month=month, day=day,
+            current_year=current_year, years=years, unit_group=unit_group,
+            if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
+            end_date=end_date, location_identity=location_identity, response=response,
+        )
+        if early_resp is not None or response.status_code == 304:
+            return early_resp
 
-        if CACHE_ENABLED:
-            bundle_resp = _try_serve_bundle_cache(
-                redis_client=redis_client, period=period, location=location, identifier=identifier,
-                slug=slug, lookup_slugs=lookup_slugs, month=month, day=day, current_year=current_year,
-                years=years, unit_group=unit_group, if_none_match=if_none_match,
-                invalid_location_cache=invalid_location_cache, end_date=end_date, response=response,
-            )
-            if bundle_resp is not None or response.status_code == 304:
-                return bundle_resp
-
-            temporal_resp = _try_serve_temporal_cache(
-                redis_client=redis_client, period=period, location=location, identifier=identifier,
-                month=month, day=day, current_year=current_year, years=years, unit_group=unit_group,
-                if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
-                location_identity=location_identity, end_date=end_date, response=response,
-            )
-            if temporal_resp is not None or response.status_code == 304:
-                return temporal_resp
-
-            # Step 2: MGET all year keys
-            year_data, missing_past, missing_current = await get_records(
-                redis_client, period, slug, identifier, years, lookup_slugs=lookup_slugs
-            )
-
-            if missing_past or missing_current:
-                # If only the current year is missing, try to serve a stale bundle while a refresh job runs.
-                if not missing_past and missing_current:
-                    stale_resp = await _try_serve_stale_bundle_for_current_year(
-                        redis_client=redis_client, period=period, location=location, identifier=identifier,
-                        slug=slug, lookup_slugs=lookup_slugs, month=month, day=day,
-                        current_year=current_year, years=years, unit_group=unit_group,
-                        if_none_match=if_none_match, invalid_location_cache=invalid_location_cache,
-                        end_date=end_date, response=response,
-                    )
-                    if stale_resp is not None or response.status_code == 304:
-                        return stale_resp
-
-                    # No stale bundle — enqueue job to fetch current year
-                    _enqueue_record_refresh_job(
-                        period, slug, identifier, current_year, location, "fetch current year"
-                    )
-
-                # Fetch missing years inline. When only the current year is missing
-                # and there is no stale bundle to serve, we still need to fetch it
-                # inline — otherwise it gets left out of the assembled bundle.
-                await _inline_fetch_missing_years(
-                    redis_client=redis_client, period=period, location=location, identifier=identifier,
-                    slug=slug, current_year=current_year, missing_past=missing_past,
-                    missing_current=missing_current, year_data=year_data,
-                )
-
-            # Step 4: Assemble response from per-year records
-            if year_data:
-                # Get per-year ETags
-                year_etags = await get_year_etags(
-                    redis_client, period, slug, identifier, list(year_data.keys()), lookup_slugs=lookup_slugs
-                )
-
-                # Assemble bundle and store with ETag (returns payload and ETag)
-                bundle_payload, bundle_etag_computed = await assemble_and_cache(
-                    redis_client, period, slug, identifier, year_data, year_etags
-                )
-
-                # Check ETag conditional request
-                if if_none_match:
-                    from cache.core import ETagGenerator
-
-                    if ETagGenerator.matches_etag(bundle_etag_computed, if_none_match):
-                        response.status_code = 304
-                        response.headers["ETag"] = bundle_etag_computed
-                        response.headers["X-Cache-Status"] = "HIT"
-                        return None
-
-                # Rebuild full response from year_data using helper
-                values = [year_data[y] for y in sorted(year_data.keys())]
-                celsius_records_for_temporal_cache = values
-                data = _rebuild_full_response_from_values(
-                    values, period, location, identifier, month, day, current_year, years, redis_client, unit_group
-                )
-
-                # Set cache status
-                cache_status = "HIT" if not missing_past and not missing_current else "PARTIAL"
-            else:
-                # No cached data — fetch fresh synchronously (sync fallback path;
-                # normal clients use the /async endpoint and only land here if
-                # the async flow is unavailable).
-                data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
-
-                # Extract and store per-year records (celsius)
-                per_year_records = _extract_per_year_records(data)
-                await _store_per_year_records(redis_client, period, slug, identifier, per_year_records, current_year)
-
-                # Don't cache the bundle if current year is missing (incomplete data)
-                current_year_missing = False
-                if "metadata" in data and "missing_years" in data["metadata"]:
-                    current_year_missing = any(
-                        entry.get("year") == current_year for entry in data["metadata"]["missing_years"]
-                    )
-
-                if current_year_missing:
-                    if DEBUG:
-                        logger.debug(
-                            f"Not caching: Current year {current_year} is missing from {location} {period}/{identifier}"
-                        )
-                    bundle_etag_computed = None
-                else:
-                    year_etags = await get_year_etags(
-                        redis_client,
-                        period,
-                        slug,
-                        identifier,
-                        list(per_year_records.keys()),
-                        lookup_slugs=lookup_slugs,
-                    )
-                    bundle_payload, bundle_etag_computed = await assemble_and_cache(
-                        redis_client, period, slug, identifier, per_year_records, year_etags
-                    )
-
-                values_list = [per_year_records[y] for y in sorted(per_year_records.keys())]
-                celsius_records_for_temporal_cache = values_list
-                if values_list:
-                    data = _rebuild_full_response_from_values(
-                        values_list,
-                        period,
-                        location,
-                        identifier,
-                        month,
-                        day,
-                        current_year,
-                        years,
-                        redis_client,
-                        unit_group,
-                    )
-
-                cache_status = "MISS"
-        else:
-            # Cache disabled, fetch fresh in celsius then convert for response
-            celsius_data = await get_temperature_data_v1(location, period, identifier, "celsius", redis_client)
-            per_year = _extract_per_year_records(celsius_data)
-            values_list = [per_year[y] for y in sorted(per_year.keys())]
-            if values_list:
-                data = _rebuild_full_response_from_values(
-                    values_list, period, location, identifier, month, day, current_year, years, redis_client, unit_group
-                )
-            else:
-                data = celsius_data
-
-        # Validate the response data
         is_valid, error_msg = validate_location_response(data, location)
         if not is_valid:
             invalid_location_cache.mark_location_invalid(location, "no_data")
             raise HTTPException(status_code=400, detail=error_msg)
 
-        # Ensure updated timestamp
         if "updated" not in data:
             data["updated"] = datetime.now(timezone.utc).isoformat()
 
-        if bundle_etag_computed is None:
-            bundle_etag_computed = _resolve_bundle_etag(redis_client, period, slug, identifier, data)
+        if bundle_etag is None:
+            bundle_etag = _resolve_bundle_etag(redis_client, period, slug, identifier, data)
 
-        if CACHE_ENABLED and celsius_records_for_temporal_cache:
-            try:
-                temporal_payload = {"records": celsius_records_for_temporal_cache}
-                temporal_cache_set(
-                    redis_client,
-                    agg=period,
-                    original_location=location,
-                    end_date=end_date,
-                    payload=temporal_payload,
-                    canonical_name=location_identity.canonical_name,
-                )
-            except Exception as e:
-                logger.warning("Failed to store in temporal cache: %s", e)
+        if CACHE_ENABLED and celsius_records:
+            _try_store_temporal_cache(
+                redis_client=redis_client, period=period, location=location,
+                end_date=end_date, celsius_records=celsius_records,
+                location_identity=location_identity,
+            )
 
         json_response = JSONResponse(content=data)
-        json_response.headers["ETag"] = bundle_etag_computed
+        json_response.headers["ETag"] = bundle_etag
         json_response.headers["X-Cache-Status"] = cache_status if CACHE_ENABLED else "DISABLED"
         set_weather_cache_headers(
             json_response, req_date=end_date, key_parts=f"{location}|{identifier}|{period}|metric|v1"
