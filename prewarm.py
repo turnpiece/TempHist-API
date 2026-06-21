@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote  # URL-encode location path segments
 
 import aiohttp
+import anyio
 import redis
 
 # Load .env from project root (config.DOTENV_PATH).
@@ -374,8 +375,9 @@ async def main():
             locations = locs[: args.locations] if locs else []
         else:
             # Simple text file with one location per line
-            with open(args.locations_file, "r") as f:  # noqa: ASYNC230
-                locations = [line.strip() for line in f if line.strip()][: args.locations]
+            async with await anyio.open_file(args.locations_file, "r") as f:
+                content = await f.read()
+            locations = [line.strip() for line in content.splitlines() if line.strip()][: args.locations]
     else:
         # Query /v1/locations/popular first; fall back to preapproved list
         locations = load_locations_to_prewarm(args.base_url, api_token, args.locations)
@@ -394,8 +396,8 @@ async def main():
 
         # Save results to file
         results_file = f"prewarm_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(results_file, "w") as f:  # noqa: ASYNC230
-            json.dump(results, f, indent=2)
+        async with await anyio.open_file(results_file, "w") as f:
+            await f.write(json.dumps(results, indent=2))
 
         logger.info(f"📄 Results saved to: {results_file}")
 
