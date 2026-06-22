@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from routers._responses import error_responses
 from routers.dependencies import get_redis_client
+from routers.locations import locations_data
 from utils.share_store import get_share_store
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,24 @@ _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
 
 def _share_cache_key(share_id: str) -> str:
     return f"share:{share_id}"
+
+
+def _resolve_location_name(location: str) -> str:
+    """Return a human-readable display name for a location string.
+
+    If the value matches a preapproved location ID (case-insensitive), return
+    the canonical display name (e.g. "CAPE_TOWN" → "Cape Town, Western Cape,
+    South Africa"). Otherwise return the original string unchanged.
+    """
+    normalised = location.lower()
+    for loc in locations_data:
+        if loc.id == normalised:
+            parts = [loc.name]
+            if loc.admin1:
+                parts.append(loc.admin1)
+            parts.append(loc.country_name)
+            return ", ".join(parts)
+    return location
 
 
 class ShareCreate(BaseModel):
@@ -60,7 +79,7 @@ async def create_share(
 
     store = get_share_store()
     result = await store.create_share(
-        location=body.location,
+        location=_resolve_location_name(body.location),
         period=body.period,
         identifier=body.identifier,
         ref_year=body.ref_year,

@@ -448,8 +448,77 @@ class TestOgImage:
 
 import asyncio  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import patch as _patch  # noqa: E402
 
+from routers.shares import _resolve_location_name  # noqa: E402
 from utils.share_store import ShareStore, _haversine_km  # noqa: E402
+
+_FAKE_LOCATIONS = [
+    SimpleNamespace(id="cape_town", name="Cape Town", admin1="Western Cape", country_name="South Africa"),
+    SimpleNamespace(id="london", name="London", admin1="England", country_name="United Kingdom"),
+    SimpleNamespace(id="tokyo", name="Tokyo", admin1=None, country_name="Japan"),
+]
+
+
+class TestResolveLocationName:
+    def _resolve(self, location: str) -> str:
+        with _patch("routers.shares.locations_data", _FAKE_LOCATIONS):
+            return _resolve_location_name(location)
+
+    def test_uppercase_id_resolved(self):
+        assert self._resolve("CAPE_TOWN") == "Cape Town, Western Cape, South Africa"
+
+    def test_lowercase_id_resolved(self):
+        assert self._resolve("cape_town") == "Cape Town, Western Cape, South Africa"
+
+    def test_mixed_case_id_resolved(self):
+        assert self._resolve("Cape_Town") == "Cape Town, Western Cape, South Africa"
+
+    def test_location_without_admin1(self):
+        assert self._resolve("tokyo") == "Tokyo, Japan"
+
+    def test_display_name_passthrough(self):
+        result = self._resolve("Cape Town, Western Cape, South Africa")
+        assert result == "Cape Town, Western Cape, South Africa"
+
+    def test_unknown_id_passthrough(self):
+        assert self._resolve("UNKNOWN_PLACE") == "UNKNOWN_PLACE"
+
+
+class TestCreateShareLocationResolution:
+    def test_location_id_is_resolved_before_store(self, client, mock_redis):
+        """POST with a raw location ID must store the human-readable display name."""
+        store_mock = AsyncMock()
+        store_mock.create_share.return_value = {"id": "aB3xY7qZ", "url": "https://temphist.com/s/aB3xY7qZ"}
+        body = {**VALID_CREATE_BODY, "location": "CAPE_TOWN"}
+        with (
+            _patch("routers.shares.get_share_store", return_value=store_mock),
+            _patch("routers.shares.locations_data", _FAKE_LOCATIONS),
+        ):
+            response = client.post(
+                "/v1/shares",
+                json=body,
+                headers={"Authorization": "Bearer firebase-token"},
+            )
+        assert response.status_code == 201
+        store_mock.create_share.assert_called_once()
+        assert store_mock.create_share.call_args.kwargs["location"] == "Cape Town, Western Cape, South Africa"
+
+    def test_display_name_stored_unchanged(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.create_share.return_value = {"id": "aB3xY7qZ", "url": "https://temphist.com/s/aB3xY7qZ"}
+        with (
+            _patch("routers.shares.get_share_store", return_value=store_mock),
+            _patch("routers.shares.locations_data", _FAKE_LOCATIONS),
+        ):
+            response = client.post(
+                "/v1/shares",
+                json=VALID_CREATE_BODY,
+                headers={"Authorization": "Bearer firebase-token"},
+            )
+        assert response.status_code == 201
+        assert store_mock.create_share.call_args.kwargs["location"] == "London, England, United Kingdom"
 
 
 class TestHaversine:
