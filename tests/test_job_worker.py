@@ -371,6 +371,53 @@ class TestProcessJobIntegration:
         # After the RedisError on update_job_status(PROCESSING), no further status updates possible
         assert job_manager.update_job_status.call_count == 1
 
+    @pytest.mark.asyncio
+    async def test_success_logs_job_metric(self, caplog):
+        w = _make_worker()
+        job_manager = MagicMock()
+        params = {"scope": "yearly", "location": "Tokyo", "identifier": "06-15"}
+        job_manager.get_job_status.return_value = {"type": "record_computation", "params": params}
+        with patch.object(w, "_run_job_with_timeout", new=AsyncMock(return_value={"data": "ok"})):
+            with caplog.at_level("INFO", logger="job_worker"):
+                await w.process_job("j1", job_manager)
+        metric_lines = [r.message for r in caplog.records if r.message.startswith("JOB_METRIC")]
+        assert len(metric_lines) == 1
+        assert "job_id=j1" in metric_lines[0]
+        assert "status=success" in metric_lines[0]
+        assert "period=yearly" in metric_lines[0]
+        assert "location=Tokyo" in metric_lines[0]
+
+    @pytest.mark.asyncio
+    async def test_error_logs_job_metric_with_error_type(self, caplog):
+        w = _make_worker()
+        job_manager = MagicMock()
+        params = {"scope": "monthly", "location": "Osaka", "identifier": "01-01"}
+        job_manager.get_job_status.return_value = {"type": "record_computation", "params": params}
+        with patch.object(w, "_run_job_with_timeout", new=AsyncMock(side_effect=ValueError("bad"))):
+            with caplog.at_level("INFO", logger="job_worker"):
+                await w.process_job("j1", job_manager)
+        metric_lines = [r.message for r in caplog.records if r.message.startswith("JOB_METRIC")]
+        assert len(metric_lines) == 1
+        assert "status=error" in metric_lines[0]
+        assert "error_type=ValueError" in metric_lines[0]
+        assert "period=monthly" in metric_lines[0]
+
+    @pytest.mark.asyncio
+    async def test_timeout_logs_job_metric_with_timeout_error_type(self, caplog):
+        w = _make_worker()
+        job_manager = MagicMock()
+        params = {"scope": "yearly", "location": "Kyoto", "identifier": "12-25"}
+        job_manager.get_job_status.return_value = {"type": "record_computation", "params": params}
+        with patch.object(
+            w, "_run_job_with_timeout", new=AsyncMock(side_effect=TimeoutError("Job exceeded 600s execution limit"))
+        ):
+            with caplog.at_level("INFO", logger="job_worker"):
+                await w.process_job("j1", job_manager)
+        metric_lines = [r.message for r in caplog.records if r.message.startswith("JOB_METRIC")]
+        assert len(metric_lines) == 1
+        assert "error_type=TimeoutError" in metric_lines[0]
+        assert "location=Kyoto" in metric_lines[0]
+
 
 # ---------------------------------------------------------------------------
 # process_cache_warming_job integration

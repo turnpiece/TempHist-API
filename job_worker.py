@@ -12,7 +12,7 @@ import os
 import signal
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import redis
 
@@ -232,11 +232,51 @@ class JobWorker:
         except Exception as e:
             logger.error(f"❌ Error during deep queue cleanup: {e}")
 
+    def _log_job_metric(
+        self,
+        *,
+        job_id: str,
+        job_type: Optional[str],
+        params: Dict[str, Any],
+        status: str,
+        duration: float,
+        error_type: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Emit one structured, greppable summary line per finished job.
+
+        Distinct from the surrounding traceback logs (which are easy to lose in
+        Railway's stream) so a failing/slow job — job_id, period, location,
+        duration, error reason — can be found or aggregated on its own. Added
+        for P1-153 to confirm whether async jobs are actually failing/timing out
+        server-side, rather than inferring it from client-side fallback behavior.
+        """
+        from utils.sanitization import sanitize_for_logging
+
+        location = params.get("location")
+        log_fn = logger.error if status == "error" else logger.info
+        log_fn(
+            "JOB_METRIC job_id=%s type=%s status=%s period=%s location=%s identifier=%s year=%s "
+            "duration_s=%.2f error_type=%s error=%s",
+            job_id,
+            job_type,
+            status,
+            params.get("scope") or params.get("period"),
+            sanitize_for_logging(location) if location else None,
+            params.get("identifier"),
+            params.get("year"),
+            duration,
+            error_type,
+            sanitize_for_logging(error_message) if error_message else None,
+        )
+
     async def process_job(self, job_id: str, job_manager):
         """Process a single job."""
         import traceback
 
         start_time = datetime.now(timezone.utc)
+        job_type: Optional[str] = None
+        params: Dict[str, Any] = {}
         # Keep heartbeat alive so the worker-status endpoint sees us as healthy
         # even when a single long-running job would otherwise starve the poll loop.
         self._refresh_heartbeat()
@@ -256,21 +296,32 @@ class JobWorker:
 
             result = await self._run_job_with_timeout(job_id=job_id, job_type=job_type, params=params)
 
-            end_time = datetime.now(timezone.utc)
-            duration = (end_time - start_time).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             job_manager.update_job_status(job_id, JobStatus.READY, result)
             logger.info(f"✅ Job completed: {job_id} (took {duration:.2f}s)")
+            self._log_job_metric(job_id=job_id, job_type=job_type, params=params, status="success", duration=duration)
             self.redis.lrem(self.job_queue_key, 1, job_id)
 
         except redis.RedisError as redis_error:
             # Redis errors - don't update job status if Redis is down
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             error_traceback = traceback.format_exc()
             logger.error(f"❌ Redis error processing job {job_id}: {type(redis_error).__name__}: {str(redis_error)}")
             logger.error(f"❌ Full traceback:\n{error_traceback}")
+            self._log_job_metric(
+                job_id=job_id,
+                job_type=job_type,
+                params=params,
+                status="error",
+                duration=duration,
+                error_type=type(redis_error).__name__,
+                error_message=str(redis_error),
+            )
             # Cannot update job status or remove from queue if Redis is failing
 
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as data_error:
             # Data/validation errors - store in job status
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             error_traceback = traceback.format_exc()
             error_details = {
                 "error_type": type(data_error).__name__,
@@ -281,10 +332,20 @@ class JobWorker:
             logger.error(f"❌ Data error processing job {job_id}: {type(data_error).__name__}: {str(data_error)}")
             logger.error(f"❌ Full traceback:\n{error_traceback}")
             job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(data_error), error_details=error_details)
+            self._log_job_metric(
+                job_id=job_id,
+                job_type=job_type,
+                params=params,
+                status="error",
+                duration=duration,
+                error_type=type(data_error).__name__,
+                error_message=str(data_error),
+            )
             self.redis.lrem(self.job_queue_key, 1, job_id)
 
         except Exception as e:
             # Unexpected errors - log and store
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             error_traceback = traceback.format_exc()
             error_details = {
                 "error_type": type(e).__name__,
@@ -295,6 +356,15 @@ class JobWorker:
             logger.error(f"❌ Unexpected error processing job {job_id}: {type(e).__name__}: {str(e)}")
             logger.error(f"❌ Full traceback:\n{error_traceback}")
             job_manager.update_job_status(job_id, JobStatus.ERROR, error=str(e), error_details=error_details)
+            self._log_job_metric(
+                job_id=job_id,
+                job_type=job_type,
+                params=params,
+                status="error",
+                duration=duration,
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
             self.redis.lrem(self.job_queue_key, 1, job_id)
 
     def _dispatch_job_coro(self, *, job_type: str, params: dict):
