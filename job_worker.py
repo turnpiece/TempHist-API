@@ -240,6 +240,7 @@ class JobWorker:
         params: Dict[str, Any],
         status: str,
         duration: float,
+        queue_wait_s: Optional[float] = None,
         error_type: Optional[str] = None,
         error_message: Optional[str] = None,
     ) -> None:
@@ -247,9 +248,14 @@ class JobWorker:
 
         Distinct from the surrounding traceback logs (which are easy to lose in
         Railway's stream) so a failing/slow job — job_id, period, location,
-        duration, error reason — can be found or aggregated on its own. Added
-        for P1-153 to confirm whether async jobs are actually failing/timing out
-        server-side, rather than inferring it from client-side fallback behavior.
+        queue wait, execution duration, error reason — can be found or aggregated
+        on its own. Added for P1-153 to confirm whether async jobs are actually
+        failing/timing out server-side, rather than inferring it from client-side
+        fallback behavior. queue_wait_s separates "sat pending too long behind
+        other queued jobs" from "was slow to execute once picked up" — the worker
+        processes jobs one at a time, so a burst of jobs (e.g. cold-location
+        backfills) can bury a single job well past the client's poll budget even
+        though that job's own duration_s looks fine once it finally runs.
         """
         from utils.sanitization import sanitize_for_logging
 
@@ -257,7 +263,7 @@ class JobWorker:
         log_fn = logger.error if status == "error" else logger.info
         log_fn(
             "JOB_METRIC job_id=%s type=%s status=%s period=%s location=%s identifier=%s year=%s "
-            "duration_s=%.2f error_type=%s error=%s",
+            "queue_wait_s=%s duration_s=%.2f error_type=%s error=%s",
             job_id,
             job_type,
             status,
@@ -265,6 +271,7 @@ class JobWorker:
             sanitize_for_logging(location) if location else None,
             params.get("identifier"),
             params.get("year"),
+            f"{queue_wait_s:.2f}" if queue_wait_s is not None else None,
             duration,
             error_type,
             sanitize_for_logging(error_message) if error_message else None,
@@ -277,6 +284,7 @@ class JobWorker:
         start_time = datetime.now(timezone.utc)
         job_type: Optional[str] = None
         params: Dict[str, Any] = {}
+        queue_wait_s: Optional[float] = None
         # Keep heartbeat alive so the worker-status endpoint sees us as healthy
         # even when a single long-running job would otherwise starve the poll loop.
         self._refresh_heartbeat()
@@ -292,6 +300,7 @@ class JobWorker:
 
             job_type = job_data.get("type")
             params = job_data.get("params", {})
+            queue_wait_s = self._compute_queue_wait(job_data, start_time)
             logger.info(f"📋 Job type: {job_type}, Params: {params}")
 
             result = await self._run_job_with_timeout(job_id=job_id, job_type=job_type, params=params)
@@ -299,7 +308,14 @@ class JobWorker:
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             job_manager.update_job_status(job_id, JobStatus.READY, result)
             logger.info(f"✅ Job completed: {job_id} (took {duration:.2f}s)")
-            self._log_job_metric(job_id=job_id, job_type=job_type, params=params, status="success", duration=duration)
+            self._log_job_metric(
+                job_id=job_id,
+                job_type=job_type,
+                params=params,
+                status="success",
+                duration=duration,
+                queue_wait_s=queue_wait_s,
+            )
             self.redis.lrem(self.job_queue_key, 1, job_id)
 
         except redis.RedisError as redis_error:
@@ -314,6 +330,7 @@ class JobWorker:
                 params=params,
                 status="error",
                 duration=duration,
+                queue_wait_s=queue_wait_s,
                 error_type=type(redis_error).__name__,
                 error_message=str(redis_error),
             )
@@ -338,6 +355,7 @@ class JobWorker:
                 params=params,
                 status="error",
                 duration=duration,
+                queue_wait_s=queue_wait_s,
                 error_type=type(data_error).__name__,
                 error_message=str(data_error),
             )
@@ -362,10 +380,23 @@ class JobWorker:
                 params=params,
                 status="error",
                 duration=duration,
+                queue_wait_s=queue_wait_s,
                 error_type=type(e).__name__,
                 error_message=str(e),
             )
             self.redis.lrem(self.job_queue_key, 1, job_id)
+
+    @staticmethod
+    def _compute_queue_wait(job_data: Dict[str, Any], reference_time: datetime) -> Optional[float]:
+        """Seconds between job creation and when this worker picked it up, or None if unavailable."""
+        created_at_str = job_data.get("created_at")
+        if not created_at_str:
+            return None
+        try:
+            created_at = datetime.fromisoformat(created_at_str)
+        except ValueError:
+            return None
+        return (reference_time - created_at).total_seconds()
 
     def _dispatch_job_coro(self, *, job_type: str, params: dict):
         """Return the coroutine for the given job type, or raise ValueError."""

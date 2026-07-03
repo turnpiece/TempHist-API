@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -401,6 +402,30 @@ class TestProcessJobIntegration:
         assert "status=error" in metric_lines[0]
         assert "error_type=ValueError" in metric_lines[0]
         assert "period=monthly" in metric_lines[0]
+
+    @pytest.mark.asyncio
+    async def test_success_logs_queue_wait_from_created_at(self, caplog):
+        import datetime as dt
+
+        w = _make_worker()
+        job_manager = MagicMock()
+        created_at = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=45)).isoformat()
+        params = {"scope": "yearly", "location": "Taito, Japan"}
+        job_manager.get_job_status.return_value = {
+            "type": "record_computation",
+            "params": params,
+            "created_at": created_at,
+        }
+        with patch.object(w, "_run_job_with_timeout", new=AsyncMock(return_value={"data": "ok"})):
+            with caplog.at_level("INFO", logger="job_worker"):
+                await w.process_job("j1", job_manager)
+        metric_lines = [r.message for r in caplog.records if r.message.startswith("JOB_METRIC")]
+        assert len(metric_lines) == 1
+        assert "queue_wait_s=45." in metric_lines[0] or "queue_wait_s=44." in metric_lines[0]
+
+    def test_compute_queue_wait_missing_created_at_returns_none(self):
+        w = _make_worker()
+        assert w._compute_queue_wait({}, datetime.now(timezone.utc)) is None
 
     @pytest.mark.asyncio
     async def test_timeout_logs_job_metric_with_timeout_error_type(self, caplog):
