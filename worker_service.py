@@ -49,6 +49,17 @@ def validate_environment():
         logger.error(f"❌ Missing required environment variables: {', '.join(missing)}")
         sys.exit(1)
 
+    # Not fatal — geocoding falls back to the preapproved locations list — but
+    # a worker without this env var silently fails every job for any
+    # non-preapproved location (P1-153: this is easy to miss since the API
+    # service and worker service have independent Railway env vars, and the
+    # API having it set gives no indication the worker does too).
+    if not os.getenv("MAPBOX_TOKEN", "").strip():
+        logger.warning(
+            "⚠️  MAPBOX_TOKEN is not set on this worker — record_computation jobs "
+            "for any non-preapproved location will fail with location_not_found"
+        )
+
     logger.info("✅ Environment variables validated")
     return required_vars
 
