@@ -396,8 +396,17 @@ async def _enqueue_backfill_and_collect_ranges(
         if not missing_dates:
             continue
 
-        await _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year, slug=slug)
-        if not coverage_ok:
+        if coverage_ok:
+            # Coverage is good enough to serve now, but some days are still
+            # missing — let the worker backfill them in the background so the
+            # year eventually reaches full coverage, without blocking this request.
+            await _enqueue_backfill_job(period, location, f"{month:02d}-{day:02d}", year, slug=slug)
+        else:
+            # Coverage isn't good enough to serve as-is, so this request already
+            # fetches the missing range inline below (and persists it via the
+            # daily temperature store). A separate backfill job here would just
+            # redo that same fetch — for a cold location that's ~1 duplicate job
+            # per year, per period type, flooding the single-threaded job worker.
             ranges_to_fetch.extend(
                 (year, range_start, range_end)
                 for range_start, range_end in _collapse_consecutive_dates(missing_dates)
