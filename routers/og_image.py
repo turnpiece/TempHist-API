@@ -340,22 +340,6 @@ def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:
     trend_alpha = min(1.0, max(0.05, abs(gf)))
     ax.plot(trend_temps, years, color=_TREND_LINE, linewidth=2, alpha=trend_alpha, zorder=3, linestyle="-")
     ax.set_ylim(y_min_axis, y_max_axis)
-
-    # Annotate ref_year bar with its value
-    if ref_year in years:
-        idx = years.index(ref_year)
-        ref_temp = temps[idx]
-        ax.annotate(
-            f"{ref_temp:.0f}{unit_symbol}" if unit == "fahrenheit" else f"{ref_temp:.1f}{unit_symbol}",
-            xy=(ref_temp, ref_year),
-            xytext=(8, 0),
-            textcoords="offset points",
-            va="center",
-            color=_AVG_LINE,
-            fontsize=13,
-            fontweight="bold",
-        )
-
     ax.set_xlim(x_min, x_max)
 
     if show_title:
