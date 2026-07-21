@@ -193,3 +193,18 @@ class TestGenerateSummaryAverageAwareWording:
         data = self._data([14, 15, 16, 24, 20], 22)
         summary = generate_summary(data, self._date(), mean=15.0)
         assert "warmer than last year but not as warm as" in summary
+
+    def test_diff_uses_raw_mean_not_pre_rounded_mean(self):
+        # Regression test: previously `mean` was rounded to 2dp before subtracting,
+        # while the per-year `anomaly` field (routers/v1_records.py) always subtracted
+        # the raw mean. For a fractional mean like 13.7632, that produced a mismatch:
+        # summary diff = round(13.91 - round(13.7632, 2), 1) = round(0.1468, 1) = 0.1 (was fine here)
+        # but other fractional means (e.g. 19.256) diverged, e.g. old: -5.4 vs anomaly-consistent: -5.3.
+        # Assert the summary's diff now matches round(latest - raw_mean, 1), i.e. no pre-rounding step.
+        raw_mean = 19.256
+        current_temp = 13.91
+        data = self._data([raw_mean] * 5, current_temp)
+        summary = generate_summary(data, self._date(), mean=raw_mean)
+        expected_diff = round(current_temp - raw_mean, 1)
+        assert f"{abs(expected_diff)}" in summary
+        assert "cooler than average" in summary

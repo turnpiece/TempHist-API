@@ -293,7 +293,7 @@ def generate_summary(
     if latest.get("y") is None:
         return "No valid temperature data for the latest year."
 
-    avg_temp = round(mean, 2) if mean is not None else calculate_historical_average(data)
+    avg_temp = mean if mean is not None else calculate_historical_average(data)
     diff = latest["y"] - avg_temp
     is_above_average = latest["y"] > avg_temp
     is_fahrenheit = unit_group.lower() == "fahrenheit"
