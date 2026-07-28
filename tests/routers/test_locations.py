@@ -766,6 +766,34 @@ class TestSearchEndpoint:
             assert _find_preapproved_id("Shoreditch", "GB") is None
             assert _find_preapproved_id("London", "US") is None  # wrong country
 
+    def test_find_preapproved_id_matches_country_name_without_code(self, sample_locations):
+        """A client that only knows the country's display name (no ISO code) still resolves."""
+        with patch("routers.locations.locations_data", sample_locations):
+            assert _find_preapproved_id("London", country_name="United Kingdom") == "london"
+            assert _find_preapproved_id("London", country_name="united kingdom") == "london"  # case-insensitive
+            assert _find_preapproved_id("London", country_name="France") is None  # wrong country
+
+    def test_resolve_canonical_id_matches_preapproved_via_country_name(self, sample_locations):
+        """No country_code supplied, but country_name is enough to resolve to the preapproved id."""
+        with patch("routers.locations.locations_data", sample_locations):
+            req = SelectionRequest(name="London", country_name="United Kingdom")
+            assert _resolve_canonical_id(req) == "london"
+
+    def test_resolve_canonical_id_composite_name_matches_preapproved_city_segment(self, sample_locations):
+        """A 'City, Admin1, Country' composite name resolves via its city segment."""
+        with patch("routers.locations.locations_data", sample_locations):
+            req = SelectionRequest(name="London, England, United Kingdom", country_code="GB")
+            assert _resolve_canonical_id(req) == "london"
+
+    def test_resolve_canonical_id_composite_name_no_country_slugs_city_segment(self):
+        """With no preapproved match and no country info, only the city segment is slugged —
+        bounding the fallback slug (e.g. 'takayama') instead of the whole composite string
+        (e.g. 'takayama_gifu_prefecture_japan'), so it can still converge with a slug minted
+        elsewhere from just the city name."""
+        with patch("routers.locations.locations_data", []):
+            req = SelectionRequest(name="Takayama, Gifu Prefecture, Japan")
+            assert _resolve_canonical_id(req) == "takayama"
+
     def test_mapbox_path_enriches_location_id(self, client, mock_locations_data):
         """Mapbox path attaches location_id when result matches a preapproved location."""
         mapbox_results = [
