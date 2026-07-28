@@ -368,11 +368,27 @@ def _loc_to_dict(loc: LocationItem, include_images: bool) -> dict:
     return d
 
 
-def _find_preapproved_id(name: str, country_code: str) -> Optional[str]:
-    """Return the canonical location ID if name+country_code matches a preapproved location."""
-    target = (name.lower(), country_code.upper())
+def _find_preapproved_id(
+    name: str,
+    country_code: Optional[str] = None,
+    country_name: Optional[str] = None,
+) -> Optional[str]:
+    """Return the canonical location ID if name+country matches a preapproved location.
+
+    Matches on country_code when supplied; falls back to a case-insensitive
+    country_name match so clients that only know a country's display name
+    (no ISO code — e.g. some Mapbox/geocoder responses) can still resolve.
+    """
+    name_lower = name.lower()
+    code = country_code.upper() if country_code else None
+    name_lower_country = country_name.lower() if country_name else None
+
     for loc in locations_data:
-        if (loc.name.lower(), loc.country_code) == target:
+        if loc.name.lower() != name_lower:
+            continue
+        if code and loc.country_code == code:
+            return loc.id
+        if name_lower_country and loc.country_name.lower() == name_lower_country:
             return loc.id
     return None
 
@@ -411,21 +427,37 @@ def _resolve_canonical_id(body: "SelectionRequest") -> str:
 
     Resolution order:
     1. ``location_id`` if explicitly supplied.
-    2. Preapproved list match on name + country_code (so submissions without
-       a location_id still accumulate signal toward the popular ranking when
-       the location is in the preapproved list).
-    3. Slug generated from name — lowercase, non-alphanumeric runs replaced
-       by underscores.  Allows tracking any location even if not preapproved.
+    2. Preapproved list match on name + country (code or name) — so
+       submissions without a location_id still accumulate signal toward the
+       popular ranking when the location is in the preapproved list.
+    3. If name is a composite "City, Admin1, Country"-style string, retry
+       step 2 against just the city segment. This is a defensive fallback for
+       clients that submit a free-text display string with no coordinates and
+       no country code/name — it bounds a mis-resolved submission to a
+       city-level slug (e.g. "takayama") instead of a whole-string slug that
+       fragments signal for the same place (e.g. "takayama_gifu_prefecture_japan").
+    4. Slug generated from the (possibly city-only) name — lowercase,
+       non-alphanumeric runs replaced by underscores. Allows tracking any
+       location even if not preapproved.
     """
     if body.location_id:
         return body.location_id
 
     name = body.name or ""
+    has_country = bool(body.country_code or body.country_name)
 
-    if body.country_code:
-        preapproved_id = _find_preapproved_id(name, body.country_code)
+    if has_country:
+        preapproved_id = _find_preapproved_id(name, body.country_code, body.country_name)
         if preapproved_id:
             return preapproved_id
+
+    city = name.split(",", 1)[0].strip()
+    if city and city != name:
+        if has_country:
+            preapproved_id = _find_preapproved_id(city, body.country_code, body.country_name)
+            if preapproved_id:
+                return preapproved_id
+        name = city
 
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "unknown"
 
