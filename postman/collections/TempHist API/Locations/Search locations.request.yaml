@@ -1,6 +1,7 @@
 $kind: http-request
-url: "{{baseURL}}/v1/locations/search"
+name: Search locations
+url: "{{baseURL}}/v1/locations/search?q=madrid"
 method: GET
 queryParams:
-  q: london
+  q: madrid
 order: 3000
