@@ -572,10 +572,12 @@ async def _get_mapbox_client() -> aiohttp.ClientSession:
 async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
     """
     Call the Mapbox Geocoding v5 API and return a list of dicts with keys:
-      name, admin1, country_name, country_code
+      name, admin1, country_name, country_code, latitude, longitude, timezone
     Results are cached in Redis for SEARCH_CACHE_TTL seconds.
     """
-    cache_key = f"geocode:mapbox:v1:{query.strip().lower()}:{limit}"
+    # v2: added latitude/longitude/timezone (P1-161) — bumped so stale v1
+    # entries (missing those fields) aren't served from cache after deploy.
+    cache_key = f"geocode:mapbox:v2:{query.strip().lower()}:{limit}"
     cached = await get_cached_response(cache_key)
     if cached is not None:
         return cached.get("results", [])
@@ -613,12 +615,21 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
         if not country_name:
             # Top-level feature may itself be a country-level result; skip it
             continue
+
+        center = feature.get("center") or []
+        latitude = center[1] if len(center) == 2 else None
+        longitude = center[0] if len(center) == 2 else None
+        timezone = _tf.timezone_at(lng=longitude, lat=latitude) if latitude is not None and longitude is not None else None
+
         results.append(
             {
                 "name": name,
                 "admin1": admin1,
                 "country_name": country_name,
                 "country_code": country_code,
+                "latitude": latitude,
+                "longitude": longitude,
+                "timezone": timezone,
             }
         )
 
@@ -728,6 +739,10 @@ async def search_locations(
       - admin1        first-level subdivision (state, province, etc.)
       - country_name  full country name
       - country_code  ISO 3166-1 alpha-2 code
+      - latitude      latitude coordinate (null if unavailable)
+      - longitude     longitude coordinate (null if unavailable)
+      - timezone      IANA timezone identifier, derived from coordinates
+                      (null if coordinates are unavailable)
       - location_id   canonical ID if the result matches a preapproved location,
                       otherwise null. Clients should pass this value to
                       POST /v1/locations/selections when non-null.
@@ -786,6 +801,9 @@ async def search_locations(
                 "admin1": loc.admin1,
                 "country_name": loc.country_name,
                 "country_code": loc.country_code,
+                "latitude": loc.latitude,
+                "longitude": loc.longitude,
+                "timezone": loc.timezone,
                 "location_id": loc.id,  # fallback results are always preapproved
             }
             for loc in ranked

@@ -28,6 +28,7 @@ from routers.locations import (
     LocationItem,
     SelectionRequest,
     _find_preapproved_id,
+    _geocode_mapbox,
     _resolve_canonical_id,
     convert_image_urls,
     filter_locations,
@@ -733,6 +734,17 @@ class TestSearchEndpoint:
         for loc in response.json()["locations"]:
             assert loc["location_id"] is not None
 
+    def test_fallback_results_include_timezone_and_coordinates(self, client, mock_locations_data):
+        """Fallback path (no Mapbox token) includes timezone/lat/lon (P1-161)."""
+        with patch("routers.locations.MAPBOX_TOKEN", ""):
+            response = client.get("/v1/locations/search?q=London")
+        assert response.status_code == 200
+        locs = response.json()["locations"]
+        london = next(loc for loc in locs if loc["name"] == "London")
+        assert london["timezone"] == "Europe/London"
+        assert london["latitude"] == pytest.approx(51.5074)
+        assert london["longitude"] == pytest.approx(-0.1278)
+
     def test_find_preapproved_id_match(self, sample_locations):
         """Helper returns canonical id for exact name+country match."""
         with patch("routers.locations.locations_data", sample_locations):
@@ -809,6 +821,121 @@ class TestSearchEndpoint:
         locs = {loc["name"]: loc for loc in response.json()["locations"]}
         assert locs["London"]["location_id"] == "london"
         assert locs["Shoreditch"]["location_id"] is None
+
+    def test_mapbox_path_passes_through_timezone_and_coordinates(self, client, mock_locations_data):
+        """Timezone/lat/lon computed by _geocode_mapbox flow through to the response (P1-161)."""
+        mapbox_results = [
+            {
+                "name": "Denver",
+                "admin1": "Colorado",
+                "country_name": "United States",
+                "country_code": "US",
+                "latitude": 39.7392,
+                "longitude": -104.9903,
+                "timezone": "America/Denver",
+            },
+        ]
+        with (
+            patch("routers.locations.MAPBOX_TOKEN", "fake-token"),
+            patch("routers.locations._geocode_mapbox", new=AsyncMock(return_value=mapbox_results)),
+        ):
+            response = client.get("/v1/locations/search?q=Denver")
+        assert response.status_code == 200
+        denver = response.json()["locations"][0]
+        assert denver["timezone"] == "America/Denver"
+        assert denver["latitude"] == pytest.approx(39.7392)
+        assert denver["longitude"] == pytest.approx(-104.9903)
+
+
+class TestGeocodeMapbox:
+    """Test _geocode_mapbox — timezone/coordinate enrichment from Mapbox features (P1-161)."""
+
+    @pytest.mark.asyncio
+    async def test_derives_timezone_from_feature_center(self, mock_redis):
+        """A Mapbox feature's `center` [lon, lat] is used to derive latitude/longitude/timezone."""
+        mapbox_payload = {
+            "features": [
+                {
+                    "text": "Denver",
+                    "center": [-104.9903, 39.7392],
+                    "context": [
+                        {"id": "region.123", "text": "Colorado"},
+                        {"id": "country.456", "text": "United States", "short_code": "us"},
+                    ],
+                }
+            ]
+        }
+
+        class _FakeResponse:
+            status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def json(self):
+                return mapbox_payload
+
+        class _FakeSession:
+            def get(self, url, **kwargs):
+                return _FakeResponse()
+
+        with (
+            patch("routers.locations.redis_client", mock_redis),
+            patch("routers.locations._get_mapbox_client", new=AsyncMock(return_value=_FakeSession())),
+        ):
+            results = await _geocode_mapbox("Denver")
+
+        assert len(results) == 1
+        result = results[0]
+        assert result["admin1"] == "Colorado"
+        assert result["country_code"] == "US"
+        assert result["latitude"] == pytest.approx(39.7392)
+        assert result["longitude"] == pytest.approx(-104.9903)
+        assert result["timezone"] == "America/Denver"
+
+    @pytest.mark.asyncio
+    async def test_missing_center_yields_null_timezone_and_coordinates(self, mock_redis):
+        """A feature with no `center` still returns a result, with null timezone/lat/lon."""
+        mapbox_payload = {
+            "features": [
+                {
+                    "text": "Somewhere",
+                    "context": [
+                        {"id": "country.456", "text": "United States", "short_code": "us"},
+                    ],
+                }
+            ]
+        }
+
+        class _FakeResponse:
+            status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def json(self):
+                return mapbox_payload
+
+        class _FakeSession:
+            def get(self, url, **kwargs):
+                return _FakeResponse()
+
+        with (
+            patch("routers.locations.redis_client", mock_redis),
+            patch("routers.locations._get_mapbox_client", new=AsyncMock(return_value=_FakeSession())),
+        ):
+            results = await _geocode_mapbox("Somewhere")
+
+        assert len(results) == 1
+        assert results[0]["latitude"] is None
+        assert results[0]["longitude"] is None
+        assert results[0]["timezone"] is None
 
 
 class TestPopularStatsEndpoint:
