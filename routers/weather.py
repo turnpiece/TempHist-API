@@ -104,7 +104,11 @@ async def get_weather(
             year, month, day = map(int, date.split("-")[:3])
             from config import LONG_CACHE_DURATION, SHORT_CACHE_DURATION
 
-            cache_duration = SHORT_CACHE_DURATION if is_today_or_future(year, month, day) else LONG_CACHE_DURATION
+            cache_duration = (
+                SHORT_CACHE_DURATION
+                if is_today_or_future(year, month, day, location, redis_client)
+                else LONG_CACHE_DURATION
+            )
         except Exception:
             cache_duration = LONG_CACHE_DURATION
         set_cache_value(cache_key, cache_duration, json.dumps(result), redis_client)
