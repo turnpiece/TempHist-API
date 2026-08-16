@@ -2,7 +2,9 @@
 
 from datetime import date as dt_date
 from datetime import timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+import redis
 
 from config import FORECAST_DAY_CACHE_DURATION_SECONDS, FORECAST_NIGHT_CACHE_DURATION_SECONDS
 
@@ -32,15 +34,38 @@ def track_missing_year(missing_years: List[Dict], year: int, reason: str):
     missing_years.append({"year": year, "reason": reason})
 
 
-def is_today(year: int, month: int, day: int) -> bool:
-    """Check if the given date is today."""
-    today = dt_date.today()
+def _resolve_reference_today(location: Optional[str], redis_client: Optional[redis.Redis]) -> dt_date:
+    """Return "today" in the location's local timezone when a location is given, else the server date."""
+    if location:
+        from cache.keys import get_local_today
+
+        return get_local_today(location, redis_client)
+    return dt_date.today()
+
+
+def is_today(
+    year: int, month: int, day: int, location: Optional[str] = None, redis_client: Optional[redis.Redis] = None
+) -> bool:
+    """Check if the given date is today.
+
+    Pass `location` (and optionally `redis_client`) so "today" is resolved in the
+    location's local timezone rather than the server's, which matters for cache TTL
+    decisions near a UTC/local day boundary.
+    """
+    today = _resolve_reference_today(location, redis_client)
     return year == today.year and month == today.month and day == today.day
 
 
-def is_today_or_future(year: int, month: int, day: int) -> bool:
-    """Check if the given date is today or in the future."""
-    today = dt_date.today()
+def is_today_or_future(
+    year: int, month: int, day: int, location: Optional[str] = None, redis_client: Optional[redis.Redis] = None
+) -> bool:
+    """Check if the given date is today or in the future.
+
+    Pass `location` (and optionally `redis_client`) so "today" is resolved in the
+    location's local timezone rather than the server's, which matters for cache TTL
+    decisions near a UTC/local day boundary.
+    """
+    today = _resolve_reference_today(location, redis_client)
     date = dt_date(year, month, day)
     return date >= today
 

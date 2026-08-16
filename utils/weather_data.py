@@ -62,7 +62,7 @@ async def get_weather_for_date(
 
     try:
         year, month, day = map(int, date_str.split("-")[:3])
-        is_today_date = is_today(year, month, day)
+        is_today_date = is_today(year, month, day, location, redis_client)
     except Exception:
         is_today_date = False
 
