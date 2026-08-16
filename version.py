@@ -1,4 +1,4 @@
 """Version information for TempHist API."""
 
-__version__ = "1.4.13"
-__version_info__ = (1, 4, 13)
+__version__ = "1.4.14"
+__version_info__ = (1, 4, 14)
