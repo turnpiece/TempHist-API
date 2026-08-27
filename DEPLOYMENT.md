@@ -98,10 +98,15 @@ Then add your other environment variables:
 # Required
 API_ACCESS_TOKEN=your_token_here
 
-# Weather provider (defaults to open_meteo — no key needed)
+# Weather provider (defaults to open_meteo — no key needed on the free tier)
 # Set to visual_crossing and supply the key to use Visual Crossing instead:
 # WEATHER_PROVIDER=visual_crossing
 # VISUAL_CROSSING_API_KEY=your_key_here
+
+# Open-Meteo paid plan (omit all three to use the free, non-commercial hosts)
+# OPEN_METEO_API_KEY=your_key_here
+# OPEN_METEO_ARCHIVE_URL=https://customer-archive-api.open-meteo.com/v1/archive
+# OPEN_METEO_FORECAST_URL=https://customer-api.open-meteo.com/v1/forecast
 
 # Firebase (optional - see Firebase section below)
 FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}
@@ -110,8 +115,8 @@ FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}
 CACHE_ENABLED=true
 DEBUG=false
 RATE_LIMIT_ENABLED=true
-MAX_LOCATIONS_PER_HOUR=10
-MAX_REQUESTS_PER_HOUR=100
+MAX_LOCATIONS_PER_HOUR=60
+MAX_REQUESTS_PER_HOUR=400
 ```
 
 ### Step 6: Deploy
@@ -150,8 +155,13 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
 | Variable                  | Default       | Description                                                                  |
 | ------------------------- | ------------- | ---------------------------------------------------------------------------- |
-| `WEATHER_PROVIDER`        | `open_meteo`  | `open_meteo` (free, no key) or `visual_crossing` (requires API key below)    |
+| `WEATHER_PROVIDER`        | `open_meteo`  | `open_meteo` (default) or `visual_crossing` (requires API key below)         |
 | `VISUAL_CROSSING_API_KEY` | *(none)*      | Required only when `WEATHER_PROVIDER=visual_crossing`                        |
+| `OPEN_METEO_API_KEY`      | *(none)*      | Paid-plan key, sent as `?apikey=` on every Open-Meteo request                |
+| `OPEN_METEO_ARCHIVE_URL`  | `https://archive-api.open-meteo.com/v1/archive` | Use `https://customer-archive-api.open-meteo.com/v1/archive` on a paid plan |
+| `OPEN_METEO_FORECAST_URL` | `https://api.open-meteo.com/v1/forecast` | Use `https://customer-api.open-meteo.com/v1/forecast` on a paid plan |
+
+> The free tier is capped at 10k calls/day and licensed for non-commercial use only. Set the three variables above on **both** the API service and the worker service — the worker fetches from Open-Meteo in-process.
 
 ### Optional Variables
 
@@ -165,8 +175,8 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | `LOG_VERBOSITY`                     | `normal`      | Logging detail: `minimal`, `normal`, or `verbose`                  |
 | `BASE_URL`                          | *(localhost)* | Public API URL used for job callbacks                              |
 | `RATE_LIMIT_ENABLED`                | `true`        | Enable rate limiting                                               |
-| `MAX_LOCATIONS_PER_HOUR`            | `10`          | Max unique locations per hour (standard tokens)                    |
-| `MAX_REQUESTS_PER_HOUR`             | `100`         | Max requests per hour (standard tokens)                            |
+| `MAX_LOCATIONS_PER_HOUR`            | `60`          | Max unique locations per hour (standard tokens)                    |
+| `MAX_REQUESTS_PER_HOUR`             | `400`         | Max requests per hour (standard tokens)                            |
 | `RATE_LIMIT_WINDOW_HOURS`           | `1`           | Rate limit time window                                             |
 | `SERVICE_TOKEN_REQUESTS_PER_HOUR`   | `5000`        | Rate limit for service token requests                              |
 | `SERVICE_TOKEN_LOCATIONS_PER_HOUR`  | `500`         | Rate limit for service token locations                             |

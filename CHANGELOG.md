@@ -2,6 +2,28 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-08-27] - Open-Meteo Paid Tier & Rate Limits for Store Launch (unreleased)
+
+### Added
+
+- **Open-Meteo paid plan support**: `OPEN_METEO_API_KEY` is appended as `?apikey=` to every outbound Open-Meteo request when set, and `OPEN_METEO_ARCHIVE_URL` / `OPEN_METEO_FORECAST_URL` are now environment-configurable so they can point at `customer-archive-api.open-meteo.com` / `customer-api.open-meteo.com`. All three default to the existing free hosts with no key, so local dev, tests and CI are unchanged. The free tier is capped at 10k calls/day and licensed non-commercial — a paid plan is required for public store listings. Attribution stays mandatory either way: the data remains CC-BY-4.0.
+  - Set all three on **both** the API service and the worker service — the worker fetches from Open-Meteo in-process while building records.
+  - `/health/detailed`'s Open-Meteo probe now sends the key too, so it reports `healthy` against a customer endpoint.
+
+### Changed
+
+- **Rate limit defaults raised**: `MAX_LOCATIONS_PER_HOUR` 10 → 60 and `MAX_REQUESTS_PER_HOUR` 100 → 400. Each period view calls `/v1/records/` once, so browsing ~10 cities across all four periods was enough to trigger `429 Location diversity limit exceeded` from a single IP.
+
+### Security
+
+- **API key never reaches logs or responses**: the key is added at request time only, so the URLs the Open-Meteo client classifies and logs stay unkeyed; URL and exception log arguments are additionally passed through `sanitize_url` / `sanitize_for_logging`. `/health/detailed` is a public endpoint and previously returned raw probe exception text, which could embed the request URL — it is now redacted.
+
+### Removed
+
+- **`SHARE_BASE_URL` documentation**: the variable has not been read since share and OG URLs became relative (`/s/{id}`, `/v1/og/{id}.png`). Consumers prepend their own origin. The stale README configuration block has been removed.
+
+---
+
 ## [2026-05-18] - Search Results Include Canonical Location ID (v1.2.15)
 
 ### Added

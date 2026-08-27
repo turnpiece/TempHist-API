@@ -1,9 +1,11 @@
 """Tests for utils.open_meteo_client."""
 
 import asyncio
-from datetime import date
+import logging
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
+import aiohttp
 import pytest
 
 from utils import open_meteo_client
@@ -55,8 +57,11 @@ class FakeResponse:
 class FakeSession:
     def __init__(self, responses):
         self.responses = list(responses)
+        self.requested_urls = []
 
     def get(self, *args, **kwargs):
+        if args:
+            self.requested_urls.append(args[0])
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -64,9 +69,13 @@ class FakeSession:
 
 
 def fake_get_client(responses):
-    async def _fake_get_client():
-        return FakeSession(responses)
+    """Return a _get_client stand-in; the session it hands out is on `.session`."""
+    session = FakeSession(responses)
 
+    async def _fake_get_client():
+        return session
+
+    _fake_get_client.session = session
     return _fake_get_client
 
 
@@ -314,3 +323,92 @@ async def test_fetch_days_non_200_records_http_failure_without_retry(monkeypatch
             "timeout": False,
         }
     ]
+
+
+# ── API key handling ──────────────────────────────────────────────────────────
+
+
+def _ok_payload(day="2024-06-01"):
+    return {
+        "latitude": 51.5,
+        "longitude": -0.1,
+        "timezone": "Europe/London",
+        "daily": {
+            "time": [day],
+            "temperature_2m_mean": [15.0],
+            "temperature_2m_max": [18.0],
+            "temperature_2m_min": [12.0],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_omits_apikey_when_unset(monkeypatch):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "")
+    get_client = fake_get_client([FakeResponse(200, _ok_payload())])
+    monkeypatch.setattr(open_meteo_client, "_get_client", get_client)
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    await open_meteo_client.fetch_days(51.5, -0.1, date(2024, 6, 1), date(2024, 6, 1))
+
+    assert len(get_client.session.requested_urls) == 1
+    assert "apikey" not in get_client.session.requested_urls[0]
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_appends_apikey_to_archive_and_forecast(monkeypatch):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "secret-key")
+    # A range straddling the archive/forecast boundary issues one request to each.
+    today = date.today()
+    start = today - timedelta(days=30)
+    get_client = fake_get_client([FakeResponse(200, _ok_payload()), FakeResponse(200, _ok_payload())])
+    monkeypatch.setattr(open_meteo_client, "_get_client", get_client)
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    await open_meteo_client.fetch_days(51.5, -0.1, start, today)
+
+    urls = get_client.session.requested_urls
+    assert len(urls) == 2
+    assert any("/v1/archive" in url for url in urls)
+    assert any("/v1/forecast" in url for url in urls)
+    assert all(url.endswith("&apikey=secret-key") for url in urls)
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_url_encodes_apikey(monkeypatch):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "key with/slash")
+    get_client = fake_get_client([FakeResponse(200, _ok_payload())])
+    monkeypatch.setattr(open_meteo_client, "_get_client", get_client)
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    await open_meteo_client.fetch_days(51.5, -0.1, date(2024, 6, 1), date(2024, 6, 1))
+
+    assert get_client.session.requested_urls[0].endswith("&apikey=key%20with%2Fslash")
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_never_logs_the_apikey(monkeypatch, caplog, no_retry_sleep):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "secret-key")
+    monkeypatch.setattr(open_meteo_client, "_get_client", fake_get_client([FakeResponse(503)]))
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    with caplog.at_level(logging.WARNING, logger=open_meteo_client.__name__):
+        await open_meteo_client.fetch_days(51.5, -0.1, date(2024, 6, 1), date(2024, 6, 1))
+
+    assert "OM returned status 503" in caplog.text
+    assert "secret-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_sanitizes_apikey_from_client_error_logs(monkeypatch, caplog, no_retry_sleep):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "secret-key")
+    # aiohttp errors can carry the resolved request URL, key and all.
+    exc = aiohttp.ClientError("Cannot connect to https://customer-api.open-meteo.com/v1/forecast?apikey=secret-key")
+    monkeypatch.setattr(open_meteo_client, "_get_client", fake_get_client([exc, exc, exc]))
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    with caplog.at_level(logging.WARNING, logger=open_meteo_client.__name__):
+        await open_meteo_client.fetch_days(51.5, -0.1, date(2024, 6, 1), date(2024, 6, 1))
+
+    assert "secret-key" not in caplog.text
+    assert "[REDACTED]" in caplog.text

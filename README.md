@@ -44,6 +44,11 @@ API_ACCESS_TOKEN=your_key_here
 WEATHER_PROVIDER=open_meteo           # or visual_crossing
 VISUAL_CROSSING_API_KEY=your_key_here # required only when WEATHER_PROVIDER=visual_crossing
 
+# Open-Meteo paid plan (optional — the free hosts are used when unset)
+OPEN_METEO_API_KEY=your_key_here
+OPEN_METEO_ARCHIVE_URL=https://customer-archive-api.open-meteo.com/v1/archive
+OPEN_METEO_FORECAST_URL=https://customer-api.open-meteo.com/v1/forecast
+
 # Redis Configuration
 REDIS_URL=redis://localhost:6379  # Optional, defaults to localhost
 CACHE_ENABLED=true  # Optional, defaults to true
@@ -58,8 +63,8 @@ DEBUG=false  # Set to true for development
 
 # Rate Limiting Configuration
 RATE_LIMIT_ENABLED=true  # Defaults to true
-MAX_LOCATIONS_PER_HOUR=10  # Defaults to 10
-MAX_REQUESTS_PER_HOUR=100  # Defaults to 100
+MAX_LOCATIONS_PER_HOUR=60  # Defaults to 60
+MAX_REQUESTS_PER_HOUR=400  # Defaults to 400
 RATE_LIMIT_WINDOW_HOURS=1  # Defaults to 1
 
 # Service Token Rate Limiting (for API_ACCESS_TOKEN)
@@ -906,9 +911,7 @@ GET /v1/shares/aB3xY7qZ
 
 #### Configuration
 
-```bash
-SHARE_BASE_URL=https://temphist.com  # Base URL prepended to share URLs (default: https://temphist.com)
-```
+Share and OG image URLs are returned **relative** (`/s/{id}`, `/v1/og/{id}.png`); the consuming site or app prepends its own origin. There is no base-URL setting.
 
 The share store requires a PostgreSQL connection (`TEMPHIST_PG_DSN` / `DATABASE_URL`). The `shares` table is created automatically on first use.
 
@@ -1561,7 +1564,7 @@ grep "RATE" temphist.log
 - **PostgreSQL database** (version 12+ recommended) - Optional, for persistent cache
 - **Memory**: 512MB RAM minimum, 1GB+ recommended (2GB+ if using PostgreSQL)
 - **Storage**: 100MB+ for application, 500MB+ recommended if using PostgreSQL persistent cache
-- **Network**: Outbound HTTPS access to Open-Meteo APIs (`archive-api.open-meteo.com`, `api.open-meteo.com`)
+- **Network**: Outbound HTTPS access to Open-Meteo APIs (`archive-api.open-meteo.com`, `api.open-meteo.com`, or `customer-archive-api.open-meteo.com` / `customer-api.open-meteo.com` on a paid plan)
 
 **Supported Platforms:**
 
@@ -1599,7 +1602,14 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 # Weather provider selection (default: open_meteo)
 WEATHER_PROVIDER=open_meteo                        # open_meteo (default) or visual_crossing
 VISUAL_CROSSING_API_KEY=your_key_here              # Required only when WEATHER_PROVIDER=visual_crossing
+
+# Open-Meteo paid plan — omit all three to use the free, non-commercial hosts
+OPEN_METEO_API_KEY=your_key_here                   # Sent as ?apikey= on every Open-Meteo request
+OPEN_METEO_ARCHIVE_URL=https://customer-archive-api.open-meteo.com/v1/archive
+OPEN_METEO_FORECAST_URL=https://customer-api.open-meteo.com/v1/forecast
 ```
+
+> Set these on **both** the API service and the worker service — the worker fetches from Open-Meteo in-process while building records.
 
 **Core Configuration:**
 
@@ -1621,8 +1631,8 @@ LOG_VERBOSITY=normal                               # minimal|normal|verbose (def
 ```bash
 # Rate limiting
 RATE_LIMIT_ENABLED=true                            # Enable rate limiting (default: true)
-MAX_LOCATIONS_PER_HOUR=10                          # Max unique locations per IP/hour (default: 10)
-MAX_REQUESTS_PER_HOUR=100                          # Max requests per IP/hour (default: 100)
+MAX_LOCATIONS_PER_HOUR=60                          # Max unique locations per IP/hour (default: 60)
+MAX_REQUESTS_PER_HOUR=400                          # Max requests per IP/hour (default: 400)
 RATE_LIMIT_WINDOW_HOURS=1                          # Rate limit window in hours (default: 1)
 
 # IP filtering (comma-separated lists)

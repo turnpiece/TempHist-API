@@ -1,9 +1,14 @@
 """Open-Meteo weather client — replaces Visual Crossing as the data source.
 
-Open-Meteo is free (no API key), uses ERA5 data, and has no daily record budget.
-Two endpoints cover all use cases:
+Open-Meteo uses ERA5 data and has no daily record budget. Two endpoints cover
+all use cases:
   - archive-api.open-meteo.com/v1/archive  — dates older than ~7 days
   - api.open-meteo.com/v1/forecast         — recent, today, and forecast dates
+
+Both hosts are configurable (OPEN_METEO_ARCHIVE_URL / OPEN_METEO_FORECAST_URL)
+so a paid plan can point them at the customer-* hosts. When OPEN_METEO_API_KEY
+is set it is appended to outbound requests only — never to the URL this module
+builds, classifies or logs.
 """
 
 import asyncio
@@ -14,6 +19,7 @@ from urllib.parse import quote
 
 import aiohttp
 
+from utils.sanitization import sanitize_for_logging, sanitize_url
 from utils.weather_types import LocationNotFoundError  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -25,7 +31,8 @@ _FORECAST_PAST_DAYS = 7  # matches Open-Meteo past_days parameter
 _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY = 1.0
 
-# Semaphore(2) at ~285ms/req ≈ 7 req/s — well under OM's 600 req/min free-tier cap.
+# Semaphore(2) at ~285ms/req ≈ 7 req/s — well under OM's 600 req/min free-tier cap
+# (paid plans lift the per-minute cap entirely, so this stays conservative).
 # Initialized lazily to avoid binding to a closed event loop at import time.
 _sem: Optional[asyncio.Semaphore] = None
 
@@ -69,6 +76,19 @@ async def close_client() -> None:
 
 
 # ── URL builders ──────────────────────────────────────────────────────────────
+
+
+def _with_api_key(url: str) -> str:
+    """Append the paid-plan API key to an outbound request URL.
+
+    Kept separate from the URL builders so the key never reaches the URLs we
+    classify, log or hand back to callers — only the actual HTTP request.
+    """
+    from config import OPEN_METEO_API_KEY
+
+    if not OPEN_METEO_API_KEY:
+        return url
+    return f"{url}&apikey={quote(OPEN_METEO_API_KEY, safe='')}"
 
 
 def _om_archive_url(lat: float, lon: float, start: date, end: date) -> str:
@@ -271,7 +291,7 @@ async def fetch_days(
                 async with _sem:
                     if stats:
                         stats.record_attempt(endpoint)
-                    async with session.get(url, headers={"Accept-Encoding": "gzip"}) as resp:
+                    async with session.get(_with_api_key(url), headers={"Accept-Encoding": "gzip"}) as resp:
                         if resp.status == 429:
                             retry_after = float(resp.headers.get("Retry-After", _RETRY_BASE_DELAY * attempt))
                             if attempt < _RETRY_ATTEMPTS:
@@ -286,17 +306,17 @@ async def fetch_days(
                                 continue
                             if stats:
                                 stats.record_failure("rate_limit_exceeded", endpoint=endpoint)
-                            logger.error("OM rate limit exceeded after %d attempts: %s", attempt, url)
+                            logger.error("OM rate limit exceeded after %d attempts: %s", attempt, sanitize_url(url))
                             return
                         if resp.status != 200:
                             if stats:
                                 stats.record_failure(f"http_{resp.status}", endpoint=endpoint)
-                            logger.warning("OM returned status %s for %s", resp.status, url)
+                            logger.warning("OM returned status %s for %s", resp.status, sanitize_url(url))
                             return
                         payload = await resp.json()
                         if payload.get("error"):
                             reason = str(payload.get("reason", "")).lower()
-                            logger.warning("OM error for %s: %s", url, payload.get("reason"))
+                            logger.warning("OM error for %s: %s", sanitize_url(url), payload.get("reason"))
                             if ("rate" in reason or "limit" in reason) and attempt < _RETRY_ATTEMPTS:
                                 if stats:
                                     stats.record_failure("rate_limited", endpoint=endpoint, terminal=False)
@@ -321,12 +341,22 @@ async def fetch_days(
                 if attempt >= _RETRY_ATTEMPTS:
                     if stats:
                         stats.record_failure(reason, endpoint=endpoint, timeout=is_timeout)
-                    logger.error("OM fetch failed after %d attempts for %s: %s", attempt, url, exc)
+                    logger.error(
+                        "OM fetch failed after %d attempts for %s: %s",
+                        attempt,
+                        sanitize_url(url),
+                        sanitize_for_logging(str(exc), max_length=200),
+                    )
                     return
                 if stats:
                     stats.record_failure(reason, endpoint=endpoint, terminal=False, timeout=is_timeout)
                 delay = _RETRY_BASE_DELAY * attempt
-                logger.warning("OM fetch attempt %d failed, retrying in %.1fs: %s", attempt, delay, exc)
+                logger.warning(
+                    "OM fetch attempt %d failed, retrying in %.1fs: %s",
+                    attempt,
+                    delay,
+                    sanitize_for_logging(str(exc), max_length=200),
+                )
                 await asyncio.sleep(delay)
 
     await asyncio.gather(*[fetch_one(url, fs, fe) for url, fs, fe in requests])

@@ -10,9 +10,17 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from cache.accessors import get_cache_stats, get_open_meteo_stats
-from config import ANALYTICS_RATE_LIMIT, HTTP_TIMEOUT_SHORT, OPEN_METEO_ARCHIVE_URL, RATE_LIMIT_ENABLED, WEATHER_PROVIDER
+from config import (
+    ANALYTICS_RATE_LIMIT,
+    HTTP_TIMEOUT_SHORT,
+    OPEN_METEO_API_KEY,
+    OPEN_METEO_ARCHIVE_URL,
+    RATE_LIMIT_ENABLED,
+    WEATHER_PROVIDER,
+)
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import get_daily_temperature_store
+from utils.sanitization import sanitize_for_logging
 from version import __version__
 
 router = APIRouter()
@@ -56,16 +64,22 @@ async def _check_open_meteo() -> dict:
     probe_status, probe_status_code, probe_error = "unknown", None, None
     try:
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        # The key must go with the probe: on a paid plan the customer-* host
+        # rejects unkeyed requests, which would report a healthy API as degraded.
+        params = {"apikey": OPEN_METEO_API_KEY} if OPEN_METEO_API_KEY else None
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SHORT) as client:
             resp = await client.get(
                 f"{OPEN_METEO_ARCHIVE_URL}?latitude=51.5&longitude=-0.1"
                 f"&start_date={yesterday}&end_date={yesterday}&daily=temperature_2m_mean&timezone=UTC",
+                params=params,
                 timeout=HTTP_TIMEOUT_SHORT,
             )
             probe_status_code = resp.status_code
             probe_status = "healthy" if resp.status_code < 400 else "degraded"
     except Exception as e:
-        probe_status, probe_error = "unhealthy", str(e)
+        # /health/detailed is public and httpx errors can embed the request URL,
+        # so the key must be stripped before it reaches the response body.
+        probe_status, probe_error = "unhealthy", sanitize_for_logging(str(e), max_length=200)
 
     open_meteo_stats = get_open_meteo_stats()
     result = (

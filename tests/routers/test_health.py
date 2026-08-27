@@ -45,7 +45,7 @@ class FakeResponse:
         self.status_code = status_code
 
 
-def fake_async_client(status_code=None, exc=None):
+def fake_async_client(status_code=None, exc=None, recorder=None):
     class FakeAsyncClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -57,6 +57,8 @@ def fake_async_client(status_code=None, exc=None):
             return False
 
         async def get(self, *args, **kwargs):
+            if recorder is not None:
+                recorder.append({"url": args[0] if args else None, "params": kwargs.get("params")})
             if exc:
                 raise exc
             return FakeResponse(status_code)
@@ -68,7 +70,9 @@ async def fake_daily_temperature_store():
     return FakePostgresStore()
 
 
-async def call_detailed_health(monkeypatch, *, probe_status_code=200, probe_exc=None, stats_payload=None):
+async def call_detailed_health(
+    monkeypatch, *, probe_status_code=200, probe_exc=None, stats_payload=None, recorder=None
+):
     stats = FakeStats(
         stats_payload
         or {
@@ -80,7 +84,7 @@ async def call_detailed_health(monkeypatch, *, probe_status_code=200, probe_exc=
     )
 
     monkeypatch.setattr(health, "WEATHER_PROVIDER", "open_meteo")
-    monkeypatch.setattr(health.httpx, "AsyncClient", fake_async_client(probe_status_code, probe_exc))
+    monkeypatch.setattr(health.httpx, "AsyncClient", fake_async_client(probe_status_code, probe_exc, recorder))
     monkeypatch.setattr(health, "get_open_meteo_stats", lambda: stats)
     monkeypatch.setattr(health, "get_cache_stats", lambda: None)
     monkeypatch.setattr(health, "get_daily_temperature_store", fake_daily_temperature_store)
@@ -167,3 +171,37 @@ async def test_detailed_health_skips_open_meteo_when_provider_inactive(monkeypat
     assert response.status_code == 200
     assert body["checks"]["open_meteo_api"]["status"] == "skipped"
     assert body["checks"]["open_meteo_api"]["provider"] == "visual_crossing"
+
+
+@pytest.mark.asyncio
+async def test_open_meteo_probe_omits_apikey_when_unset(monkeypatch):
+    monkeypatch.setattr(health, "OPEN_METEO_API_KEY", "")
+    requests = []
+
+    await call_detailed_health(monkeypatch, recorder=requests)
+
+    assert len(requests) == 1
+    assert requests[0]["params"] is None
+
+
+@pytest.mark.asyncio
+async def test_open_meteo_probe_sends_apikey_when_set(monkeypatch):
+    monkeypatch.setattr(health, "OPEN_METEO_API_KEY", "secret-key")
+    requests = []
+
+    await call_detailed_health(monkeypatch, recorder=requests)
+
+    assert requests[0]["params"] == {"apikey": "secret-key"}
+
+
+@pytest.mark.asyncio
+async def test_open_meteo_probe_error_redacts_apikey(monkeypatch):
+    # /health/detailed is public, so a probe error must never echo the key back.
+    monkeypatch.setattr(health, "OPEN_METEO_API_KEY", "secret-key")
+    probe_exc = Exception("connect failed: https://customer-archive-api.open-meteo.com/v1/archive?apikey=secret-key")
+
+    _response, body, _stats = await call_detailed_health(monkeypatch, probe_exc=probe_exc)
+
+    probe_error = body["checks"]["open_meteo_api"]["probe_error"]
+    assert "secret-key" not in probe_error
+    assert "[REDACTED]" in probe_error

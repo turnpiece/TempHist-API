@@ -44,9 +44,13 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")  # Admin key for operational/monitori
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")  # Public API URL for job callbacks
 
 # Rate limiting configuration
+# Defaults sized for real app usage: a single client browsing many cities hits
+# /v1/records/ four times per location (one per period), so a low location
+# ceiling blocks legitimate exploration — including an App Store reviewer
+# working through the "any location in the world" feature from one IP.
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
-MAX_LOCATIONS_PER_HOUR = int(os.getenv("MAX_LOCATIONS_PER_HOUR", "10"))
-MAX_REQUESTS_PER_HOUR = int(os.getenv("MAX_REQUESTS_PER_HOUR", "100"))
+MAX_LOCATIONS_PER_HOUR = int(os.getenv("MAX_LOCATIONS_PER_HOUR", "60"))
+MAX_REQUESTS_PER_HOUR = int(os.getenv("MAX_REQUESTS_PER_HOUR", "400"))
 RATE_LIMIT_WINDOW_HOURS = int(os.getenv("RATE_LIMIT_WINDOW_HOURS", "1"))
 
 # Service Token Rate Limiting Configuration
@@ -92,12 +96,17 @@ MAX_CONCURRENT_REQUESTS = 2  # Reduced for cold start protection
 
 # Weather provider selection
 # Set WEATHER_PROVIDER=visual_crossing to use Visual Crossing (requires VISUAL_CROSSING_API_KEY).
-# Defaults to open_meteo (free, no API key required).
+# Defaults to open_meteo (OPEN_METEO_API_KEY optional — required only on paid plans).
 WEATHER_PROVIDER = os.getenv("WEATHER_PROVIDER", "open_meteo").strip().lower()
 
 # Open-Meteo API configuration
-OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
-OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+# The free hosts are the defaults so local dev, tests and CI need no setup.
+# Paid plans use the customer-* hosts and require OPEN_METEO_API_KEY:
+#   OPEN_METEO_ARCHIVE_URL=https://customer-archive-api.open-meteo.com/v1/archive
+#   OPEN_METEO_FORECAST_URL=https://customer-api.open-meteo.com/v1/forecast
+OPEN_METEO_API_KEY = os.getenv("OPEN_METEO_API_KEY", "").strip()
+OPEN_METEO_ARCHIVE_URL = os.getenv("OPEN_METEO_ARCHIVE_URL", "https://archive-api.open-meteo.com/v1/archive").strip()
+OPEN_METEO_FORECAST_URL = os.getenv("OPEN_METEO_FORECAST_URL", "https://api.open-meteo.com/v1/forecast").strip()
 OPEN_METEO_FORECAST_PAST_DAYS = int(os.getenv("OPEN_METEO_FORECAST_PAST_DAYS", "7"))
 OPEN_METEO_MONITORING_ENABLED = os.getenv("OPEN_METEO_MONITORING_ENABLED", "true").lower() == "true"
 OPEN_METEO_STATS_WINDOW_SECONDS = int(os.getenv("OPEN_METEO_STATS_WINDOW_SECONDS", "300"))
