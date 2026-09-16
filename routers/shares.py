@@ -12,6 +12,7 @@ from routers._responses import error_responses
 from routers.dependencies import get_redis_client
 from routers.locations import locations_data
 from utils.share_store import get_share_store
+from utils.weather import is_today
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -21,6 +22,20 @@ _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
 
 def _share_cache_key(share_id: str) -> str:
     return f"share:{share_id}"
+
+
+def _compute_is_today(share: dict, redis_client: redis.Redis) -> bool:
+    """Whether the share's reference date (identifier + ref_year) is "today" in the
+    share's location's local timezone. Must be computed fresh on every read — a share
+    for today becomes a complete past day tomorrow, but the share record itself (and
+    its Redis cache entry) never changes.
+    """
+    try:
+        month_str, day_str = share["identifier"].split("-")
+        return is_today(share["ref_year"], int(month_str), int(day_str), share["location"], redis_client)
+    except Exception as exc:
+        logger.warning("Failed to compute is_today for share %s: %s", share.get("id"), exc)
+        return False
 
 
 def _resolve_location_name(location: str) -> str:
@@ -102,26 +117,30 @@ async def get_share(
         raise HTTPException(status_code=404, detail="Share not found.")
 
     cache_key = _share_cache_key(share_id)
+    share = None
 
     # Check Redis first
     try:
         cached = redis_client.get(cache_key)
         if cached:
             data_str = cached.decode("utf-8") if isinstance(cached, bytes) else cached
-            return json.loads(data_str)
+            share = json.loads(data_str)
     except Exception as exc:
         logger.warning("Redis read failed for share %s: %s", share_id, exc)
 
-    # Fall back to Postgres
-    store = get_share_store()
-    share = await store.get_share(share_id)
     if share is None:
-        raise HTTPException(status_code=404, detail="Share not found.")
+        # Fall back to Postgres
+        store = get_share_store()
+        share = await store.get_share(share_id)
+        if share is None:
+            raise HTTPException(status_code=404, detail="Share not found.")
 
-    # Populate cache for future requests
-    try:
-        redis_client.setex(cache_key, _SHARE_CACHE_TTL, json.dumps(share))
-    except Exception as exc:
-        logger.warning("Redis write failed for share %s: %s", share_id, exc)
+        # Populate cache for future requests
+        try:
+            redis_client.setex(cache_key, _SHARE_CACHE_TTL, json.dumps(share))
+        except Exception as exc:
+            logger.warning("Redis write failed for share %s: %s", share_id, exc)
 
-    return share
+    # Computed fresh on every request, never cached — see _compute_is_today.
+    # Copy rather than mutate: `share` may be a dict owned by the store/cache layer.
+    return {**share, "is_today": _compute_is_today(share, redis_client)}

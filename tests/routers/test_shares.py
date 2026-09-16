@@ -355,6 +355,50 @@ class TestGetShare:
         # Should succeed without any auth header
         assert response.status_code == 200
 
+    def test_get_share_is_today_computed_from_cache(self, client, mock_redis):
+        """is_today is derived from identifier/ref_year, not stored in the cached blob."""
+        mock_redis.get.return_value = json.dumps(VALID_SHARE).encode()
+        with patch("routers.shares.is_today", return_value=True) as is_today_mock:
+            response = client.get("/v1/shares/aB3xY7qZ")
+        assert response.status_code == 200
+        assert response.json()["is_today"] is True
+        is_today_mock.assert_called_once_with(
+            VALID_SHARE["ref_year"], 4, 11, VALID_SHARE["location"], mock_redis
+        )
+
+    def test_get_share_is_today_computed_from_store(self, client, mock_redis):
+        mock_redis.get.return_value = None
+        store_mock = AsyncMock()
+        store_mock.get_share.return_value = VALID_SHARE
+        with (
+            patch("routers.shares.get_share_store", return_value=store_mock),
+            patch("routers.shares.is_today", return_value=False),
+        ):
+            response = client.get("/v1/shares/aB3xY7qZ")
+        assert response.status_code == 200
+        assert response.json()["is_today"] is False
+
+    def test_get_share_is_today_not_persisted_to_cache(self, client, mock_redis):
+        """The derived is_today flag must never be written into the Redis cache entry."""
+        mock_redis.get.return_value = None
+        store_mock = AsyncMock()
+        store_mock.get_share.return_value = VALID_SHARE
+        with (
+            patch("routers.shares.get_share_store", return_value=store_mock),
+            patch("routers.shares.is_today", return_value=True),
+        ):
+            client.get("/v1/shares/aB3xY7qZ")
+        cached_json = mock_redis.setex.call_args.args[2]
+        assert "is_today" not in json.loads(cached_json)
+
+    def test_get_share_is_today_defaults_false_on_error(self, client, mock_redis):
+        """A malformed identifier shouldn't break the endpoint — is_today just defaults False."""
+        bad_share = {**VALID_SHARE, "identifier": "not-a-date"}
+        mock_redis.get.return_value = json.dumps(bad_share).encode()
+        response = client.get("/v1/shares/aB3xY7qZ")
+        assert response.status_code == 200
+        assert response.json()["is_today"] is False
+
 
 # ---------------------------------------------------------------------------
 # GET /v1/og/{share_id}.png
