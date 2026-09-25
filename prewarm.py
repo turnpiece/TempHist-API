@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote  # URL-encode location path segments
+from urllib.parse import quote, urlparse  # quote: URL-encode location path segments
 
 import aiohttp
 import anyio
@@ -34,6 +34,27 @@ logger = logging.getLogger(__name__)
 # Configuration
 DEFAULT_BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 DEFAULT_API_TOKEN = os.getenv("API_ACCESS_TOKEN") or os.getenv("PREWARM_API_TOKEN")
+
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _validated_base_url(value: str) -> str:
+    """Argparse type: accept only http(s) URLs with a host."""
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise argparse.ArgumentTypeError(f"invalid base URL {value!r}: must be http(s)://host[:port]")
+    return value.rstrip("/")
+
+
+def _validated_locations_file(value: str) -> str:
+    """Argparse type: accept only existing files inside the project root or current directory."""
+    resolved = os.path.realpath(value)
+    allowed_roots = (os.path.realpath(PROJECT_ROOT), os.path.realpath(os.getcwd()))
+    if not any(os.path.commonpath([resolved, root]) == root for root in allowed_roots):
+        raise argparse.ArgumentTypeError(f"locations file {value!r} must be inside the project or working directory")
+    if not os.path.isfile(resolved):
+        raise argparse.ArgumentTypeError(f"locations file {value!r} does not exist")
+    return resolved
 
 
 def load_preapproved_locations(locations_file: str = None) -> List[str]:
@@ -355,7 +376,7 @@ async def _load_locations_from_args(args, api_token: Optional[str]) -> List[str]
 async def main():
     """Main prewarming function."""
     parser = argparse.ArgumentParser(description="Prewarm TempHist API cache")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Base URL of the API")
+    parser.add_argument("--base-url", type=_validated_base_url, default=DEFAULT_BASE_URL, help="Base URL of the API")
     parser.add_argument("--locations", type=int, default=10, help="Number of locations to prewarm")
     parser.add_argument("--days", type=int, default=7, help="Number of days to prewarm")
     parser.add_argument("--endpoints", nargs="+", default=DEFAULT_ENDPOINTS, help="Endpoints to prewarm")
@@ -365,7 +386,7 @@ async def main():
         "--api-token",
         help="Bearer token for authenticated endpoints (defaults to API_ACCESS_TOKEN/PREWARM_API_TOKEN env vars)",
     )
-    parser.add_argument("--locations-file", help="JSON file with custom locations list")
+    parser.add_argument("--locations-file", type=_validated_locations_file, help="JSON file with custom locations list")
 
     args = parser.parse_args()
 

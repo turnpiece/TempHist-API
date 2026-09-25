@@ -178,10 +178,7 @@ async def detailed_health_check(redis_client: Annotated[redis.Redis, Depends(get
         health_status["checks"]["cache"] = cache_result
 
     pg_result = await _check_postgres()
-    if pg_result["status"] == "disabled":
-        overall_healthy = _apply_check(health_status, overall_healthy, "postgres", pg_result)
-    else:
-        overall_healthy = _apply_check(health_status, overall_healthy, "postgres", pg_result)
+    overall_healthy = _apply_check(health_status, overall_healthy, "postgres", pg_result)
 
     analytics_result = _check_analytics_rate_limit(redis_client)
     health_status["checks"]["analytics_rate_limit"] = analytics_result
