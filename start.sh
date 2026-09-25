@@ -16,6 +16,12 @@ if command -v redis-cli >/dev/null 2>&1; then
   elif command -v brew >/dev/null 2>&1; then
     echo "Attempting to start Redis via Homebrew..."
     brew services start redis || true
+    # Fall back to a directly-installed redis-server if the Homebrew service didn't start it
+    sleep 1
+    if ! redis-cli ping >/dev/null 2>&1 && command -v redis-server >/dev/null 2>&1; then
+      echo "Homebrew service unavailable; starting redis-server directly..."
+      redis-server --daemonize yes --dir "${TMPDIR:-/tmp}" >/dev/null || true
+    fi
   elif command -v systemctl >/dev/null 2>&1; then
     echo "Attempting to start Redis via systemctl..."
     sudo systemctl start redis || sudo systemctl start redis-server || true
@@ -33,6 +39,25 @@ if command -v psql >/dev/null 2>&1; then
   elif command -v brew >/dev/null 2>&1; then
     echo "Attempting to start PostgreSQL via Homebrew..."
     brew services start postgresql || true
+    # Fall back to pg_ctl if the Homebrew service didn't start it (e.g. Intel Homebrew install)
+    sleep 2
+    if ! psql -d postgres -c "select 1" >/dev/null 2>&1 && command -v pg_ctl >/dev/null 2>&1; then
+      PG_DATA_DIR="${PGDATA:-}"
+      if [ -z "$PG_DATA_DIR" ]; then
+        for dir in /opt/homebrew/var/postgresql@* /opt/homebrew/var/postgres /usr/local/var/postgresql@* /usr/local/var/postgres; do
+          if [ -f "$dir/PG_VERSION" ]; then
+            PG_DATA_DIR="$dir"
+            break
+          fi
+        done
+      fi
+      if [ -n "$PG_DATA_DIR" ]; then
+        echo "Homebrew service unavailable; starting PostgreSQL directly from $PG_DATA_DIR..."
+        pg_ctl -D "$PG_DATA_DIR" -l "${TMPDIR:-/tmp}/postgres.log" start || true
+      else
+        echo "No PostgreSQL data directory found; set PGDATA or start PostgreSQL manually."
+      fi
+    fi
   elif command -v systemctl >/dev/null 2>&1; then
     echo "Attempting to start PostgreSQL via systemctl..."
     sudo systemctl start postgresql || true
