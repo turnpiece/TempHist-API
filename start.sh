@@ -16,6 +16,12 @@ if command -v redis-cli >/dev/null 2>&1; then
   elif command -v brew >/dev/null 2>&1; then
     echo "Attempting to start Redis via Homebrew..."
     brew services start redis || true
+    # Fall back to a directly-installed redis-server if the Homebrew service didn't start it
+    sleep 1
+    if ! redis-cli ping >/dev/null 2>&1 && command -v redis-server >/dev/null 2>&1; then
+      echo "Homebrew service unavailable; starting redis-server directly..."
+      redis-server --daemonize yes --dir "${TMPDIR:-/tmp}" >/dev/null || true
+    fi
   elif command -v systemctl >/dev/null 2>&1; then
     echo "Attempting to start Redis via systemctl..."
     sudo systemctl start redis || sudo systemctl start redis-server || true
