@@ -7,6 +7,7 @@ from collections import Counter
 import pytest
 from fastapi.testclient import TestClient
 
+from config import BASE_URL
 from main import app, is_public_route
 from models import (
     ErrorResponse,
@@ -16,6 +17,7 @@ from models import (
     RecordResponse,
     SimpleErrorResponse,
 )
+from openapi_docs import servers_for
 from routers.health import HealthResponse, health_check
 from routers.locations import LocationsStatusResponse, get_locations_status, get_popular_locations_status
 from routers.shares import ShareCreate
@@ -314,3 +316,48 @@ def test_documented_inline_responses_match_what_the_handlers_return():
     assert health.status == "healthy"
     for handler in (get_locations_status, get_popular_locations_status):
         LocationsStatusResponse.model_validate(asyncio.run(handler()))
+
+
+# Implementation detail that belongs in code comments, not in public documentation.
+INTERNAL_TERMS = [
+    "SSRF",
+    "MAPBOX",
+    "Render",
+    "dev / CI",
+    "Response shape",
+    "usage tracker",
+    "validate_location",
+    "Redis",
+]
+
+
+def test_every_operation_has_a_public_facing_description(spec):
+    for method, path, operation in operations(spec):
+        description = operation.get("description", "")
+        assert description.strip(), f"{method} {path} has no description"
+        leaked = [term for term in INTERNAL_TERMS if term in description]
+        assert not leaked, f"{method} {path} exposes internal detail: {leaked}"
+
+
+def test_og_image_summary_is_readable(spec):
+    assert spec["paths"]["/v1/og/{share_id}.png"]["get"]["summary"] == "Get share preview image"
+
+
+@pytest.mark.parametrize(
+    "base_url, expected",
+    [
+        ("https://api.temphist.com", [{"url": "https://api.temphist.com"}]),
+        ("https://devapi.temphist.com/", [{"url": "https://devapi.temphist.com"}]),
+        ("http://localhost:8000", None),
+        ("http://127.0.0.1:8000", None),
+        ("http://[::1]:8000", None),
+        ("", None),
+    ],
+)
+def test_servers_come_from_base_url_and_are_omitted_for_local_runs(base_url, expected):
+    assert servers_for(base_url) == expected
+
+
+def test_app_declares_the_server_for_its_own_environment(spec):
+    expected = servers_for(BASE_URL)
+    assert spec.get("servers") == expected

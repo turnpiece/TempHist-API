@@ -1721,7 +1721,13 @@ async def get_record(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
-    """Get temperature record data for a specific period, location, and identifier."""
+    """Returns one temperature per year for a location and date, going back 50 years, together with the average, the
+    warming or cooling trend and a plain-language summary. See `period` and `identifier` for how the date is
+    interpreted.
+
+    The response carries an `ETag`. Send it back as `If-None-Match` to receive `304 Not Modified` when nothing has
+    changed.
+    """
     try:
         location = _validate_record_location(location, invalid_location_cache)
 
@@ -1791,7 +1797,7 @@ async def get_record_average(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
-    """Get average temperature data for a specific record."""
+    """Returns only the `average` of a record: the mean, standard deviation and number of data points."""
     try:
         # Quick validation for obviously invalid locations
         if is_location_likely_invalid(location):
@@ -1857,7 +1863,7 @@ async def get_record_trend(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
-    """Get temperature trend data for a specific record."""
+    """Returns only the `trend` of a record: the warming or cooling per decade and its fit statistics."""
     try:
         # Quick validation for obviously invalid locations
         if is_location_likely_invalid(location):
@@ -1923,7 +1929,7 @@ async def get_record_summary(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
-    """Get temperature summary text for a specific record."""
+    """Returns only the plain-language summary of a record."""
     try:
         # Quick validation for obviously invalid locations
         if is_location_likely_invalid(location):
@@ -1989,7 +1995,9 @@ async def get_record_meta(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
 ):
-    """Get combined summary, average and trend data for a specific record."""
+    """Returns the summary, average and trend of a record together with the ranking of the current year, in a single
+    call.
+    """
     try:
         # Quick validation for obviously invalid locations
         if is_location_likely_invalid(location):
@@ -2062,11 +2070,8 @@ async def get_record_updated(
     identifier: IdentifierParam,
     redis_client: redis.Redis = Depends(get_redis_client),
 ):
-    """
-    Get the last updated timestamp for a specific record endpoint.
-
-    Returns when the data was last updated (cached) or null if it's never been queried.
-    This endpoint is designed for web apps that want to check if they need to refetch data.
+    """Returns when the record for this location and date was last refreshed, or `null` if it has not been cached yet.
+    Use it to decide whether a previously fetched record is still current.
     """
     try:
         # Create the same cache key that would be used by the main endpoint

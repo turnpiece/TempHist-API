@@ -2,6 +2,22 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-04] - Public-Facing OpenAPI Descriptions and Server URL (unreleased)
+
+Follow-up to the spec cleanup. Spec-only: no endpoint's behaviour changes.
+
+### Changed
+
+- **Operation descriptions rewritten for a public audience.** They were the raw docstrings, which exposed implementation detail: `/health` mentioned "Render load balancers", `/weather` the `validate_location_for_ssrf()` function, `/v1/locations/search` the `MAPBOX_TOKEN` variable and "dev / CI", and `/v1/locations/popular` carried an ad-hoc response-shape blurb that the response schema now covers. The docstrings now describe what each endpoint returns and how to use it (including `ETag` / `If-None-Match` on records and the polling flow for async jobs). The internal notes moved to code comments next to the code they describe.
+- `GET /v1/og/{share_id}.png` is summarised as "Get share preview image" instead of the generated "Og Image".
+
+### Added
+
+- **`servers` in the spec**, taken from the existing per-environment `BASE_URL` setting (the same one that builds absolute image URLs). Production declares `https://api.temphist.com`, and the dev deployment declares its own host, so docs hosted on another origin call the right API and "Try it out" on the dev docs never reaches production. With `BASE_URL` unset or pointing at localhost (the default) no server is declared and tools resolve paths against the host that served the spec. **Requires `BASE_URL` to be set on each hosted service.**
+- Tests that fail if internal terms reappear in a description and that cover how `servers` is derived.
+
+---
+
 ## [2026-10-03] - OpenAPI Spec Cleanup for Public Docs (unreleased)
 
 The spec at `/openapi.json` is now fit to back public developer documentation (Scalar, Redoc, Swagger UI at `/docs` and `/redoc`). No endpoint's runtime behaviour changed: everything below is about what the spec says. Routes dropped from the spec are still served.

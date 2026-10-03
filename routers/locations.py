@@ -726,11 +726,11 @@ async def get_preapproved_locations(
     tier: Optional[str] = Query(None, description="Filter by location tier"),
     limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})"),
 ):
-    """
-    Get preapproved locations with optional filtering.
+    """Returns the curated list of locations. Filter by `country_code` or `tier`, and cap the number of results with
+    `limit`.
 
-    Returns a curated list of preapproved locations that can be used with the weather API.
-    Supports filtering by country code and tier, with optional result limiting.
+    The response carries `ETag` and `Last-Modified` headers; a conditional request receives `304 Not Modified` when the
+    list is unchanged.
     """
     # Rate limiting
     client_ip = request.client.host
@@ -802,26 +802,13 @@ async def search_locations(
     q: str = Query(..., min_length=2, max_length=100, description="City name search query", examples=["london"]),
     limit: int = Query(10, ge=1, le=20, description="Maximum number of results"),
 ):
-    """
-    Search for locations by city name.
+    """Search for locations by city name, best match first.
 
-    When MAPBOX_TOKEN is configured, delegates to the Mapbox Geocoding API and
-    returns global results.  Without a token (dev / CI), falls back to a
-    ranked search over the preapproved list.
-
-    Each result includes:
-      - name          city name
-      - admin1        first-level subdivision (state, province, etc.)
-      - country_name  full country name
-      - country_code  ISO 3166-1 alpha-2 code
-      - latitude      latitude coordinate (null if unavailable)
-      - longitude     longitude coordinate (null if unavailable)
-      - timezone      IANA timezone identifier, derived from coordinates
-                      (null if coordinates are unavailable)
-      - location_id   canonical ID if the result matches a preapproved location,
-                      otherwise null. Clients should pass this value to
-                      POST /v1/locations/selections when non-null.
+    When a result matches one of the curated locations its `location_id` is set; pass that value to
+    `POST /v1/locations/selections`. Otherwise `location_id` is `null`.
     """
+    # With MAPBOX_TOKEN configured this delegates to the Mapbox Geocoding API and returns global results.
+    # Without a token (dev / CI) it falls back to a ranked search over the preapproved list.
     # Rate limiting (shared bucket with preapproved endpoint)
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
@@ -968,19 +955,10 @@ async def get_popular_locations(
         False, description="Include imageUrl, imageAlt, imageAttribution fields (default false)"
     ),
 ):
-    """
-    Get popular locations with optional filtering.
+    """Returns the most popular locations, ranked by how often users select them. Until there is enough usage data the
+    curated list is returned instead.
 
-    Returns the most popular locations ranked by selection frequency, falling
-    back to the preapproved list until sufficient usage signal exists.
-
-    Image fields (imageUrl, imageAlt, imageAttribution) are omitted by default;
-    pass include_images=true if you need them.
-
-    Response shape:
-      { version, count, generated_at, locations: [{id, slug, name, admin1,
-        country_name, country_code, continent, latitude, longitude, timezone, tier,
-        [imageUrl, imageAlt, imageAttribution if include_images=true]}] }
+    Filter by `country_code` or `tier`. Image fields are omitted unless `include_images=true`.
     """
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
@@ -1147,13 +1125,12 @@ def _build_display_string(body: "SelectionRequest") -> Optional[str]:
 
 @router.post("/v1/locations/selections", status_code=204, responses=error_responses(429))
 async def record_location_selection(request: Request, body: SelectionRequest):
-    """
-    Record a canonical location ID selected by the authenticated user.
+    """Records that the signed-in user selected a location, which feeds the ranking of popular locations. Provide
+    either `location_id` (from the Locations endpoints) or a `name` with optional `admin1` and `country_code`.
 
-    Used to build usage-derived popular locations over time.
-    Requires Firebase authentication (anonymous users are accepted).
-    Silently no-ops when the usage tracker is unavailable.
+    Returns `204 No Content`.
     """
+    # Silently no-ops when the usage tracker is unavailable.
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required.")
 
