@@ -3,19 +3,77 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Annotated, Literal
+from typing import Annotated, Any, Dict, Literal, Optional
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from cache.accessors import get_job_manager
 from jobs.manager import JobQueueFullError, JobStatus
+from models import RecordResponse
+from routers._params import IdentifierParam, LocationParam, PeriodParam, UnitGroupParam
+from routers._responses import RATE_LIMITED, RETRY_AFTER_HEADER, error_responses
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import get_daily_temperature_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+JobIdParam = Annotated[
+    str,
+    Path(
+        description="Job ID returned by the `/async` endpoint",
+        examples=["record_computation_1768469400000_ab12cd34"],
+    ),
+]
+
+
+class JobCreatedResponse(BaseModel):
+    """A job was accepted and queued."""
+
+    job_id: str = Field(..., description="ID to poll at `/v1/jobs/{job_id}`")
+    status: Literal["pending"] = Field(..., description="Always `pending` for a newly created job")
+    message: str = Field(..., description="Human-readable confirmation", examples=["Job created successfully"])
+    retry_after: int = Field(..., description="Suggested seconds to wait before the first poll", examples=[3])
+    status_url: str = Field(..., description="Relative URL to poll for the result")
+
+
+class JobQueueFullResponse(BaseModel):
+    """The job queue has no capacity."""
+
+    error: str = Field(..., description="Error code", examples=["service_unavailable"])
+    message: str = Field(..., description="Human-readable explanation")
+    retry_after: int = Field(..., description="Seconds to wait before retrying", examples=[10])
+
+
+class JobResult(BaseModel):
+    """Output of a finished record job."""
+
+    model_config = ConfigDict(extra="allow")  # also carries internal cache bookkeeping fields
+
+    data: Optional[RecordResponse] = Field(
+        None, description="The computed record, as returned by `GET /v1/records/...`"
+    )
+    computed_at: Optional[str] = Field(None, description="When the job finished computing, as an ISO 8601 timestamp")
+
+
+class JobStatusResponse(BaseModel):
+    """State of an asynchronous job."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(..., description="Job ID")
+    type: str = Field(..., description="Kind of job", examples=["record_computation"])
+    status: Literal["pending", "processing", "ready", "error"] = Field(..., description="Current job state")
+    params: Dict[str, Any] = Field(default_factory=dict, description="Parameters the job was created with")
+    created_at: str = Field(..., description="When the job was created, as an ISO 8601 timestamp")
+    updated_at: str = Field(..., description="When the job last changed state, as an ISO 8601 timestamp")
+    result: Optional[JobResult] = Field(None, description="Present once `status` is `ready`")
+    error: Optional[str] = Field(None, description="Present when `status` is `error`")
+    error_details: Optional[Dict[str, Any]] = Field(None, description="Additional context when `status` is `error`")
+
 
 # Job diagnostics constants
 STUCK_JOB_THRESHOLD_SECONDS = 300  # 5 minutes - jobs older than this are considered stuck
@@ -109,12 +167,30 @@ def get_diagnostics_recommendations(worker_alive, heartbeat_age, jobs_by_status,
     return recommendations
 
 
-@router.post("/v1/records/{period}/{location}/{identifier}/async")
+@router.post(
+    "/v1/records/{period}/{location}/{identifier}/async",
+    tags=["Jobs"],
+    status_code=202,
+    responses={
+        202: {
+            "model": JobCreatedResponse,
+            "description": "The job was accepted. Poll `status_url` until its status is `ready` or `error`.",
+            "headers": RETRY_AFTER_HEADER,
+        },
+        503: {
+            "model": JobQueueFullResponse,
+            "description": "The job queue is full; retry after the interval in the `Retry-After` header",
+            "headers": RETRY_AFTER_HEADER,
+        },
+        **error_responses(500),
+        **RATE_LIMITED,
+    },
+)
 async def create_record_job(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name", max_length=200),
-    identifier: str = Path(..., description="Date identifier"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    period: PeriodParam,
+    location: LocationParam,
+    identifier: IdentifierParam,
+    unit_group: UnitGroupParam = "celsius",
     response: Response = None,
 ):
     """Create an async job to compute heavy record data."""
@@ -152,8 +228,15 @@ async def create_record_job(
         raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
 
 
-@router.get("/v1/jobs/{job_id}")
-async def get_job_status(job_id: str):
+@router.get(
+    "/v1/jobs/{job_id}",
+    tags=["Jobs"],
+    responses={
+        200: {"model": JobStatusResponse, "description": "The current state of the job"},
+        **error_responses(404, 500),
+    },
+)
+async def get_job_status(job_id: JobIdParam):
     """Get the status of an async job."""
     try:
         job_manager = get_job_manager()
@@ -171,7 +254,7 @@ async def get_job_status(job_id: str):
         raise HTTPException(status_code=500, detail="Failed to retrieve job status")
 
 
-@router.post("/v1/records/rolling-bundle/{location}/{anchor}/async")
+@router.post("/v1/records/rolling-bundle/{location}/{anchor}/async", include_in_schema=False)
 async def create_rolling_bundle_job(
     request: Request,
     location: str = Path(..., description="Location name"),
@@ -270,7 +353,7 @@ def _get_job_debug_info(redis_client: redis.Redis, job_id: str, now: datetime) -
         return {"exists": True, "error": "invalid JSON"}
 
 
-@router.get("/v1/jobs/diagnostics/worker-status")
+@router.get("/v1/jobs/diagnostics/worker-status", include_in_schema=False)
 async def get_worker_diagnostics(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Get diagnostic information about the background worker and job queue."""
     try:
@@ -333,7 +416,7 @@ async def get_worker_diagnostics(redis_client: Annotated[redis.Redis, Depends(ge
         raise HTTPException(status_code=500, detail=f"Failed to get diagnostics: {str(e)}")
 
 
-@router.get("/debug/jobs")
+@router.get("/debug/jobs", include_in_schema=False)
 async def debug_jobs_endpoint(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Debug endpoint to check job queue and job data in Redis."""
     try:

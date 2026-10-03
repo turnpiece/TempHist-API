@@ -2,7 +2,63 @@
 
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+# Example payloads rendered in the OpenAPI docs. tests/test_openapi.py validates each one against its model.
+_RECORD_EXAMPLE = {
+    "period": "daily",
+    "location": "london",
+    "identifier": "01-15",
+    "range": {"start": "2021-01-15", "end": "2025-01-15", "years": 5},
+    "unit_group": "celsius",
+    "values": [
+        {"date": "2021-01-15", "year": 2021, "temperature": 8.2, "anomaly": -0.25},
+        {"date": "2022-01-15", "year": 2022, "temperature": 9.1, "anomaly": 0.65},
+        {"date": "2023-01-15", "year": 2023, "temperature": 7.6, "anomaly": -0.85},
+        {"date": "2024-01-15", "year": 2024, "temperature": 8.9, "anomaly": 0.45},
+        {"date": "2025-01-15", "year": 2025, "temperature": 8.8, "anomaly": 0.35},
+    ],
+    "average": {"mean": 8.45, "unit": "celsius", "data_points": 5, "standard_deviation": 0.55},
+    "trend": {
+        "slope": 1.0,
+        "unit": "°C/decade",
+        "data_points": 5,
+        "r_squared": 0.07,
+        "slope_error": 2.17,
+        "gradient_factor": 0.0,
+    },
+    "summary": "8.8°C. It's not as warm as last year but warmer than 2023. "
+    "It was 0.4°C warmer than average for the time of year.",
+    "metadata": {"total_years": 5, "available_years": 5, "missing_years": [], "completeness": 100.0},
+    "updated": "2025-01-15T09:30:00+00:00",
+    "timezone": "Europe/London",
+}
+
+_META_EXAMPLE = {
+    "period": "daily",
+    "location": "london",
+    "identifier": "01-15",
+    "data": {
+        "summary": _RECORD_EXAMPLE["summary"],
+        "average": _RECORD_EXAMPLE["average"],
+        "trend": _RECORD_EXAMPLE["trend"],
+        "ranking": {"warm": 3, "cold": 3, "total": 5},
+        "current_anomaly": 0.35,
+    },
+    "metadata": _RECORD_EXAMPLE["metadata"],
+    "timezone": "Europe/London",
+}
+
+_ERROR_EXAMPLE = {
+    "error": "NOT_FOUND",
+    "message": "Job not found",
+    "code": "NOT_FOUND",
+    "details": None,
+    "path": "/v1/jobs/record_computation_1768469400000_ab12cd34",
+    "method": "GET",
+    "request_id": "3f2b8c1e-5d4a-4e8b-9a77-1c2d3e4f5a6b",
+    "timestamp": "2025-01-15T09:30:00.000000",
+}
 
 
 # Pydantic Models for v1 API
@@ -72,9 +128,11 @@ class UpdatedResponse(BaseModel):
 class RecordResponse(BaseModel):
     """Main record response for v1 API."""
 
+    model_config = ConfigDict(json_schema_extra={"examples": [_RECORD_EXAMPLE]})
+
     period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
     location: str = Field(..., description="Location name")
-    identifier: str = Field(..., description="Date identifier (MM-DD for daily, YYYY-MM for monthly, etc.)")
+    identifier: str = Field(..., description="Period end date as MM-DD (the same format for every period)")
     range: DateRange = Field(..., description="Date range covered")
     unit_group: str = Field("celsius", description="Temperature unit used")
     values: List[TemperatureValue] = Field(..., description="Temperature data points")
@@ -115,6 +173,8 @@ class MetaData(BaseModel):
 
 class MetaResponse(BaseModel):
     """Response model for the /meta sub-resource endpoint."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [_META_EXAMPLE]})
 
     period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Data period")
     location: str = Field(..., description="Location name")
@@ -176,6 +236,8 @@ class AnalyticsResponse(BaseModel):
 class ErrorResponse(BaseModel):
     """Standardized error response format for consistent API error handling."""
 
+    model_config = ConfigDict(json_schema_extra={"examples": [_ERROR_EXAMPLE]})
+
     error: str = Field(..., description="Error type or code")
     message: str = Field(..., description="Human-readable error message")
     code: Optional[str] = Field(None, description="Error code for programmatic handling")
@@ -186,3 +248,44 @@ class ErrorResponse(BaseModel):
     timestamp: str = Field(
         default_factory=lambda: __import__("datetime").datetime.now().isoformat(), description="Error timestamp"
     )
+
+
+# The shapes below are what the request middleware and a few endpoints return directly, bypassing the
+# exception handlers that produce ErrorResponse. They exist so the OpenAPI docs describe what a client sees.
+class MiddlewareErrorResponse(BaseModel):
+    """Error body returned by the authentication middleware (401 and 403)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"detail": "Missing or invalid Authorization header."}]},
+    )
+
+    detail: str = Field(..., description="Human-readable reason the request was rejected")
+    reason: Optional[str] = Field(None, description="Additional context, present on some 403 responses")
+
+
+class RateLimitErrorResponse(BaseModel):
+    """Error body returned by the request-rate and location-diversity limiter (429)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "detail": "Rate limit exceeded",
+                    "reason": "Too many requests (401 > 400) in 1 hour(s)",
+                    "retry_after": 3600,
+                }
+            ]
+        },
+    )
+
+    detail: str = Field(..., description="Which limit was exceeded")
+    reason: str = Field(..., description="Details of the limit that was hit")
+    retry_after: int = Field(..., description="Seconds to wait before retrying (also sent as the Retry-After header)")
+
+
+class SimpleErrorResponse(BaseModel):
+    """Bare ``{"error": ...}`` body returned by /weather and /forecast when no data could be produced."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"error": "No temperature data available"}]})
+
+    error: str = Field(..., description="Description of what went wrong")

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.cache_utils import (
@@ -54,6 +54,8 @@ from models import (
     TrendData,
     UpdatedResponse,
 )
+from routers._params import IdentifierParam, LocationParam, PeriodParam, UnitGroupParam
+from routers._responses import RATE_LIMITED, error_responses
 from routers.dependencies import get_invalid_location_cache, get_redis_client
 from utils.cache_headers import set_weather_cache_headers
 from utils.daily_temperature_store import (
@@ -77,7 +79,10 @@ from utils.weather_data import get_temperature_series
 from utils.weather_provider import LocationNotFoundError, fetch_timeline_days
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["Records"])
+
+# Errors every record endpoint can return. 429 comes from the rate limiter in main.py, not the handler.
+_RECORD_ERRORS = {**error_responses(400, 500), **RATE_LIMITED}
 
 
 def parse_identifier(period: str, identifier: str) -> tuple:
@@ -1701,13 +1706,17 @@ async def _get_record_data(
     return None, data, "MISS", celsius_records, bundle_etag
 
 
-@router.get("/v1/records/{period}/{location}/{identifier}", response_model=RecordResponse)
+@router.get(
+    "/v1/records/{period}/{location}/{identifier}",
+    response_model=RecordResponse,
+    responses={**error_responses(304), **_RECORD_ERRORS},
+)
 async def get_record(
     request: Request,
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name", max_length=200),
-    identifier: str = Path(..., description="Date identifier"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    period: PeriodParam,
+    location: LocationParam,
+    identifier: IdentifierParam,
+    unit_group: UnitGroupParam = "celsius",
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -1768,12 +1777,16 @@ async def get_record(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/v1/records/{period}/{location}/{identifier}/average", response_model=SubResourceResponse)
+@router.get(
+    "/v1/records/{period}/{location}/{identifier}/average",
+    response_model=SubResourceResponse,
+    responses=_RECORD_ERRORS,
+)
 async def get_record_average(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name", max_length=200),
-    identifier: str = Path(..., description="Date identifier"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    period: PeriodParam,
+    location: LocationParam,
+    identifier: IdentifierParam,
+    unit_group: UnitGroupParam = "celsius",
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -1830,12 +1843,16 @@ async def get_record_average(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/v1/records/{period}/{location}/{identifier}/trend", response_model=SubResourceResponse)
+@router.get(
+    "/v1/records/{period}/{location}/{identifier}/trend",
+    response_model=SubResourceResponse,
+    responses=_RECORD_ERRORS,
+)
 async def get_record_trend(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name", max_length=200),
-    identifier: str = Path(..., description="Date identifier"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    period: PeriodParam,
+    location: LocationParam,
+    identifier: IdentifierParam,
+    unit_group: UnitGroupParam = "celsius",
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -1892,12 +1909,16 @@ async def get_record_trend(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/v1/records/{period}/{location}/{identifier}/summary", response_model=SubResourceResponse)
+@router.get(
+    "/v1/records/{period}/{location}/{identifier}/summary",
+    response_model=SubResourceResponse,
+    responses=_RECORD_ERRORS,
+)
 async def get_record_summary(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name", max_length=200),
-    identifier: str = Path(..., description="Date identifier"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    period: PeriodParam,
+    location: LocationParam,
+    identifier: IdentifierParam,
+    unit_group: UnitGroupParam = "celsius",
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -1954,12 +1975,16 @@ async def get_record_summary(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/v1/records/{period}/{location}/{identifier}/meta", response_model=MetaResponse)
+@router.get(
+    "/v1/records/{period}/{location}/{identifier}/meta",
+    response_model=MetaResponse,
+    responses=_RECORD_ERRORS,
+)
 async def get_record_meta(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name", max_length=200),
-    identifier: str = Path(..., description="Date identifier"),
-    unit_group: Literal["celsius", "fahrenheit"] = Query("celsius", description="Temperature unit for response"),
+    period: PeriodParam,
+    location: LocationParam,
+    identifier: IdentifierParam,
+    unit_group: UnitGroupParam = "celsius",
     response: Response = None,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)] = None,
     invalid_location_cache: Annotated[InvalidLocationCache, Depends(get_invalid_location_cache)] = None,
@@ -2026,11 +2051,15 @@ async def get_record_meta(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/v1/records/{period}/{location}/{identifier}/updated", response_model=UpdatedResponse)
+@router.get(
+    "/v1/records/{period}/{location}/{identifier}/updated",
+    response_model=UpdatedResponse,
+    responses={**error_responses(500), **RATE_LIMITED},
+)
 async def get_record_updated(
-    period: Literal["daily", "weekly", "monthly", "yearly"] = Path(..., description="Data period"),
-    location: str = Path(..., description="Location name", max_length=200),
-    identifier: str = Path(..., description="Date identifier"),
+    period: PeriodParam,
+    location: LocationParam,
+    identifier: IdentifierParam,
     redis_client: redis.Redis = Depends(get_redis_client),
 ):
     """

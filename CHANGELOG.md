@@ -2,6 +2,46 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-03] - OpenAPI Spec Cleanup for Public Docs (unreleased)
+
+The spec at `/openapi.json` is now fit to back public developer documentation (Scalar, Redoc, Swagger UI at `/docs` and `/redoc`). No endpoint's runtime behaviour changed: everything below is about what the spec says. Routes dropped from the spec are still served.
+
+### Changed
+
+- **Spec metadata**: title `TempHist API`, version taken from `version.py`, a description (authentication, periods and identifiers, units, rate limits, data source), and tags with descriptions: Records, Locations, Shares, Jobs, Weather, Health.
+- **Only public endpoints are documented**: 68 paths became 20. Excluded from the spec (but still routable): `/cache*`, `/cache-warm*`, `/cache-stats*`, `/usage-stats*`, `/rate-limit-stats`, `/rate-limit-status`, `/admin/*`, `/debug/*`, `/test-*`, `/analytics*`, `/protected-endpoint`, `/health/detailed`, `/`, `/v1/jobs/diagnostics/*`, `/v1/locations/popular/stats` and `/v1/locations/popular/display-strings`. `/health` stays public.
+- **Authentication is declared per operation**: a `FirebaseBearer` security scheme (HTTP bearer, Firebase ID token) is applied to every operation the auth middleware protects, which is every documented operation except `/health`, `GET /v1/shares`, `GET /v1/shares/{share_id}` and `/v1/og/{share_id}.png`. It is derived from the middleware's own public-path rule, so the two cannot drift. Protected operations document the middleware's `401` and `403` bodies (`{"detail": ...}`).
+- **Response models for every public route** (many `200`s were an empty `schema: {}`): `/weather`, `/forecast`, `/health`, `/v1/locations/search`, `/popular`, `/preapproved/status`, `/popular/status`, `POST /v1/records/.../async`, `GET /v1/jobs/{job_id}`, `/v1/shares` (list, create, get). `/v1/og/{share_id}.png` now declares `image/png`. `/weather` and `/forecast` document that they can answer `200` with an `{"error": ...}` body.
+- **Parameters**: `identifier` is documented as `MM-DD` (same for all periods; the rolling window ends on that date) with a pattern and example, `date` on `/weather` as `YYYY-MM-DD`, and `unit_group` as `celsius|fahrenheit` on `/weather` and `/forecast`. These are documentation only: validation is unchanged, so inputs that were accepted before (including the legacy `unit_group=us`) still work.
+- **Examples** added to `RecordResponse`, `MetaResponse`, `ErrorResponse`, the share request body and the path and query parameters.
+- **`/v1/locations/popular`** has its own item model, because its results omit image fields unless `include_images=true` and entries for user-selected, non-curated locations have no `continent`, `tier` or images. `LocationItem` (used by `/preapproved`, which always includes images) is unchanged.
+- **Error documentation**: `429` on `/weather`, `/forecast` and `/v1/records/*` is documented with the limiter's real body (`detail`, `reason`, `retry_after`) and a `Retry-After` header; `422` is documented as `ErrorResponse`, which is what the validation handler returns, instead of FastAPI's default `HTTPValidationError`.
+
+### Fixed
+
+- **Duplicate `operationId`s** (`root__options` and the `test-cors` GET/OPTIONS pairs): those routes are no longer in the spec.
+- **Mojibake in the spec** (`â€”`, `Â°C`, `Ã—`, `âˆ’`): the source files and the served bytes were correct UTF-8, but `application/json` carries no charset and some consumers decode it as Latin-1. `/openapi.json` is now served with every non-ASCII character escaped (`°`), which reads identically in any encoding. The spec genuinely contains non-ASCII text (the `°C/decade` trend unit), so rewording descriptions would not have been enough.
+- **`POST /v1/records/{period}/{location}/{identifier}/async`** is documented as `202 Accepted` (it always returned 202 but was declared `200`), with the `503` queue-full response and its `Retry-After`.
+- **`RecordResponse.identifier`** described `YYYY-MM` for monthly records, which the API never accepted; every period uses `MM-DD`.
+
+### Removed from the docs: legacy endpoints
+
+These already answered `410 Gone` and are no longer listed in the spec. Their `410` responses carry `X-New-Endpoint` and a migration message.
+
+| Removed | Use instead |
+|---|---|
+| `GET /data/{location}/{month_day}` | `GET /v1/records/daily/{location}/{month_day}` |
+| `GET /average/{location}/{month_day}` | `GET /v1/records/daily/{location}/{month_day}/average` |
+| `GET /trend/{location}/{month_day}` | `GET /v1/records/daily/{location}/{month_day}/trend` |
+| `GET /summary/{location}/{month_day}` | `GET /v1/records/daily/{location}/{month_day}/summary` |
+| `POST /v1/records/rolling-bundle/{location}/{anchor}/async` | `GET /v1/records/{period}/{location}/{identifier}` for each of `daily`, `weekly`, `monthly`, `yearly` |
+
+### Added
+
+- `tests/test_openapi.py` locks the contract: an allow-list of documented operations (a new route fails the test until it is added or hidden on purpose), unique operation IDs, no empty response schemas, security matching the middleware, an ASCII-only served spec, and that hidden routes are still routable.
+
+---
+
 ## [2026-08-27] - Open-Meteo Paid Tier & Rate Limits for Store Launch (unreleased)
 
 ### Added

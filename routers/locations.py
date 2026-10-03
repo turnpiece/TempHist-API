@@ -148,13 +148,85 @@ class PreapprovedResponse(BaseModel):
     locations: List[LocationItem] = Field(..., description="List of location items")
 
 
+class PopularLocationItem(BaseModel):
+    """A location in the popular list.
+
+    Curated locations carry the full set of fields. Locations that only became popular because users selected them
+    have just what was supplied at selection time, so most fields beyond ``id``, ``slug`` and ``name`` may be missing
+    or null. The image fields are present only when ``include_images=true`` is requested, and only for curated
+    locations.
+    """
+
+    id: str = Field(..., description="Unique location identifier")
+    slug: str = Field(..., description="URL-friendly location slug")
+    name: str = Field(..., description="Human-readable location name")
+    admin1: Optional[str] = Field(None, description="First-level administrative division")
+    country_name: Optional[str] = Field(None, description="Full country name")
+    country_code: Optional[str] = Field(None, description="ISO 3166-1 alpha-2 country code")
+    continent: Optional[str] = Field(None, description="Continent name (curated locations only)")
+    latitude: Optional[float] = Field(None, description="Latitude coordinate")
+    longitude: Optional[float] = Field(None, description="Longitude coordinate")
+    timezone: Optional[str] = Field(None, description="IANA timezone identifier")
+    tier: Optional[str] = Field(None, description="Location tier classification (curated locations only)")
+    imageUrl: Optional[ImageUrl] = Field(None, description="Location image URLs (`include_images=true` only)")
+    imageAlt: Optional[str] = Field(None, description="Alt text for the image (`include_images=true` only)")
+    imageAttribution: Optional[ImageAttribution] = Field(
+        None, description="Image attribution (`include_images=true` only)"
+    )
+
+
 class PopularResponse(BaseModel):
     """Response model for popular locations endpoint."""
 
     version: int = Field(default=1, description="API version")
     count: int = Field(..., description="Number of locations returned")
     generated_at: datetime = Field(..., description="Response generation timestamp")
-    locations: List[LocationItem] = Field(..., description="List of location items")
+    locations: List[PopularLocationItem] = Field(..., description="Locations, most popular first")
+
+
+class SearchLocationItem(BaseModel):
+    """A location search result."""
+
+    name: str = Field(..., description="City name")
+    admin1: Optional[str] = Field(..., description="First-level subdivision (state, province, ...)")
+    country_name: Optional[str] = Field(..., description="Full country name")
+    country_code: Optional[str] = Field(..., description="ISO 3166-1 alpha-2 country code")
+    latitude: Optional[float] = Field(..., description="Latitude, null if unavailable")
+    longitude: Optional[float] = Field(..., description="Longitude, null if unavailable")
+    timezone: Optional[str] = Field(..., description="IANA timezone derived from the coordinates, null if unavailable")
+    location_id: Optional[str] = Field(
+        ...,
+        description=(
+            "Canonical ID if the result matches a preapproved location, otherwise null. "
+            "Pass it to `POST /v1/locations/selections` when non-null."
+        ),
+    )
+
+
+class SearchResponse(BaseModel):
+    """Response model for location search."""
+
+    count: int = Field(..., description="Number of results returned")
+    locations: List[SearchLocationItem] = Field(..., description="Matching locations, best match first")
+
+
+class RateLimitSettings(BaseModel):
+    """The per-IP rate limit applied to the Locations endpoints."""
+
+    requests_per_minute: int = Field(..., description="Requests allowed per window")
+    window_seconds: int = Field(..., description="Length of the window in seconds")
+
+
+class LocationsStatusResponse(BaseModel):
+    """Status of the locations service."""
+
+    status: str = Field(..., description="`healthy` when the service is operating normally", examples=["healthy"])
+    locations_loaded: int = Field(..., description="Number of preapproved locations loaded")
+    etag: str = Field(..., description="ETag of the current locations data")
+    last_modified: str = Field(..., description="Last-Modified value of the current locations data")
+    cache_enabled: bool = Field(..., description="Whether the response cache is available")
+    fallback: Optional[str] = Field(None, description="What is served until there is enough usage data (popular only)")
+    rate_limit: RateLimitSettings = Field(..., description="Rate limit applied to the Locations endpoints")
 
 
 class SelectionRequest(BaseModel):
@@ -233,7 +305,7 @@ rate_limit_requests: Dict[str, List[float]] = defaultdict(list)
 rate_limit_lock = asyncio.Lock()
 
 # Router
-router = APIRouter()
+router = APIRouter(tags=["Locations"])
 
 
 def get_redis_client() -> redis.Redis:
@@ -650,7 +722,7 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
 async def get_preapproved_locations(
     request: Request,
     response: Response,
-    country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code"),
+    country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code", examples=["GB"]),
     tier: Optional[str] = Query(None, description="Filter by location tier"),
     limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})"),
 ):
@@ -721,10 +793,13 @@ async def get_preapproved_locations(
     return PreapprovedResponse(**response_data)
 
 
-@router.get("/v1/locations/search", responses=error_responses(400, 429, 503))
+@router.get(
+    "/v1/locations/search",
+    responses={200: {"model": SearchResponse}, **error_responses(400, 429, 503)},
+)
 async def search_locations(
     request: Request,
-    q: str = Query(..., min_length=2, max_length=100, description="City name search query"),
+    q: str = Query(..., min_length=2, max_length=100, description="City name search query", examples=["london"]),
     limit: int = Query(10, ge=1, le=20, description="Maximum number of results"),
 ):
     """
@@ -811,7 +886,7 @@ async def search_locations(
     }
 
 
-@router.get("/v1/locations/preapproved/status")
+@router.get("/v1/locations/preapproved/status", responses={200: {"model": LocationsStatusResponse}})
 async def get_locations_status():
     """Get status information about the preapproved locations service."""
     return {
@@ -879,11 +954,14 @@ def _build_popular_locations(limit: int) -> List[dict]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/v1/locations/popular", responses=error_responses(304, 400, 429))
+@router.get(
+    "/v1/locations/popular",
+    responses={200: {"model": PopularResponse}, **error_responses(304, 400, 429)},
+)
 async def get_popular_locations(
     request: Request,
     response: Response,
-    country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code"),
+    country_code: Optional[str] = Query(None, description="Filter by ISO 3166-1 alpha-2 country code", examples=["GB"]),
     tier: Optional[str] = Query(None, description="Filter by location tier"),
     limit: Optional[int] = Query(None, ge=1, le=MAX_LIMIT, description=f"Limit results (max {MAX_LIMIT})"),
     include_images: bool = Query(
@@ -979,7 +1057,7 @@ async def get_popular_locations(
     return {**full_data, "locations": slim_locs}
 
 
-@router.get("/v1/locations/popular/status")
+@router.get("/v1/locations/popular/status", responses={200: {"model": LocationsStatusResponse}})
 async def get_popular_locations_status():
     """Get status information about the popular locations service."""
     return {
@@ -993,7 +1071,7 @@ async def get_popular_locations_status():
     }
 
 
-@router.get("/v1/locations/popular/stats")
+@router.get("/v1/locations/popular/stats", include_in_schema=False)
 async def get_popular_locations_stats():
     """
     Debug/ops endpoint: per-location selection counts from the rolling window.
@@ -1067,7 +1145,7 @@ def _build_display_string(body: "SelectionRequest") -> Optional[str]:
     return None
 
 
-@router.post("/v1/locations/selections", status_code=204, responses=error_responses(401, 429))
+@router.post("/v1/locations/selections", status_code=204, responses=error_responses(429))
 async def record_location_selection(request: Request, body: SelectionRequest):
     """
     Record a canonical location ID selected by the authenticated user.
@@ -1179,7 +1257,7 @@ async def record_location_selection(request: Request, body: SelectionRequest):
     return Response(status_code=204)
 
 
-@router.get("/v1/locations/popular/display-strings", responses=error_responses(429))
+@router.get("/v1/locations/popular/display-strings", include_in_schema=False, responses=error_responses(429))
 async def get_popular_display_strings(
     request: Request,
     limit: Optional[int] = Query(

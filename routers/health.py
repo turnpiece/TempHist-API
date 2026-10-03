@@ -8,6 +8,7 @@ import httpx
 import redis
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from cache.accessors import get_cache_stats, get_open_meteo_stats
 from config import (
@@ -26,7 +27,20 @@ from version import __version__
 router = APIRouter()
 
 
-@router.get("/health")
+class HealthResponse(BaseModel):
+    """Liveness response."""
+
+    status: str = Field(..., description="Always `healthy` when the service is up", examples=["healthy"])
+    timestamp: str = Field(
+        ..., description="Server time as an ISO 8601 timestamp", examples=["2025-01-15T09:30:00.123456"]
+    )
+
+
+@router.get(
+    "/health",
+    tags=["Health"],
+    responses={200: {"model": HealthResponse, "description": "The service is up"}},
+)
 async def health_check():
     """Simple health check endpoint for Render load balancers."""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
@@ -152,7 +166,7 @@ def _apply_check(health_status: dict, overall_healthy: bool, key: str, result: d
     return overall_healthy
 
 
-@router.get("/health/detailed")
+@router.get("/health/detailed", include_in_schema=False)
 async def detailed_health_check(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Comprehensive health check endpoint for debugging and monitoring (LOW-007: Enhanced dependencies check)."""
     health_status = {"status": "healthy", "timestamp": datetime.now().isoformat(), "version": __version__, "checks": {}}
