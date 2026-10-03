@@ -6,7 +6,8 @@ description and tags, the Firebase security scheme, and how the JSON is serialis
 """
 
 import json
-from typing import Callable
+from typing import Callable, Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request, Response
 from starlette.routing import Route
@@ -83,6 +84,8 @@ OPENAPI_TAGS = [
 
 FIREBASE_BEARER = "FirebaseBearer"
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
 _FIREBASE_BEARER_SCHEME = {
     "type": "http",
     "scheme": "bearer",
@@ -94,6 +97,22 @@ _FIREBASE_BEARER_SCHEME = {
 }
 
 _HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
+
+
+def servers_for(base_url: str) -> Optional[list]:
+    """The ``servers`` entry for the spec, taken from the per-environment ``BASE_URL`` setting.
+
+    Docs hosted on another origin (Scalar, Redoc) call whatever server the spec names, so a deployed spec has to name
+    its own API: production declares ``https://api.temphist.com`` and the dev deployment its own host. Hard-coding
+    production would send "Try it out" on the dev docs to production.
+
+    Returns None for an unset or localhost ``BASE_URL`` (the default). The spec then names no server, and OpenAPI
+    tools resolve paths against the host that served it, which is right for local runs.
+    """
+    url = (base_url or "").strip().rstrip("/")
+    if not url or urlparse(url).hostname in _LOCAL_HOSTS:
+        return None
+    return [{"url": url}]
 
 
 def _component_ref(name: str) -> dict:

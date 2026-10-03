@@ -111,11 +111,10 @@ async def get_weather(
     unit_group: LenientUnitGroupParam = "celsius",
     response: Response = None,
 ):
-    """Get weather data for a specific location and date.
-
-    Note: Location is validated by validate_location_for_ssrf() which enforces
-    max_length=200 and prevents SSRF attacks.
+    """Returns the mean, minimum and maximum temperature for a location on a single date, in Celsius unless
+    `unit_group=fahrenheit`.
     """
+    # Location is validated by validate_location_for_ssrf(), which enforces max_length=200 and prevents SSRF.
     logger.info(f"[DEBUG] Weather endpoint called with location={sanitize_for_logging(location)}, date={date}")
 
     # Parse the date for cache headers
@@ -194,7 +193,9 @@ async def get_forecast(
     location: LocationParam,
     unit_group: LenientUnitGroupParam = "celsius",
 ):
-    """Get weather forecast for a location with time-based caching."""
+    """Returns the forecast mean temperature for a location for the current day, in Celsius unless
+    `unit_group=fahrenheit`.
+    """
     try:
         # Create cache key for forecast
         cache_key = generate_cache_key("forecast", location)

@@ -42,7 +42,8 @@ class HealthResponse(BaseModel):
     responses={200: {"model": HealthResponse, "description": "The service is up"}},
 )
 async def health_check():
-    """Simple health check endpoint for Render load balancers."""
+    """Returns `healthy` and the server time while the service is up. Suitable as a liveness check."""
+    # Also the health check path for the Render services (see render.yaml).
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 

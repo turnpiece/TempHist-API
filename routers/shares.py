@@ -150,7 +150,9 @@ async def list_shares(
     limit: int = Query(20, ge=1, le=100, description="Maximum number of shares to return"),
     offset: int = Query(0, ge=0, description="Number of shares to skip"),
 ):
-    """List recent share records, deduplicated by location+period+identifier. Public — no auth required."""
+    """Lists recently created shares, most recent first. Near-duplicates (the same period and date at the same or a
+    nearby place) are collapsed into one.
+    """
     store = get_share_store()
     shares = await store.list_shares(period=period, limit=limit, offset=offset)
     if shares is None:
@@ -172,7 +174,7 @@ async def create_share(
     body: ShareCreate,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
 ):
-    """Create a share record and return a short URL. Requires Firebase auth."""
+    """Creates a shareable snapshot of a record and returns its `id` and the relative `url` of its share page."""
     # Auth is enforced by the middleware for all non-public paths.
     # This guard is a belt-and-suspenders check in case middleware config changes.
     if not getattr(request.state, "user", None):
@@ -205,7 +207,7 @@ async def get_share(
     share_id: ShareIdParam,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
 ):
-    """Retrieve share parameters by ID. Public — no auth required."""
+    """Returns the stored parameters of a share, and whether its date is currently today in the location's timezone."""
     if len(share_id) != 8 or not share_id.isalnum():
         raise HTTPException(status_code=404, detail="Share not found.")
 

@@ -29,6 +29,7 @@ from cache.warming import CACHE_WARMING_ENABLED, scheduled_cache_warming
 from config import (
     ADMIN_API_KEY,
     API_ACCESS_TOKEN,
+    BASE_URL,
     CORS_ORIGIN_REGEX,
     CORS_ORIGINS,
     DEBUG,
@@ -51,7 +52,7 @@ from middleware import (
     request_size_middleware,
 )
 from middleware.cors import get_cors_origin_regex, get_cors_origins
-from openapi_docs import API_DESCRIPTION, API_TITLE, OPENAPI_TAGS, install_openapi
+from openapi_docs import API_DESCRIPTION, API_TITLE, OPENAPI_TAGS, install_openapi, servers_for
 from rate_limiting import LocationDiversityMonitor, RequestRateMonitor, ServiceTokenRateLimiter
 from routers._responses import error_responses
 from routers.analytics import router as analytics_router
@@ -332,6 +333,7 @@ app = FastAPI(
     description=API_DESCRIPTION,
     version=__version__,
     openapi_tags=OPENAPI_TAGS,
+    servers=servers_for(BASE_URL),
     lifespan=lifespan,
 )
 

@@ -193,7 +193,13 @@ async def create_record_job(
     unit_group: UnitGroupParam = "celsius",
     response: Response = None,
 ):
-    """Create an async job to compute heavy record data."""
+    """Starts computing a record in the background and returns `202 Accepted` with a `job_id`. Poll
+    `GET /v1/jobs/{job_id}`, or follow `status_url`, until the status is `ready` or `error`; the finished record is in
+    `result.data`.
+
+    Takes the same parameters as `GET /v1/records/{period}/{location}/{identifier}`. Identical requests made close
+    together share one job.
+    """
     try:
         logger.info(f"Creating async job: period={period}, location={location}, identifier={identifier}")
         job_manager = get_job_manager()
@@ -237,7 +243,9 @@ async def create_record_job(
     },
 )
 async def get_job_status(job_id: JobIdParam):
-    """Get the status of an async job."""
+    """Returns the state of a job started with an `/async` endpoint. Once `status` is `ready`, `result.data` holds the
+    computed record; if it is `error`, see `error` and `error_details`.
+    """
     try:
         job_manager = get_job_manager()
         job_status = job_manager.get_job_status(job_id)

@@ -473,6 +473,7 @@ async def _fetch_records_live(share: dict, redis_client) -> Optional[list]:
 
 @router.get(
     "/v1/og/{share_id}.png",
+    summary="Get share preview image",
     response_class=Response,
     responses={
         200: {
@@ -487,7 +488,9 @@ async def og_image(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
     show_title: bool = Query(default=False, description="Whether to render the city/period title on the image"),
 ):
-    """Return a 1200×630 OG preview image for the given share ID. No auth required."""
+    """Returns the 1200x630 PNG preview image for a share, used for social-media link previews. A placeholder image is
+    returned if the share's temperature data is unavailable.
+    """
     if len(share_id) != 8 or not share_id.isalnum():
         raise HTTPException(status_code=404, detail="Share not found.")
 
