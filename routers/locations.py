@@ -49,6 +49,7 @@ CACHE_TTL = 604800  # 7 days (data changes infrequently)
 POPULAR_CACHE_TTL = 3600  # 1 hour — rebuilt from live selection signal
 RATE_LIMIT_REQUESTS = 60  # requests per minute
 RATE_LIMIT_WINDOW = 60  # 1 minute window
+LOADING_RETRY_AFTER = 5  # seconds; the locations data is normally loaded within moments of startup
 CACHE_PREFIX = "preapproved:v2"
 POPULAR_CACHE_PREFIX = "popular:v2"
 MAX_LIMIT = 500
@@ -379,6 +380,14 @@ def get_popular_cache_key(country_code: Optional[str] = None, tier: Optional[str
         return f"{POPULAR_CACHE_PREFIX}:tier:{tier}"
     else:
         return f"{POPULAR_CACHE_PREFIX}:all"
+
+
+def rate_limited(reason: str) -> HTTPException:
+    """The 429 raised when check_rate_limit rejects a request.
+
+    Retry-After is the window length, the longest a client can have to wait for the oldest request to age out.
+    """
+    return HTTPException(status_code=429, detail=reason, headers={"Retry-After": str(RATE_LIMIT_WINDOW)})
 
 
 async def check_rate_limit(ip: str) -> Tuple[bool, str]:
@@ -736,7 +745,7 @@ async def get_preapproved_locations(
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
     if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
+        raise rate_limited(reason)
 
     # Normalise, validate, and resolve country code
     resolved_country = None
@@ -813,7 +822,7 @@ async def search_locations(
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
     if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
+        raise rate_limited(reason)
 
     # --- Mapbox path ---
     if MAPBOX_TOKEN:
@@ -829,7 +838,11 @@ async def search_locations(
 
     # --- Fallback: search the preapproved list ---
     if not locations_data:
-        raise HTTPException(status_code=503, detail="Locations data not yet loaded")
+        raise HTTPException(
+            status_code=503,
+            detail="Locations data not yet loaded",
+            headers={"Retry-After": str(LOADING_RETRY_AFTER)},
+        )
 
     query_lower = q.strip().lower()
 
@@ -963,7 +976,7 @@ async def get_popular_locations(
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
     if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
+        raise rate_limited(reason)
 
     resolved_country = None
     cache_country_key = None
@@ -1137,7 +1150,7 @@ async def record_location_selection(request: Request, body: SelectionRequest):
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
     if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
+        raise rate_limited(reason)
 
     uid = request.state.user.get("uid", "anonymous")
     tracker = get_usage_tracker()
@@ -1258,7 +1271,7 @@ async def get_popular_display_strings(
     client_ip = request.client.host
     allowed, reason = await check_rate_limit(client_ip)
     if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
+        raise rate_limited(reason)
 
     effective_limit = limit or POPULARITY_MAX_LOCATIONS
     tracker = get_usage_tracker()

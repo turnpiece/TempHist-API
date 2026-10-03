@@ -41,8 +41,9 @@ Temperatures are in Celsius unless `unit_group=fahrenheit` is requested.
 
 ## Rate limits and errors
 
-Requests to `/weather`, `/forecast` and `/v1/records` are rate limited per client. A rejected request receives
-`429 Too Many Requests` with a `Retry-After` header. Most errors use the `ErrorResponse` body. Authentication and rate
+Requests to `/weather`, `/forecast` and `/v1/records` are rate limited per client, and the Locations endpoints have
+their own limit. A rejected request receives `429 Too Many Requests`, and a temporarily unavailable service
+`503 Service Unavailable`; both carry a `Retry-After` header. Most errors use the `ErrorResponse` body. Authentication and rate
 limiting are enforced before a request reaches an endpoint and use their own bodies, which are documented on each
 operation.
 

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Shares"])
 
 _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
+_UNAVAILABLE_RETRY_AFTER = 30  # seconds to suggest when the share store (Postgres) is unreachable
 
 
 def _share_cache_key(share_id: str) -> str:
@@ -155,7 +156,11 @@ async def list_shares(
     store = get_share_store()
     shares = await store.list_shares(period=period, limit=limit, offset=offset)
     if shares is None:
-        raise HTTPException(status_code=503, detail="Share service unavailable.")
+        raise HTTPException(
+            status_code=503,
+            detail="Share service unavailable.",
+            headers={"Retry-After": str(_UNAVAILABLE_RETRY_AFTER)},
+        )
     return {"shares": shares, "limit": limit, "offset": offset}
 
 
@@ -186,7 +191,11 @@ async def create_share(
         longitude=body.longitude,
     )
     if result is None:
-        raise HTTPException(status_code=503, detail="Share service unavailable.")
+        raise HTTPException(
+            status_code=503,
+            detail="Share service unavailable.",
+            headers={"Retry-After": str(_UNAVAILABLE_RETRY_AFTER)},
+        )
     return result
 
 

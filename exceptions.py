@@ -150,7 +150,8 @@ def register_exception_handlers(app):
             request_id=request_id,
         )
 
-        return JSONResponse(status_code=exc.status_code, content=error_response.model_dump())
+        # Forward headers set on the exception (Retry-After on 429/503, Allow on 405, ...); they were dropped before.
+        return JSONResponse(status_code=exc.status_code, content=error_response.model_dump(), headers=exc.headers)
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):

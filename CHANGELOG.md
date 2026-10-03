@@ -15,6 +15,17 @@ Follow-up to the spec cleanup. Spec-only: no endpoint's behaviour changes.
 
 - **`servers` in the spec**, taken from the existing per-environment `BASE_URL` setting (the same one that builds absolute image URLs). Production declares `https://api.temphist.com`, and the dev deployment declares its own host, so docs hosted on another origin call the right API and "Try it out" on the dev docs never reaches production. With `BASE_URL` unset or pointing at localhost (the default) no server is declared and tools resolve paths against the host that served the spec. **Requires `BASE_URL` to be set on each hosted service.**
 - Tests that fail if internal terms reappear in a description and that cover how `servers` is derived.
+## [2026-10-03] - Retry-After on 429 and 503 Responses (unreleased)
+
+### Fixed
+
+- **Headers set on an `HTTPException` were silently dropped.** The shared exception handler in `exceptions.py` built its response without `exc.headers`, so a `Retry-After` (or any other header) never reached the client. `POST /analytics` already tried to send `Retry-After: 3600` on its 429 and lost it; it now arrives. A side effect: `405 Method Not Allowed` responses now include the `Allow` header, as HTTP requires.
+- **`429 Too Many Requests` from the Locations endpoints now sends `Retry-After: 60`** (the length of the limiter's window, the longest a client can have to wait). Covers `/v1/locations/preapproved`, `/search`, `/popular`, `/popular/display-strings` and `POST /v1/locations/selections`.
+- **`503 Service Unavailable` now sends `Retry-After`**: 5 seconds from `/v1/locations/search` while the locations data is still loading, and 30 seconds from `GET /v1/shares` and `POST /v1/shares` when the share store is unreachable. These two values are suggestions rather than measured recovery times.
+
+### Changed
+
+- The OpenAPI spec documents the `Retry-After` header on those 429 and 503 responses, so every documented 429 and 503 now declares it. The rate limiter on `/weather`, `/forecast` and `/v1/records` and the async job queue's 503 already sent it.
 
 ---
 
