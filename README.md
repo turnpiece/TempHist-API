@@ -26,7 +26,7 @@ A FastAPI backend for historical temperature data using Open-Meteo with comprehe
 
 ## 📋 Requirements
 
-- Python 3.10+ (production uses **3.12.3**; see `.python-version` and `render.yaml`)
+- Python 3.10+ (production uses **3.12.3**; see `.python-version`)
 - Redis server (local or cloud) - Required
 - PostgreSQL database (local or cloud) - Optional, for persistent cache with location aliasing
 
@@ -1831,7 +1831,7 @@ main.py              # Main FastAPI application
 test_main.py         # Comprehensive test suite
 benchmarks/          # End-to-end benchmark scripts
 requirements.txt     # Python dependencies
-render.yaml         # Render deployment configuration
+railway.json        # Railway deployment configuration
 ```
 
 ### Development Workflow
