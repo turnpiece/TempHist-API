@@ -61,6 +61,7 @@ Rules enabled: `E/W` (style), `F` (unused imports/vars), `I` (import order), `AS
 - Firebase auth is optional; `API_ACCESS_TOKEN` in the `Authorization: Bearer` header is sufficient for data endpoints during development. Operational endpoints (`/usage-stats`, `/cache-stats`, `/cache/clear`, etc.) require `X-Admin-Key: $ADMIN_API_KEY` instead.
 - Firebase App Check (`APP_CHECK_ENFORCEMENT`) defaults to `off`. When the frontend has `VITE_RECAPTCHA_SITE_KEY` set it sends an `X-Firebase-AppCheck` header; the API's CORS config allows this header so browser preflights don't fail.
 - The Swagger UI at `/docs` requires external CDN access (cdn.jsdelivr.net) for its JS/CSS assets.
+- `/openapi.json` backs the public developer docs, so a new route appears in it by default. Hide admin, ops, debug and removed routes with `include_in_schema=False`, then run `tests/test_openapi.py`: its allow-list fails until a new public route is added to it (and has a tag and a response model). Per-operation auth in the spec is derived from `is_public_route()` in `main.py`, so change that rule rather than annotating routes. Models passed via `responses={200: {"model": ...}}` are documentation only; `response_model=` also validates and filters output.
 - `CACHE_WARMING_ENABLED` should be `false` for local dev to avoid spurious background requests.
 - `RATE_LIMIT_ENABLED` can be `false` for local dev to simplify testing.
 - The `package.json` in the repo root is vestigial (only a `cors` npm dependency) and irrelevant to the Python application.

@@ -16,7 +16,7 @@ from version import __version__
 router = APIRouter()
 
 
-@router.api_route("/", methods=["GET", "OPTIONS"])
+@router.api_route("/", methods=["GET", "OPTIONS"], include_in_schema=False)
 async def root():
     """Root endpoint that returns API information"""
     return {
@@ -90,19 +90,19 @@ async def root():
     }
 
 
-@router.api_route("/test-cors", methods=["GET", "OPTIONS"])
+@router.api_route("/test-cors", methods=["GET", "OPTIONS"], include_in_schema=False)
 async def test_cors():
     """Test endpoint for CORS"""
     return {"message": "CORS is working"}
 
 
-@router.api_route("/test-cors-rolling", methods=["GET", "OPTIONS"])
+@router.api_route("/test-cors-rolling", methods=["GET", "OPTIONS"], include_in_schema=False)
 async def test_cors_rolling():
     """Test endpoint for CORS"""
     return {"message": "CORS is working", "path": "/test-cors-rolling"}
 
 
-@router.get("/test-redis")
+@router.get("/test-redis", include_in_schema=False)
 async def test_redis(redis_client: Annotated[redis.Redis, Depends(get_redis_client)]):
     """Test Redis connection."""
     try:

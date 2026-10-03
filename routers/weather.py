@@ -3,25 +3,72 @@
 import json
 import logging
 from datetime import date as dt_date
-from typing import Annotated
+from typing import Annotated, List, Literal, Optional, Union
 
 import redis
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from cache.accessors import get_cache_stats
 from cache.core import get_cache_value, set_cache_value
 from cache.keys import generate_cache_key
 from config import CACHE_ENABLED, DEBUG
+from models import SimpleErrorResponse
+from routers._params import LenientUnitGroupParam, LocationParam
+from routers._responses import RATE_LIMITED, error_responses
 from utils.cache_headers import set_weather_cache_headers
 from utils.sanitization import sanitize_for_logging
 from utils.weather import get_forecast_cache_duration, is_today_or_future
 from utils.weather_data import _c_to_f, get_forecast_data, get_weather_for_date
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["Weather"])
 
 _TEMP_FIELDS = ("temp", "tempmin", "tempmax")
+
+DateParam = Annotated[
+    str,
+    Path(
+        description="Date in YYYY-MM-DD format",
+        examples=["2024-01-15"],
+        json_schema_extra={"pattern": r"^\d{4}-\d{2}-\d{2}$"},  # documentation only; the handler returns 400
+    ),
+]
+
+
+class WeatherDay(BaseModel):
+    """Weather for one day."""
+
+    model_config = ConfigDict(extra="allow")  # deployments that do not filter provider data return extra fields
+
+    datetime: str = Field(..., description="Date of the observation, YYYY-MM-DD", examples=["2024-01-15"])
+    temp: Optional[float] = Field(None, description="Mean temperature for the day, in the requested unit")
+    tempmin: Optional[float] = Field(None, description="Minimum temperature for the day, in the requested unit")
+    tempmax: Optional[float] = Field(None, description="Maximum temperature for the day, in the requested unit")
+
+
+class WeatherResponse(BaseModel):
+    """Weather for a single date."""
+
+    days: List[WeatherDay] = Field(..., description="A single entry for the requested date")
+
+
+class WeatherResult(RootModel[Union[WeatherResponse, SimpleErrorResponse]]):
+    """Weather for the date, or an `error` body when no data could be produced. Both are returned with HTTP 200."""
+
+
+class ForecastResponse(BaseModel):
+    """Forecast mean temperature for the current day."""
+
+    location: str = Field(..., description="Location as requested", examples=["london"])
+    date: str = Field(..., description="Forecast date, YYYY-MM-DD", examples=["2025-01-15"])
+    average_temperature: float = Field(..., description="Forecast mean temperature in `unit`", examples=[8.4])
+    unit: Literal["celsius", "fahrenheit"] = Field(..., description="Unit of `average_temperature`")
+
+
+class ForecastResult(RootModel[Union[ForecastResponse, SimpleErrorResponse]]):
+    """The forecast, or an `error` body when no data could be produced. Both are returned with HTTP 200."""
 
 
 def _apply_unit_group_to_weather(result: dict, unit_group: str) -> dict:
@@ -43,12 +90,25 @@ def _apply_unit_group_to_weather(result: dict, unit_group: str) -> dict:
 from routers.dependencies import get_redis_client  # noqa: E402
 
 
-@router.get("/weather/{location:path}/{date}")
+@router.get(
+    "/weather/{location:path}/{date}",
+    responses={
+        200: {
+            "model": WeatherResult,
+            "description": (
+                "Weather for the date. When no data could be produced the endpoint still answers 200, "
+                "with an `error` body in place of `days`."
+            ),
+        },
+        **error_responses(400, 500),
+        **RATE_LIMITED,
+    },
+)
 async def get_weather(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
-    location: str = Path(..., description="Location name", max_length=200),
-    date: str = Path(..., description="Date in YYYY-MM-DD format"),
-    unit_group: str = Query("celsius", description="Temperature unit: 'celsius' or 'fahrenheit'"),
+    location: LocationParam,
+    date: DateParam,
+    unit_group: LenientUnitGroupParam = "celsius",
     response: Response = None,
 ):
     """Get weather data for a specific location and date.
@@ -115,11 +175,24 @@ async def get_weather(
     return _apply_unit_group_to_weather(result, unit_group)
 
 
-@router.get("/forecast/{location}")
+@router.get(
+    "/forecast/{location}",
+    responses={
+        200: {
+            "model": ForecastResult,
+            "description": (
+                "Forecast for the current day. When no data could be produced the endpoint still answers 200, "
+                "with an `error` body in place of the forecast."
+            ),
+        },
+        500: {"model": SimpleErrorResponse, "description": "The forecast could not be produced"},
+        **RATE_LIMITED,
+    },
+)
 async def get_forecast(
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
-    location: str = Path(..., description="Location name", max_length=200),
-    unit_group: str = Query("celsius", description="Temperature unit: 'celsius' or 'fahrenheit'"),
+    location: LocationParam,
+    unit_group: LenientUnitGroupParam = "celsius",
 ):
     """Get weather forecast for a location with time-based caching."""
     try:

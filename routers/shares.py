@@ -2,12 +2,13 @@
 
 import json
 import logging
-from typing import Annotated, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from routers._params import ShareIdParam
 from routers._responses import error_responses
 from routers.dependencies import get_redis_client
 from routers.locations import locations_data
@@ -15,7 +16,7 @@ from utils.share_store import get_share_store
 from utils.weather import is_today
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["Shares"])
 
 _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
 
@@ -57,20 +58,96 @@ def _resolve_location_name(location: str) -> str:
 
 
 class ShareCreate(BaseModel):
-    location: str = Field(..., min_length=1, max_length=200)
-    period: Literal["daily", "weekly", "monthly", "yearly"]
-    identifier: str = Field(..., pattern=r"^\d{2}-\d{2}$")  # MM-dd
-    ref_year: int = Field(..., ge=1970, le=2100)
-    unit: Literal["celsius", "fahrenheit"] = "celsius"
-    latitude: Optional[float] = Field(None, ge=-90, le=90)
-    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "location": "london",
+                    "period": "daily",
+                    "identifier": "01-15",
+                    "ref_year": 2025,
+                    "unit": "celsius",
+                    "latitude": 51.5074,
+                    "longitude": -0.1278,
+                }
+            ]
+        }
+    )
+
+    location: str = Field(
+        ..., min_length=1, max_length=200, description="Location name or preapproved location ID", examples=["london"]
+    )
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Aggregation period")
+    identifier: str = Field(..., pattern=r"^\d{2}-\d{2}$", description="Period end date as `MM-DD`")  # MM-dd
+    ref_year: int = Field(..., ge=1970, le=2100, description="The year the shared record highlights")
+    unit: Literal["celsius", "fahrenheit"] = Field("celsius", description="Temperature unit shown on the share")
+    latitude: Optional[float] = Field(
+        None, ge=-90, le=90, description="Latitude of the location, used to merge near-duplicate shares in listings"
+    )
+    longitude: Optional[float] = Field(None, ge=-180, le=180, description="Longitude of the location")
 
 
-@router.get("/v1/shares", responses=error_responses(503))
+class ShareCreatedResponse(BaseModel):
+    """A newly created share."""
+
+    id: str = Field(..., description="Share ID (8 alphanumeric characters)", examples=["aB3dE5gH"])
+    url: str = Field(
+        ..., description="Relative path of the share page. Prepend your own origin.", examples=["/s/aB3dE5gH"]
+    )
+
+
+class ShareRecord(BaseModel):
+    """The stored parameters of a share."""
+
+    id: str = Field(..., description="Share ID", examples=["aB3dE5gH"])
+    location: str = Field(..., description="Display name of the location", examples=["London, England, United Kingdom"])
+    period: Literal["daily", "weekly", "monthly", "yearly"] = Field(..., description="Aggregation period")
+    identifier: str = Field(..., description="Period end date as `MM-DD`", examples=["01-15"])
+    ref_year: int = Field(..., description="The year the shared record highlights", examples=[2025])
+    unit: Literal["celsius", "fahrenheit"] = Field(..., description="Temperature unit shown on the share")
+    created_at: str = Field(..., description="When the share was created, as an ISO 8601 timestamp")
+
+
+class ShareSummary(ShareRecord):
+    """A share as it appears in listings."""
+
+    og_image_url: str = Field(
+        ...,
+        description="Relative path of the preview image. Prepend your own origin.",
+        examples=["/v1/og/aB3dE5gH.png"],
+    )
+    share_url: str = Field(
+        ..., description="Relative path of the share page. Prepend your own origin.", examples=["/s/aB3dE5gH"]
+    )
+
+
+class ShareListResponse(BaseModel):
+    """A page of recent shares."""
+
+    shares: List[ShareSummary] = Field(..., description="Shares, most recent first")
+    limit: int = Field(..., description="Page size that was applied")
+    offset: int = Field(..., description="Offset that was applied")
+
+
+class ShareResponse(ShareRecord):
+    """A share, with whether its date is currently today."""
+
+    is_today: bool = Field(
+        ...,
+        description="Whether the shared date is today in the location's timezone. Evaluated on every request.",
+    )
+
+
+@router.get(
+    "/v1/shares",
+    responses={200: {"model": ShareListResponse}, **error_responses(503)},
+)
 async def list_shares(
-    period: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = None,
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    period: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = Query(
+        None, description="Only return shares for this period"
+    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of shares to return"),
+    offset: int = Query(0, ge=0, description="Number of shares to skip"),
 ):
     """List recent share records, deduplicated by location+period+identifier. Public — no auth required."""
     store = get_share_store()
@@ -80,7 +157,11 @@ async def list_shares(
     return {"shares": shares, "limit": limit, "offset": offset}
 
 
-@router.post("/v1/shares", status_code=201, responses=error_responses(401, 503))
+@router.post(
+    "/v1/shares",
+    status_code=201,
+    responses={201: {"model": ShareCreatedResponse, "description": "The share was created"}, **error_responses(503)},
+)
 async def create_share(
     request: Request,
     body: ShareCreate,
@@ -107,9 +188,12 @@ async def create_share(
     return result
 
 
-@router.get("/v1/shares/{share_id}", responses=error_responses(404))
+@router.get(
+    "/v1/shares/{share_id}",
+    responses={200: {"model": ShareResponse}, **error_responses(404)},
+)
 async def get_share(
-    share_id: str,
+    share_id: ShareIdParam,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
 ):
     """Retrieve share parameters by ID. Public — no auth required."""

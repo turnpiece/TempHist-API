@@ -51,6 +51,7 @@ from middleware import (
     request_size_middleware,
 )
 from middleware.cors import get_cors_origin_regex, get_cors_origins
+from openapi_docs import API_DESCRIPTION, API_TITLE, OPENAPI_TAGS, install_openapi
 from rate_limiting import LocationDiversityMonitor, RequestRateMonitor, ServiceTokenRateLimiter
 from routers._responses import error_responses
 from routers.analytics import router as analytics_router
@@ -75,6 +76,7 @@ from utils.ip_utils import get_client_ip, is_ip_blacklisted, is_ip_whitelisted
 from utils.path_parsing import extract_location_from_path
 from utils.redis_client import create_redis_client
 from utils.sanitization import sanitize_for_logging, sanitize_url
+from version import __version__
 
 if not CORS_ORIGINS and not CORS_ORIGIN_REGEX:
     logging.getLogger(__name__).warning("⚠️  No CORS origins configured - API may be inaccessible to web clients")
@@ -325,22 +327,33 @@ async def lifespan(app: FastAPI):
     await _shutdown_clients()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title=API_TITLE,
+    description=API_DESCRIPTION,
+    version=__version__,
+    openapi_tags=OPENAPI_TAGS,
+    lifespan=lifespan,
+)
 
 # Register exception handlers from exceptions module
 register_exception_handlers(app)
 
-# Include all routers
+# Include all routers.
+#
+# The OpenAPI spec backs the public developer docs, so only intended-public routes are documented. Routers that hold
+# nothing but admin, ops, debug or removed endpoints are excluded wholesale below; routers that mix public and
+# internal routes (root, health, jobs) flag the internal ones individually. The excluded routes stay live. The
+# allow-list in tests/test_openapi.py fails when a new route appears in the spec without being added to it.
 app.include_router(root_router)
 app.include_router(health_router)
 app.include_router(weather_router)
 app.include_router(v1_records_router)
 app.include_router(locations_router)
-app.include_router(cache_router)
+app.include_router(cache_router, include_in_schema=False)  # /cache*, /cache-warm*, /cache-stats*
 app.include_router(jobs_router)
-app.include_router(legacy_router)
-app.include_router(stats_router)
-app.include_router(analytics_router)
+app.include_router(legacy_router, include_in_schema=False)  # removed endpoints (410 Gone) and /protected-endpoint
+app.include_router(stats_router, include_in_schema=False)  # /usage-stats*, /rate-limit-*
+app.include_router(analytics_router, include_in_schema=False)  # client telemetry
 app.include_router(shares_router)
 app.include_router(og_image_router)
 
@@ -509,12 +522,19 @@ _PUBLIC_PATHS = frozenset([
 _PUBLIC_PREFIXES = ("/static", "/analytics", "/data", "/v1/shares/", "/v1/og/")
 
 
-def _is_public_path(request: Request) -> bool:
-    """Return True for paths that require no auth or rate limiting."""
-    path = request.url.path
-    if path == "/v1/shares" and request.method == "GET":
+def is_public_route(path: str, method: str) -> bool:
+    """Return True for routes that require no auth or rate limiting."""
+    if path == "/v1/shares" and method == "GET":
         return True
     return path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES)
+
+
+def _is_public_path(request: Request) -> bool:
+    return is_public_route(request.url.path, request.method)
+
+
+# Document auth per operation from the same rule the middleware enforces, so the spec cannot drift from it.
+install_openapi(app, requires_auth=lambda method, path: not is_public_route(path, method))
 
 
 async def _check_admin_auth(request: Request, call_next) -> Optional[Response]:
@@ -761,7 +781,7 @@ app.add_middleware(
 # - /analytics/* -> routers/analytics.py
 
 
-@app.post("/admin/clear-job-queue", responses=error_responses(401, 500))
+@app.post("/admin/clear-job-queue", include_in_schema=False, responses=error_responses(401, 500))
 async def admin_clear_job_queue(_admin: Annotated[bool, Depends(verify_admin_key)]):
     """
     Admin endpoint to clear the job queue.

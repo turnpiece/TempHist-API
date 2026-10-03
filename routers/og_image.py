@@ -15,12 +15,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from cache.keys import get_bundle_with_slug_fallback, rec_key
+from routers._params import ShareIdParam
+from routers._responses import error_responses
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import resolve_location_cache_identity
 from utils.share_store import get_share_store
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["Shares"])
 
 _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
 _IMG_W, _IMG_H = 1200, 630
@@ -469,9 +471,19 @@ async def _fetch_records_live(share: dict, redis_client) -> Optional[list]:
     return None
 
 
-@router.get("/v1/og/{share_id}.png", include_in_schema=True)
+@router.get(
+    "/v1/og/{share_id}.png",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "A 1200x630 PNG preview image for the share",
+            "content": {"image/png": {"schema": {"type": "string", "format": "binary"}}},
+        },
+        **error_responses(404, 500),
+    },
+)
 async def og_image(
-    share_id: str,
+    share_id: ShareIdParam,
     redis_client: Annotated[redis.Redis, Depends(get_redis_client)],
     show_title: bool = Query(default=False, description="Whether to render the city/period title on the image"),
 ):
