@@ -2,6 +2,17 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-04] - Remove Stale Render References (unreleased)
+
+The API is hosted on Railway. These leftovers from an earlier Render deployment were misleading.
+
+### Removed
+
+- **`render.yaml`**: unused since the move to Railway (last changed 2025-10-03). The deployment configuration is `railway.json` and `DEPLOYMENT.md`.
+- A code comment in `routers/health.py` and two `README.md` lines that pointed at `render.yaml` or described a Render deployment. The file tree in the README now lists `railway.json`.
+
+---
+
 ## [2026-10-04] - Public-Facing OpenAPI Descriptions and Server URL (unreleased)
 
 Follow-up to the spec cleanup. Spec-only: no endpoint's behaviour changes.
