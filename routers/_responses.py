@@ -14,22 +14,23 @@ from models import ErrorResponse, RateLimitErrorResponse
 # ``response_model=``. A ``responses`` model only describes the schema; ``response_model`` would also validate and
 # filter what the handler returns, which can turn an undocumented-but-working payload into a 500.
 
-ERROR_RESPONSES: Dict[int, Dict] = {
-    304: {"description": "Not Modified"},
-    400: {"model": ErrorResponse, "description": "Bad Request"},
-    401: {"model": ErrorResponse, "description": "Unauthorized"},
-    404: {"model": ErrorResponse, "description": "Not Found"},
-    429: {"model": ErrorResponse, "description": "Too Many Requests"},
-    500: {"model": ErrorResponse, "description": "Internal Server Error"},
-    503: {"model": ErrorResponse, "description": "Service Unavailable"},
-}
-
-
 RETRY_AFTER_HEADER: Dict[str, Dict] = {
     "Retry-After": {
         "description": "Seconds to wait before retrying the request.",
         "schema": {"type": "integer"},
     }
+}
+
+# 429 and 503 here are raised as HTTPException with a Retry-After header, which exceptions.py forwards. Keep it that
+# way: a route that documents one of them through error_responses() must send the header.
+ERROR_RESPONSES: Dict[int, Dict] = {
+    304: {"description": "Not Modified"},
+    400: {"model": ErrorResponse, "description": "Bad Request"},
+    401: {"model": ErrorResponse, "description": "Unauthorized"},
+    404: {"model": ErrorResponse, "description": "Not Found"},
+    429: {"model": ErrorResponse, "description": "Too Many Requests", "headers": RETRY_AFTER_HEADER},
+    500: {"model": ErrorResponse, "description": "Internal Server Error"},
+    503: {"model": ErrorResponse, "description": "Service Unavailable", "headers": RETRY_AFTER_HEADER},
 }
 
 # 429 as produced by the request-rate / location-diversity limiter in main.py, which applies to /weather,

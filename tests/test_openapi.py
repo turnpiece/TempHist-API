@@ -216,6 +216,17 @@ def test_rate_limited_routes_document_429_with_retry_after(spec):
             assert body == {"$ref": "#/components/schemas/RateLimitErrorResponse"}, f"{method} {path}"
 
 
+def test_every_documented_429_and_503_declares_retry_after(spec):
+    """Each route that documents one of these must send the header (tests/test_retry_after.py checks it does)."""
+    checked = 0
+    for method, path, operation in operations(spec):
+        for status in ("429", "503"):
+            if status in operation["responses"]:
+                checked += 1
+                assert "Retry-After" in operation["responses"][status]["headers"], f"{method} {path} {status}"
+    assert checked
+
+
 def test_async_job_documents_202_not_200(spec):
     responses = spec["paths"]["/v1/records/{period}/{location}/{identifier}/async"]["post"]["responses"]
     assert "202" in responses
