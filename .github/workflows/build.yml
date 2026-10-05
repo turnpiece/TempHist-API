@@ -30,7 +30,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests with coverage
-        run: pytest --cov=. --cov-report=xml
+        run: pytest --cov=. --cov-report=xml --durations=10
+        env:
+          # Some tests send this as a bearer token; locally it comes from .env.
+          API_ACCESS_TOKEN: ci-test-token
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
