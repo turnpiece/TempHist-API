@@ -47,3 +47,7 @@ postman/environments/
 postman/globals/
 postman/collections/*
 !postman/collections/TempHist API/
+
+# Test coverage output
+.coverage
+coverage.xml
