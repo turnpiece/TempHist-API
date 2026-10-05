@@ -49,8 +49,10 @@ def _validated_base_url(value: str) -> str:
 def _validated_locations_file(value: str) -> str:
     """Argparse type: accept only existing files inside the project root or current directory."""
     resolved = os.path.realpath(value)
-    allowed_roots = (os.path.realpath(PROJECT_ROOT), os.path.realpath(os.getcwd()))
-    if not any(os.path.commonpath([resolved, root]) == root for root in allowed_roots):
+    for root in (os.path.realpath(PROJECT_ROOT), os.path.realpath(os.getcwd())):
+        if resolved == root or resolved.startswith(root + os.sep):
+            break
+    else:
         raise argparse.ArgumentTypeError(f"locations file {value!r} must be inside the project or working directory")
     if not os.path.isfile(resolved):
         raise argparse.ArgumentTypeError(f"locations file {value!r} does not exist")
