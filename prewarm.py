@@ -81,6 +81,8 @@ def load_preapproved_locations(locations_file: str = None) -> List[str]:
         locations_file = os.path.join(project_root, "data", "preapproved_locations.json")
 
     try:
+        # Re-validate here so the check sits next to the file access, whichever caller supplied the path.
+        locations_file = _validated_locations_file(locations_file)
         with open(locations_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -103,6 +105,9 @@ def load_preapproved_locations(locations_file: str = None) -> List[str]:
         return locations
     except FileNotFoundError:
         logger.warning(f"Locations file not found: {locations_file}, using empty list")
+        return []
+    except argparse.ArgumentTypeError as exc:
+        logger.error(f"Rejected locations file: {exc}")
         return []
     except json.JSONDecodeError as exc:
         logger.error(f"Error parsing locations file: {exc}")
@@ -129,7 +134,9 @@ def load_locations_to_prewarm(
 
     if api_token:
         try:
-            url = f"{base_url.rstrip('/')}/v1/locations/popular/display-strings?limit={limit}"
+            # Re-validate here so the check sits next to the network request, whichever caller supplied the URL.
+            base_url = _validated_base_url(base_url)
+            url = f"{base_url}/v1/locations/popular/display-strings?limit={limit}"
             req = _urllib_request.Request(  # noqa: S310
                 url,
                 headers={"Authorization": f"Bearer {api_token}", "Accept": "application/json"},
