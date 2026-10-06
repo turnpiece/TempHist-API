@@ -11,6 +11,7 @@
     "longitude": -0.1278,
     "timezone": "Europe/London",
     "tier": "global",
+    "description": "London has a temperate oceanic climate with mild winters and warm summers. Daytime highs average about 9°C in January and 24°C in July, and winter nights hover just above freezing. The city is a heat island, so nights stay a few degrees warmer than in the surrounding countryside.\n\nOver the past 50 years its average temperature has risen by about 0.5°C per decade, so older decades were noticeably cooler than these averages. Heatwaves above 30°C are increasingly common, and in July 2022 the UK recorded 40°C for the first time. Snow is brief and unreliable.",
     "imageUrl": {
       "webp": "/data/locations/processed/london.webp",
       "jpeg": "/data/locations/processed/london.jpg"
@@ -29,6 +30,7 @@
     "longitude": -2.2426,
     "timezone": "Europe/London",
     "tier": "global",
+    "description": "Manchester's temperate oceanic climate is cooler and cloudier than southern England's. Highs average about 7°C in January and 21°C in July, with winter nights close to freezing and summer nights around 12°C.\n\nFrequent cloud in every season keeps both heat and hard frost in check. Heat above 28°C is occasional, and snow is uncommon in the city, though the nearby Pennines get much more.",
     "imageUrl": {
       "webp": "/data/locations/processed/manchester.webp",
       "jpeg": "/data/locations/processed/manchester.jpg"
@@ -56,6 +58,7 @@
     "longitude": -1.8904,
     "timezone": "Europe/London",
     "tier": "global",
+    "description": "Birmingham sits about 140 metres above sea level in the middle of England, far from any coast. Winter highs average about 7°C, with frost on around ten nights in a typical January, and summer highs are around 21°C, reaching the low 30s in a heatwave.\n\nWith no sea to moderate it, the gap between summer day and night temperatures is a little wider than in coastal cities such as Cardiff. Over the past 50 years its average temperature has risen by about 0.4°C per decade, so older decades were cooler.",
     "imageUrl": {
       "webp": "/data/locations/processed/birmingham.webp",
       "jpeg": "/data/locations/processed/birmingham.jpg"
@@ -74,6 +77,7 @@
     "longitude": -3.1883,
     "timezone": "Europe/London",
     "tier": "global",
+    "description": "Edinburgh has a cool, temperate oceanic climate, moderated by the Firth of Forth. Highs average around 7°C in January and 19°C in July, with lows near 2°C in winter and 11°C in summer. Cold, damp sea fog called haar can roll in off the North Sea in spring and summer, holding temperatures well below those just inland.\n\nDaylight varies sharply: under seven hours in midwinter, but light until about ten in the evening around the June solstice. Over the past 50 years its average temperature has risen by about 0.3°C per decade.",
     "imageUrl": {
       "webp": "/data/locations/processed/edinburgh.webp",
       "jpeg": "/data/locations/processed/edinburgh.jpg"
@@ -101,6 +105,7 @@
     "longitude": -4.2518,
     "timezone": "Europe/London",
     "tier": "global",
+    "description": "Glasgow's mild climate is shaped by the Atlantic, with highs averaging about 6°C in January and 19°C in July and lows near 1°C and 11°C. The nearby sea keeps both cold snaps and heatwaves short, so temperatures rarely stray far from these figures.\n\nOn calm, clear nights the city centre can be around 3°C warmer than the surrounding countryside, and snow falls on the nearby hills more often than in the city itself. Heat above 25°C is uncommon. Over the past 50 years its average temperature has risen by about 0.3°C per decade.",
     "imageUrl": {
       "webp": "/data/locations/processed/glasgow.webp",
       "jpeg": "/data/locations/processed/glasgow.jpg"
@@ -119,6 +124,7 @@
     "longitude": -3.1791,
     "timezone": "Europe/London",
     "tier": "global",
+    "description": "Cardiff has a mild, maritime climate shaped by the Bristol Channel and the Atlantic. Winters are mild, with highs around 9°C and lows near 3°C; summers are comfortable, with highs of about 22°C and lows around 13°C.\n\nThe sea keeps frosts light and snow infrequent, and temperature extremes are limited. Heat above 30°C is uncommon. Over the past 50 years its average temperature has risen by about 0.4°C per decade.",
     "imageUrl": {
       "webp": "/data/locations/processed/cardiff.webp",
       "jpeg": "/data/locations/processed/cardiff.jpg"
@@ -146,6 +152,7 @@
     "longitude": -5.9301,
     "timezone": "Europe/London",
     "tier": "global",
+    "description": "Belfast's cool, maritime climate keeps temperatures in a narrow band all year. Highs average about 8°C in January and 20°C in July, with lows of 2°C and 12°C. Summers are cool, and heat above 25°C is rare.\n\nSheltered by hills to the north and west, and moderated by Belfast Lough, the city sees few hard frosts, and snow is brief and fairly infrequent. Over the past 50 years its average temperature has risen by about 0.4°C per decade.",
     "imageUrl": {
       "webp": "/data/locations/processed/belfast.webp",
       "jpeg": "/data/locations/processed/belfast.jpg"
@@ -173,6 +180,7 @@
     "longitude": -6.2603,
     "timezone": "Europe/Dublin",
     "tier": "global",
+    "description": "Dublin's mild oceanic climate has very little extreme weather. Highs average about 8°C in January and nearly 20°C in July, with lows of about 2°C and 11°C, so frost is occasional and snow rare.\n\nThe Irish Sea keeps east-coast temperatures steady, and heat above 25°C is uncommon, though 33°C was recorded in July 2022. Daylight ranges from under eight hours in midwinter to about seventeen around the June solstice.",
     "imageUrl": {
       "webp": "/data/locations/processed/dublin.webp",
       "jpeg": "/data/locations/processed/dublin.jpg"
@@ -200,6 +208,7 @@
     "longitude": -74.006,
     "timezone": "America/New_York",
     "tier": "global",
+    "description": "New York sits on the boundary between humid subtropical and humid continental climates, with four distinct seasons. Winters are cold, with January highs around 4°C and lows of about -2°C, plus occasional snowstorms. Summers are hot and humid, with July highs near 29°C and lows of 21°C, and heatwaves above 35°C are not unusual.\n\nThe dense city holds heat, so summer nights stay warm and sticky. Spring and autumn are the most pleasant seasons, though temperatures can swing 10°C within days.",
     "imageUrl": {
       "webp": "/data/locations/processed/new-york.webp",
       "jpeg": "/data/locations/processed/new-york.jpg"
@@ -218,6 +227,7 @@
     "longitude": -87.6298,
     "timezone": "America/Chicago",
     "tier": "global",
+    "description": "Chicago has a humid continental climate with wide seasonal swings. January highs reach only about 0°C, with lows near -7°C, and cold snaps can push well below -20°C. July highs average 29°C, with warm, humid nights near 19°C.\n\nLake Michigan keeps the shoreline cooler than inland areas in spring and summer, and winter wind off the lake and across the plains makes it feel far colder than the thermometer shows.",
     "imageUrl": {
       "webp": "/data/locations/processed/chicago.webp",
       "jpeg": "/data/locations/processed/chicago.jpg"
@@ -245,6 +255,7 @@
     "longitude": -122.4194,
     "timezone": "America/Los_Angeles",
     "tier": "global",
+    "description": "San Francisco has a cool Mediterranean climate, unusually mild year-round. Highs run about 15°C in January and only 20°C in July, with lows of 8°C and 13°C, so summer is cooler than many visitors expect. Cold Pacific currents create fog and chilly sea breezes, especially in summer, while inland California bakes.\n\nThe warmest weather arrives in September and October, when the fog retreats. Both frost and temperatures above 30°C are rare, and the seasonal range is remarkably small.",
     "imageUrl": {
       "webp": "/data/locations/processed/san-francisco.webp",
       "jpeg": "/data/locations/processed/san-francisco.jpg"
@@ -272,6 +283,7 @@
     "longitude": -118.2437,
     "timezone": "America/Los_Angeles",
     "tier": "global",
+    "description": "Los Angeles has a warm Mediterranean climate with abundant sunshine. Winter days are mild, around 20°C in January with nights near 9°C, while August highs reach about 29°C downtown, and inland valleys can be as much as 20°C hotter than the coast on the same day.\n\nCoastal low cloud, known as May Gray and June Gloom, often holds back early-summer warmth, and hot, dry Santa Ana winds can bring spells of 29-35°C heat even in winter.",
     "imageUrl": {
       "webp": "/data/locations/processed/los-angeles.webp",
       "jpeg": "/data/locations/processed/los-angeles.jpg"
@@ -299,6 +311,7 @@
     "longitude": 151.2093,
     "timezone": "Australia/Sydney",
     "tier": "global",
+    "description": "Sydney has a humid subtropical climate with mild winters and warm summers. Seasons are reversed from the northern hemisphere: highs average about 27°C in January and 18°C in July, with lows of 20°C and 9°C. Frost is almost unknown near the coast.\n\nSea breezes keep the coast cooler than the western suburbs, where hot westerly winds can push summer days above 40°C. Over the past 50 years its average temperature has risen by about 0.2°C per decade.",
     "imageUrl": {
       "webp": "/data/locations/processed/sydney.webp",
       "jpeg": "/data/locations/processed/sydney.jpg"
@@ -326,6 +339,7 @@
     "longitude": 144.9631,
     "timezone": "Australia/Melbourne",
     "tier": "global",
+    "description": "Melbourne is known for changeable weather, often described as four seasons in a day. Its temperate oceanic climate has warm summers, with January highs of 26-27°C and lows near 15°C, and cool winters, with July highs about 14°C and lows of 6-7°C. Seasons are reversed from the northern hemisphere.\n\nHot northerly winds from the interior can lift summer days above 40°C, followed by a cool southerly change that can drop temperatures by 10°C or more within hours. Frost is occasional in winter, and snow in the city is very rare.",
     "imageUrl": {
       "webp": "/data/locations/processed/melbourne.webp",
       "jpeg": "/data/locations/processed/melbourne.jpg"
@@ -353,6 +367,7 @@
     "longitude": 174.7633,
     "timezone": "Pacific/Auckland",
     "tier": "global",
+    "description": "Auckland has a mild, humid oceanic climate, shaped by the sea on both sides of its narrow isthmus. Seasons are reversed from the northern hemisphere: highs reach about 24°C in January and February, with lows of 16°C, while July highs average about 15°C with lows near 8°C. Frost is rare.\n\nHumidity makes summer days feel warmer than the thermometer suggests, and cloud keeps winters mild rather than cold. Extremes of heat and cold are uncommon.",
     "imageUrl": {
       "webp": "/data/locations/processed/auckland.webp",
       "jpeg": "/data/locations/processed/auckland.jpg"
@@ -380,6 +395,7 @@
     "longitude": -79.3832,
     "timezone": "America/Toronto",
     "tier": "global",
+    "description": "Toronto has a humid continental climate with four clear seasons. Winters are cold and snowy, with January highs around -1°C and lows near -9°C, while summers are warm and humid, with July highs about 27°C and lows near 17°C. Lake Ontario moderates the extremes, keeping the city slightly milder than inland areas in winter.\n\nHeatwaves above 32°C and cold outbreaks below -20°C both occur from time to time, and humidity and wind chill make them feel harsher.",
     "imageUrl": {
       "webp": "/data/locations/processed/toronto.webp",
       "jpeg": "/data/locations/processed/toronto.jpg"
@@ -407,6 +423,7 @@
     "longitude": -123.1207,
     "timezone": "America/Vancouver",
     "tier": "global",
+    "description": "Vancouver has a mild oceanic climate, one of the mildest in Canada. Winters are cool, with January highs near 7°C and lows around 1°C, and snow is brief and infrequent at sea level. Summers are warm and sunny, with July highs about 22°C and lows near 14°C.\n\nThe Pacific moderates the extremes, so winters are far milder than elsewhere in Canada, and the mountains just inland are much colder. Summer heatwaves are occasional but can be intense, as in the June 2021 heat dome.",
     "imageUrl": {
       "webp": "/data/locations/processed/vancouver.webp",
       "jpeg": "/data/locations/processed/vancouver.jpg"
@@ -434,6 +451,7 @@
     "longitude": 103.8198,
     "timezone": "Asia/Singapore",
     "tier": "global",
+    "description": "Singapore has a tropical rainforest climate with no true seasons. Lying just 1.3° north of the equator, its temperatures barely change through the year: daytime highs of about 31-32°C and nights around 24-26°C, with very high humidity.\n\nThe monsoon months from November to January are slightly cooler, as cloud and showers hold highs just above 30°C, while April to June is hottest. Over the past 50 years Singapore has warmed by about 0.3°C per decade, yet its record range is only 19.4-37.0°C.",
     "imageUrl": {
       "webp": "/data/locations/processed/singapore.webp",
       "jpeg": "/data/locations/processed/singapore.jpg"
@@ -461,6 +479,7 @@
     "longitude": 114.1694,
     "timezone": "Asia/Hong_Kong",
     "tier": "global",
+    "description": "Hong Kong has a humid subtropical climate with a clear split between seasons. Summers, from May to September, are hot and very humid, with highs of 29-32°C and warm nights of 25-27°C, so it feels hotter than the thermometer says.\n\nWinters are mild and often sunny, with January highs about 19°C and lows near 15°C, though cold fronts can bring brief dips towards 10°C. Autumn is usually the most comfortable season.",
     "imageUrl": {
       "webp": "/data/locations/processed/hong-kong.webp",
       "jpeg": "/data/locations/processed/hong-kong.jpg"
@@ -488,6 +507,7 @@
     "longitude": 18.4241,
     "timezone": "Africa/Johannesburg",
     "tier": "global",
+    "description": "Cape Town has a Mediterranean climate, with warm, sunny summers and cool winters. Seasons are reversed from the northern hemisphere: in December to February highs reach about 26°C and lows 16°C, while in July highs are around 18°C and lows near 8°C.\n\nThe sea on the Atlantic coast, about 13°C, is much colder than in False Bay, about 17°C. Frost is almost unknown, and over the past 50 years it has warmed by about 0.2°C per decade.",
     "imageUrl": {
       "webp": "/data/locations/processed/cape-town.webp",
       "jpeg": "/data/locations/processed/cape-town.jpg"

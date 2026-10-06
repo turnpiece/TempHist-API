@@ -2,6 +2,22 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-06] - Climate Descriptions for Preapproved Locations (unreleased)
+
+Each curated location now carries a short climate description, so the website's location pages can say something specific about each place instead of the same generic text (#122).
+
+### Added
+
+- **`description` on every item of `GET /v1/locations/preapproved`**: one or two paragraphs of plain text (separated by a blank line), at most 100 words, focused on temperature: climate type, typical temperatures in °C and seasonal variation. Precipitation and wind appear only where they affect temperature, with no rainfall figures. Figures are 1991–2020 normals, and descriptions also give the 50-year warming trend from this API's yearly records endpoint (as of October 2026) where it is clear (r² ≥ 0.4), since the website charts about 50 years of temperatures. That covers London, Birmingham, Edinburgh, Glasgow, Cardiff, Belfast, Sydney, Singapore and Cape Town. Manchester's trend is not significant and looks oddly low, so it is left out. The text lives in `data/preapproved_locations.json`. Locations that are close together, such as the UK cities, each name a genuine local difference.
+- `LocationItem` requires `description` and rejects an empty one or one over 100 words, so the app fails to load a location data file that breaks the rule. A test checks the shipped file, including that descriptions are distinct.
+
+### Changed
+
+- The preapproved response cache prefix is now `preapproved:v3` (was `v2`), so responses cached before this change, which lack `description`, are not served. The old keys expire on their own TTL.
+- `description` is a required field in the `LocationItem` schema in the OpenAPI spec.
+
+---
+
 ## [2026-10-04] - Remove Stale Render References (unreleased)
 
 The API is hosted on Railway. These leftovers from an earlier Render deployment were misleading.

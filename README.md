@@ -1142,11 +1142,14 @@ GET /v1/locations/preapproved?country_code=GB&tier=global&limit=5
       "latitude": 51.5074,
       "longitude": -0.1278,
       "timezone": "Europe/London",
-      "tier": "global"
+      "tier": "global",
+      "description": "London has a temperate oceanic climate: mild, damp winters and warm, fairly dry summers..."
     }
   ]
 }
 ```
+
+Each location carries a `description`: one or two paragraphs of plain text (at most 100 words, paragraphs separated by a blank line) focused on temperature: climate type, typical temperatures in °C and seasonal variation. Precipitation, wind and other weather appear only where they affect temperature (frost, snow, fog, humidity, cooling sea breezes); there are no rainfall figures. Figures are 1991–2020 climate normals from national weather services. Where the trend is clear (it explains at least 40% of the year-to-year variation, r² ≥ 0.4), a description also gives the 50-year warming trend, taken from this API's own yearly records endpoint (`/v1/records/yearly/{location}/{MM-DD}`) as it stood in October 2026, because the website charts about 50 years of temperatures and what is normal now was not normal then. Refresh those figures from the endpoint from time to time. The text is hand-written and stored in `data/preapproved_locations.json`.
 
 **Caching and Performance:**
 
@@ -1862,9 +1865,12 @@ The preapproved locations are stored in `data/preapproved_locations.json` and lo
      "latitude": 0.0,
      "longitude": 0.0,
      "timezone": "Continent/City",
-     "tier": "global"
+     "tier": "global",
+     "description": "One or two paragraphs, at most 100 words: climate type, typical temperatures and seasonal variation."
    }
    ```
+
+   Write a description specific to the location (climate type, typical highs and lows in °C, seasonal variation, anything distinctive about its temperatures; mention rain, snow or wind only where it affects temperature, and give no rainfall totals) and check it against official 1991–2020 normals; add the 50-year trend from the yearly records endpoint only if it is clear (r² ≥ 0.4) and plausible against official data. Locations that are close together should still say what differs between them. The API refuses to load the file if a description is missing, empty or over 100 words.
 
 2. **Restart the application** to load new data:
 
@@ -1882,7 +1888,7 @@ The preapproved locations are stored in `data/preapproved_locations.json` and lo
 
 - **Warm cache manually:** The cache is automatically warmed on startup
 - **Clear cache:** Use Redis commands or restart the application
-- **Monitor cache:** Check Redis keys with pattern `preapproved:v1:*`
+- **Monitor cache:** Check Redis keys with pattern `preapproved:v3:*`
 
 #### Data Validation
 
@@ -1891,6 +1897,7 @@ The application validates all location data against the `LocationItem` schema:
 - Country codes must be valid ISO 3166-1 alpha-2 format
 - Coordinates must be valid numbers
 - All required fields must be present
+- `description` must be non-empty and at most 100 words
 
 ### Contributing
 
