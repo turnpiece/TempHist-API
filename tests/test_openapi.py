@@ -267,6 +267,7 @@ def test_popular_locations_do_not_require_image_fields(spec):
     assert set(schemas["PopularLocationItem"]["required"]) == {"id", "slug", "name"}
     # /preapproved always includes images, so its item model keeps requiring them.
     assert {"imageUrl", "imageAlt"} <= set(schemas["LocationItem"]["required"])
+    assert "description" in schemas["LocationItem"]["required"]
 
 
 def test_identifier_description_no_longer_claims_other_formats(spec):
