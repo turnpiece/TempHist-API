@@ -52,11 +52,12 @@ import asyncio
 import csv
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
 
@@ -65,6 +66,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.open_meteo_client import _FORECAST_PAST_DAYS  # noqa: E402
 from utils.temperature import calculate_trend_slope  # noqa: E402
 
+DEFAULT_MODEL = "era5_land"  # only used to name the target source in report mode
 LEGACY_CUTOFF = "2026-06-03"  # the Open-Meteo migration commit (02b4952)
 MIN_COVERAGE = 0.95  # fetched days / expected days below this means the fetch failed
 MIN_WINDOW_DAYS = 300  # of 365, for a rolling year to count towards the trend
@@ -237,6 +239,19 @@ async def fetch_series(loc: LocationSummary, end: date) -> List[dict]:
     return usable
 
 
+def backup_path(backup_dir: Path, location_id: int, name: str) -> Path:
+    """Backup file for a location, guaranteed to sit directly inside backup_dir.
+
+    The name comes from the database, so it is reduced to a safe slug rather than trusted.
+    """
+    root = backup_dir.resolve()
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:80]
+    path = (root / f"location_{int(location_id)}_{slug}.csv").resolve()
+    if path.parent != root:
+        raise ValueError(f"backup path escapes {root}: {path}")
+    return path
+
+
 def _write_csv(path: Path, rows: Sequence[asyncpg.Record]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
@@ -258,7 +273,7 @@ async def write_backup(conn: asyncpg.Connection, loc: LocationSummary, end: date
         loc.first_day,
         end,
     )
-    path = backup_dir / f"location_{loc.id}_{loc.name}.csv"
+    path = backup_path(backup_dir, loc.id, loc.name)
     _write_csv(path, rows)
     return path
 
@@ -323,6 +338,73 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return args
 
 
+def _mode_label(args: argparse.Namespace) -> str:
+    if args.execute:
+        return "EXECUTE"
+    if args.compare:
+        return "COMPARE (read-only)"
+    return "REPORT (read-only)"
+
+
+def select_work(summaries: Sequence[LocationSummary], args: argparse.Namespace) -> Tuple[List[LocationSummary], int]:
+    """Locations still needing work (honouring --limit) and how many were already on the pinned source."""
+    todo = [s for s in summaries if args.force or s.pending_rows > 0]
+    skipped = len(summaries) - len(todo)
+    if args.limit is not None:
+        todo = todo[: args.limit]
+    return todo, skipped
+
+
+def print_report(todo: Sequence[LocationSummary], skipped: int, end: date, source: str) -> None:
+    total = 0
+    for loc in todo:
+        calls = estimate_open_meteo_calls((end - loc.first_day).days + 1)
+        total += calls
+        print(f"{describe(loc)} est-calls={calls}")
+    print(
+        f"\n{len(todo)} locations need work ({skipped} already on {source!r}); "
+        f"about {total:,} weighted Open-Meteo calls (estimate)."
+    )
+
+
+async def process_all(
+    conn: asyncpg.Connection,
+    todo: Sequence[LocationSummary],
+    skipped: int,
+    args: argparse.Namespace,
+    today: date,
+    end: date,
+    source: str,
+) -> int:
+    """Fetch (and with --execute, write) each location. Returns the process exit code."""
+    done = 0
+    for loc in todo:
+        if loc.latitude is None or loc.longitude is None:
+            print(f"[{loc.id}] {loc.name}: no coordinates, skipped")
+            continue
+        if done:
+            await asyncio.sleep(args.delay)
+        try:
+            await process_location(conn, loc, args, today, end, source)
+        except FetchIncomplete as exc:
+            print(f"[{loc.id}] {loc.name}: {exc}. Stopping; re-run later to resume.", file=sys.stderr)
+            return 2
+        done += 1
+    print(f"\nProcessed {done} locations ({skipped} already on {source!r}).")
+    if args.execute and done:
+        print(
+            "Cached yearly/trend responses are now stale: clear them for the locations above "
+            "(DELETE /cache/invalidate/location/{location}, routers/cache.py)."
+        )
+    return 0
+
+
+def configured_model() -> str:
+    from config import OPEN_METEO_ARCHIVE_MODEL
+
+    return OPEN_METEO_ARCHIVE_MODEL
+
+
 async def run(args: argparse.Namespace) -> int:
     dsn = os.getenv("TEMPHIST_PG_DSN") or os.getenv("DATABASE_URL")
     if not dsn:
@@ -330,59 +412,24 @@ async def run(args: argparse.Namespace) -> int:
         return 1
 
     needs_fetch = args.execute or args.compare
-    model = ""
-    if needs_fetch:
-        from config import OPEN_METEO_ARCHIVE_MODEL as model
-
-        if not model:
-            print("OPEN_METEO_ARCHIVE_MODEL is empty; refusing to fetch unpinned data", file=sys.stderr)
-            return 1
-    source = f"open-meteo:{model or 'era5_land'}"
+    model = configured_model() if needs_fetch else ""
+    if needs_fetch and not model:
+        print("OPEN_METEO_ARCHIVE_MODEL is empty; refusing to fetch unpinned data", file=sys.stderr)
+        return 1
+    source = f"open-meteo:{model or DEFAULT_MODEL}"
 
     today = date.today()
     end = archive_end_date(today)
-    mode = "EXECUTE" if args.execute else ("COMPARE (read-only)" if args.compare else "REPORT (read-only)")
-    print(f"{mode}; model={model or '(not needed)'}; range ends {end}; target source={source!r}")
+    print(f"{_mode_label(args)}; model={model or '(not needed)'}; range ends {end}; target source={source!r}")
 
     conn = await asyncpg.connect(dsn)
     try:
         summaries = await load_summaries(conn, source, today, end, args.ids)
-        todo = [s for s in summaries if args.force or s.pending_rows > 0]
-        skipped = len(summaries) - len(todo)
-        if args.limit is not None:
-            todo = todo[: args.limit]
-
+        todo, skipped = select_work(summaries, args)
         if not needs_fetch:
-            for loc in todo:
-                days = (end - loc.first_day).days + 1
-                print(f"{describe(loc)} est-calls={estimate_open_meteo_calls(days)}")
-            total = sum(estimate_open_meteo_calls((end - s.first_day).days + 1) for s in todo)
-            print(
-                f"\n{len(todo)} locations need work ({skipped} already on {source!r}); "
-                f"about {total:,} weighted Open-Meteo calls (estimate)."
-            )
+            print_report(todo, skipped, end, source)
             return 0
-
-        done = 0
-        for index, loc in enumerate(todo):
-            if loc.latitude is None or loc.longitude is None:
-                print(f"[{loc.id}] {loc.name}: no coordinates, skipped")
-                continue
-            if index:
-                await asyncio.sleep(args.delay)
-            try:
-                await process_location(conn, loc, args, today, end, source)
-            except FetchIncomplete as exc:
-                print(f"[{loc.id}] {loc.name}: {exc}. Stopping; re-run later to resume.", file=sys.stderr)
-                return 2
-            done += 1
-        print(f"\nProcessed {done} locations ({skipped} already on {source!r}).")
-        if args.execute and done:
-            print(
-                "Cached yearly/trend responses are now stale: clear them for the locations above "
-                "(DELETE /cache/invalidate/location/{location}, routers/cache.py)."
-            )
-        return 0
+        return await process_all(conn, todo, skipped, args, today, end, source)
     finally:
         await conn.close()
         if needs_fetch:
