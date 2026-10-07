@@ -2,6 +2,26 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-07] - Pin Open-Meteo Archive Model (unreleased)
+
+Part of P1-173: unexpectedly low 50-year trends for Manchester, Hong Kong and Dublin (#123).
+
+### Fixed
+
+- **Historical requests now pin `models=era5_land`** (`OPEN_METEO_ARCHIVE_MODEL`, default `era5_land`; empty restores the old behaviour). Without it, Open-Meteo's default `best_match` silently changes model on 2017-01-01, putting a location-dependent step into the long-term series: about -0.9 °C in Hong Kong (turning a 0.28 °C/decade trend into 0.09) and about +0.4 °C in Manchester. Before 2017 `best_match` returned ERA5-Land, so values already stored for those years are unaffected.
+- The forecast endpoint, which supplies the most recent ~7 days, is not pinned because it returns no ERA5-Land data. Those days can still carry `best_match`'s offset.
+
+### Added
+
+- **`scripts/backfill_open_meteo.py`**: re-fetches each location's stored history from the pinned model and upserts it, tagging rows `open-meteo:<model>`. Read-only by default (a database report with an estimated Open-Meteo call cost); `--compare` previews each location's trend before and after; `--execute --backup-dir DIR` backs up the rows it replaces to CSV, then writes. It stops at the first incomplete fetch, skips locations already on the pinned source so a run can resume, and leaves the newest 8 days to the forecast endpoint.
+- Why it is needed: rows loaded before the 2026-06-03 move to Open-Meteo came from Visual Crossing (about 982k of 2.43M rows across 56 of 132 locations), and rows loaded since then use the unpinned `best_match`. Both put steps into the series that skew 50-year trends. A 51-year request costs roughly 2,600 weighted Open-Meteo calls against free-tier limits of 5,000/hour and 10,000/day, so a full run needs a paid plan.
+
+### Note
+
+- This only affects days fetched from now on. Days already stored in `daily_temperatures` are never re-fetched, so 2017+ rows for existing locations keep the old values until they are purged and backfilled.
+
+---
+
 ## [2026-10-06] - Climate Descriptions for Preapproved Locations (unreleased)
 
 Each curated location now carries a short climate description, so the website's location pages can say something specific about each place instead of the same generic text (#122).
