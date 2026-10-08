@@ -50,9 +50,10 @@ POPULAR_CACHE_TTL = 3600  # 1 hour — rebuilt from live selection signal
 RATE_LIMIT_REQUESTS = 60  # requests per minute
 RATE_LIMIT_WINDOW = 60  # 1 minute window
 LOADING_RETRY_AFTER = 5  # seconds; the locations data is normally loaded within moments of startup
-CACHE_PREFIX = "preapproved:v2"
+CACHE_PREFIX = "preapproved:v3"  # v3: items gained `description`
 POPULAR_CACHE_PREFIX = "popular:v2"
 MAX_LIMIT = 500
+MAX_DESCRIPTION_WORDS = 100
 
 # Country code aliases: non-ISO codes that users commonly try
 COUNTRY_CODE_ALIASES: Dict[str, str] = {
@@ -127,6 +128,14 @@ class LocationItem(BaseModel):
     longitude: float = Field(..., description="Longitude coordinate")
     timezone: str = Field(..., description="IANA timezone identifier")
     tier: str = Field(..., description="Location tier classification")
+    description: str = Field(
+        ...,
+        description=(
+            "One or two paragraphs of plain text (separated by a blank line, at most "
+            f"{MAX_DESCRIPTION_WORDS} words) describing the location's temperatures: climate type, typical temperatures "
+            "in °C and seasonal variation."
+        ),
+    )
     imageUrl: ImageUrl = Field(..., description="Location image URLs")
     imageAlt: str = Field(..., description="Alt text for location image")
     imageAttribution: Optional[ImageAttribution] = Field(None, description="Location image attribution")
@@ -137,6 +146,17 @@ class LocationItem(BaseModel):
         """Validate country code format (ISO 3166-1 alpha-2)."""
         if not re.match(r"^[A-Z]{2}$", v):
             raise ValueError("Country code must be a 2-letter ISO 3166-1 alpha-2 code")
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v):
+        """Require a non-empty description of at most MAX_DESCRIPTION_WORDS words."""
+        words = len(v.split())
+        if words == 0:
+            raise ValueError("Description must not be empty")
+        if words > MAX_DESCRIPTION_WORDS:
+            raise ValueError(f"Description must be at most {MAX_DESCRIPTION_WORDS} words (got {words})")
         return v
 
 

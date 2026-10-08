@@ -2,6 +2,42 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-07] - Pin Open-Meteo Archive Model (unreleased)
+
+Part of P1-173: unexpectedly low 50-year trends for Manchester, Hong Kong and Dublin (#123).
+
+### Fixed
+
+- **Historical requests now pin `models=era5_land`** (`OPEN_METEO_ARCHIVE_MODEL`, default `era5_land`; empty restores the old behaviour). Without it, Open-Meteo's default `best_match` silently changes model on 2017-01-01, putting a location-dependent step into the long-term series: about -0.9 °C in Hong Kong (turning a 0.28 °C/decade trend into 0.09) and about +0.4 °C in Manchester. Before 2017 `best_match` returned ERA5-Land, so values already stored for those years are unaffected.
+- The forecast endpoint, which supplies the most recent ~7 days, is not pinned because it returns no ERA5-Land data. Those days can still carry `best_match`'s offset.
+
+### Added
+
+- **`scripts/backfill_open_meteo.py`**: re-fetches each location's stored history from the pinned model and upserts it, tagging rows `open-meteo:<model>`. Read-only by default (a database report with an estimated Open-Meteo call cost); `--compare` previews each location's trend before and after; `--execute --backup-dir DIR` backs up the rows it replaces to CSV, then writes. It stops at the first incomplete fetch, skips locations already on the pinned source so a run can resume, and leaves the newest 8 days to the forecast endpoint.
+- Why it is needed: rows loaded before the 2026-06-03 move to Open-Meteo came from Visual Crossing (about 982k of 2.43M rows across 56 of 132 locations), and rows loaded since then use the unpinned `best_match`. Both put steps into the series that skew 50-year trends. A 51-year request costs roughly 2,600 weighted Open-Meteo calls against free-tier limits of 5,000/hour and 10,000/day, so a full run needs a paid plan.
+
+### Note
+
+- This only affects days fetched from now on. Days already stored in `daily_temperatures` are never re-fetched, so 2017+ rows for existing locations keep the old values until they are purged and backfilled.
+
+---
+
+## [2026-10-06] - Climate Descriptions for Preapproved Locations (unreleased)
+
+Each curated location now carries a short climate description, so the website's location pages can say something specific about each place instead of the same generic text (#122).
+
+### Added
+
+- **`description` on every item of `GET /v1/locations/preapproved`**: one or two paragraphs of plain text (separated by a blank line), at most 100 words, focused on temperature: climate type, typical temperatures in °C and seasonal variation. Precipitation and wind appear only where they affect temperature, with no rainfall figures. Figures are 1991–2020 normals, and descriptions also give the 50-year warming trend from this API's yearly records endpoint (as of October 2026) where it is clear (r² ≥ 0.4), since the website charts about 50 years of temperatures. That covers London, Birmingham, Edinburgh, Glasgow, Cardiff, Belfast, Sydney, Singapore and Cape Town. Manchester's trend is not significant and looks oddly low, so it is left out. The text lives in `data/preapproved_locations.json`. Locations that are close together, such as the UK cities, each name a genuine local difference.
+- `LocationItem` requires `description` and rejects an empty one or one over 100 words, so the app fails to load a location data file that breaks the rule. A test checks the shipped file, including that descriptions are distinct.
+
+### Changed
+
+- The preapproved response cache prefix is now `preapproved:v3` (was `v2`), so responses cached before this change, which lack `description`, are not served. The old keys expire on their own TTL.
+- `description` is a required field in the `LocationItem` schema in the OpenAPI spec.
+
+---
+
 ## [2026-10-04] - Remove Stale Render References (unreleased)
 
 The API is hosted on Railway. These leftovers from an earlier Render deployment were misleading.
