@@ -412,3 +412,34 @@ async def test_fetch_days_sanitizes_apikey_from_client_error_logs(monkeypatch, c
 
     assert "secret-key" not in caplog.text
     assert "[REDACTED]" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_pins_archive_model_but_not_forecast(monkeypatch):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "")
+    monkeypatch.setattr("config.OPEN_METEO_ARCHIVE_MODEL", "era5_land")
+    today = date.today()
+    get_client = fake_get_client([FakeResponse(200, _ok_payload()), FakeResponse(200, _ok_payload())])
+    monkeypatch.setattr(open_meteo_client, "_get_client", get_client)
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    await open_meteo_client.fetch_days(51.5, -0.1, today - timedelta(days=30), today)
+
+    archive = [u for u in get_client.session.requested_urls if "/v1/archive" in u]
+    forecast = [u for u in get_client.session.requested_urls if "/v1/forecast" in u]
+    assert len(archive) == 1 and len(forecast) == 1
+    assert "&models=era5_land" in archive[0]
+    assert "models=" not in forecast[0]
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_omits_models_when_archive_model_empty(monkeypatch):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "")
+    monkeypatch.setattr("config.OPEN_METEO_ARCHIVE_MODEL", "")
+    get_client = fake_get_client([FakeResponse(200, _ok_payload())])
+    monkeypatch.setattr(open_meteo_client, "_get_client", get_client)
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    await open_meteo_client.fetch_days(51.5, -0.1, date(2024, 6, 1), date(2024, 6, 1))
+
+    assert "models=" not in get_client.session.requested_urls[0]

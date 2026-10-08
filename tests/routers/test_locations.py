@@ -11,7 +11,9 @@ Tests cover:
 """
 
 import json
+import re
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +27,7 @@ from main import app as main_app
 # Import the router and models
 from routers.locations import (
     EU_MEMBER_CODES,
+    MAX_DESCRIPTION_WORDS,
     LocationItem,
     SelectionRequest,
     _find_preapproved_id,
@@ -56,6 +59,7 @@ SAMPLE_LOCATIONS = [
         "longitude": -0.1278,
         "timezone": "Europe/London",
         "tier": "global",
+        "description": "London has a temperate oceanic climate with mild, damp winters and warm summers.",
         "imageUrl": {
             "webp": "http://localhost:8000/data/locations/processed/london.webp",
             "jpeg": "http://localhost:8000/data/locations/processed/london.jpg",
@@ -74,6 +78,7 @@ SAMPLE_LOCATIONS = [
         "longitude": -74.0060,
         "timezone": "America/New_York",
         "tier": "global",
+        "description": "New York has hot, humid summers and cold winters with four distinct seasons.",
         "imageUrl": {
             "webp": "http://localhost:8000/data/locations/processed/new-york.webp",
             "jpeg": "http://localhost:8000/data/locations/processed/new-york.jpg",
@@ -92,6 +97,7 @@ SAMPLE_LOCATIONS = [
         "longitude": 2.3522,
         "timezone": "Europe/Paris",
         "tier": "global",
+        "description": "Paris has a temperate oceanic climate with mild winters and warm summers.",
         "imageUrl": {
             "webp": "http://localhost:8000/data/locations/processed/paris.webp",
             "jpeg": "http://localhost:8000/data/locations/processed/paris.jpg",
@@ -177,6 +183,49 @@ class TestLocationItem:
         assert location.imageAlt == "London Eye and Thames river"
 
 
+class TestLocationDescription:
+    """The curated `description` text: present, plain, and at most 100 words."""
+
+    def _item(self, description):
+        return LocationItem(**{**SAMPLE_LOCATIONS[0], "description": description})
+
+    def test_description_is_returned_on_the_model(self):
+        assert self._item("Mild and damp.").description == "Mild and damp."
+
+    def test_description_is_required(self):
+        data = {k: v for k, v in SAMPLE_LOCATIONS[0].items() if k != "description"}
+        with pytest.raises(ValueError, match="description"):
+            LocationItem(**data)
+
+    @pytest.mark.parametrize("description", ["", "   ", "\n\n"])
+    def test_blank_description_rejected(self, description):
+        with pytest.raises(ValueError, match="must not be empty"):
+            self._item(description)
+
+    def test_description_word_limit(self):
+        assert self._item(" ".join(["word"] * MAX_DESCRIPTION_WORDS)).description
+        with pytest.raises(ValueError, match="at most 100 words"):
+            self._item(" ".join(["word"] * (MAX_DESCRIPTION_WORDS + 1)))
+
+    def test_curated_data_file_descriptions(self):
+        """Every shipped location needs its own description, so a new location can't be added without one."""
+        data_file = Path(__file__).resolve().parents[2] / "data" / "preapproved_locations.json"
+        locations = json.loads(data_file.read_text(encoding="utf-8"))
+        assert locations
+
+        for loc in locations:
+            description = loc.get("description", "")
+            assert description.strip(), f"{loc['id']} has no description"
+            assert len(description.split()) <= MAX_DESCRIPTION_WORDS, f"{loc['id']} description is too long"
+            assert "<" not in description, f"{loc['id']} description must be plain text"
+            # The site is about temperature: no rainfall totals.
+            assert not re.search(r"\bmm\b|\bmillimet", description, re.I), f"{loc['id']} must not quote rainfall"
+            assert 1 <= len(description.split("\n\n")) <= 2, f"{loc['id']} must be one or two paragraphs"
+
+        descriptions = [loc["description"] for loc in locations]
+        assert len(set(descriptions)) == len(descriptions), "descriptions must be distinct"
+
+
 class TestUtilityFunctions:
     """Test utility functions."""
 
@@ -221,10 +270,10 @@ class TestUtilityFunctions:
 
     def test_get_cache_key(self):
         """Test cache key generation."""
-        assert get_cache_key() == "preapproved:v2:all"
-        assert get_cache_key("US") == "preapproved:v2:country:US"
-        assert get_cache_key(tier="global") == "preapproved:v2:tier:global"
-        assert get_cache_key("US", "global") == "preapproved:v2:country:US:tier:global"
+        assert get_cache_key() == "preapproved:v3:all"
+        assert get_cache_key("US") == "preapproved:v3:country:US"
+        assert get_cache_key(tier="global") == "preapproved:v3:tier:global"
+        assert get_cache_key("US", "global") == "preapproved:v3:country:US:tier:global"
 
     def test_filter_locations(self, sample_locations):
         """Test location filtering."""
@@ -291,6 +340,7 @@ class TestPreapprovedLocationsEndpoint:
             assert "webp" in location["imageUrl"]
             assert "jpeg" in location["imageUrl"]
             assert "imageAlt" in location
+            assert location["description"]
 
         # Check that continent is present and correct
         continents = {loc["id"]: loc["continent"] for loc in data["locations"]}
@@ -493,7 +543,7 @@ class TestDataLoading:
         ):
             await initialize_locations_data(mock_redis)
 
-        # Verify cache was warmed (preapproved:v2:all only — popular cache is not pre-populated)
+        # Verify cache was warmed (preapproved:v3:all only — popular cache is not pre-populated)
         assert mock_redis.setex.call_count == 1
 
     @pytest.mark.asyncio

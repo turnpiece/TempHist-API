@@ -92,17 +92,23 @@ def _with_api_key(url: str) -> str:
 
 
 def _om_archive_url(lat: float, lon: float, start: date, end: date) -> str:
-    from config import OPEN_METEO_ARCHIVE_URL
+    from config import OPEN_METEO_ARCHIVE_MODEL, OPEN_METEO_ARCHIVE_URL
 
-    return (
+    url = (
         f"{OPEN_METEO_ARCHIVE_URL}?latitude={lat}&longitude={lon}"
         f"&start_date={start.isoformat()}&end_date={end.isoformat()}"
         f"&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min"
         f"&timezone=auto"
     )
+    # Pin the model: the default best_match changes source in 2017, stepping the series.
+    if OPEN_METEO_ARCHIVE_MODEL:
+        url += f"&models={quote(OPEN_METEO_ARCHIVE_MODEL, safe=',')}"
+    return url
 
 
 def _om_forecast_url(lat: float, lon: float) -> str:
+    # No models= here: ERA5-Land is not served by the forecast endpoint (all-null for the
+    # last few days), so the most recent days come from best_match and may carry its offset.
     from config import OPEN_METEO_FORECAST_URL
 
     return (
