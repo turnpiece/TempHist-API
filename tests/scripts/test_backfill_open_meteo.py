@@ -436,6 +436,25 @@ class TestRun:
         assert conn.closed
         assert conn.executemany_calls == []
 
+    async def test_report_mode_names_the_target_source_after_the_configured_model(self, monkeypatch, capsys):
+        conn = FakeConn(summary_rows=[_summary_row()])
+        self._connect_to(monkeypatch, conn)
+        monkeypatch.setattr(backfill, "configured_model", lambda: "era5")
+
+        assert await backfill.run(_args()) == 0
+
+        assert "open-meteo:era5" in capsys.readouterr().out
+        assert conn.queries[0][1][1] == "open-meteo:era5"
+
+    async def test_report_mode_still_works_when_no_model_is_configured(self, monkeypatch, capsys):
+        conn = FakeConn(summary_rows=[_summary_row()])
+        self._connect_to(monkeypatch, conn)
+        monkeypatch.setattr(backfill, "configured_model", lambda: "")
+
+        assert await backfill.run(_args()) == 0
+
+        assert "model=(unset)" in capsys.readouterr().out
+
     async def test_execute_mode_processes_locations_and_closes_the_http_client(self, monkeypatch, tmp_path):
         conn = FakeConn(summary_rows=[_summary_row()], stored_rows=[{"day": date(2020, 1, 1), "temp_c": 9.0}])
         self._connect_to(monkeypatch, conn)

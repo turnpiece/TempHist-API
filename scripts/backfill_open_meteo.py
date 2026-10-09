@@ -66,7 +66,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.open_meteo_client import _FORECAST_PAST_DAYS  # noqa: E402
 from utils.temperature import calculate_trend_slope  # noqa: E402
 
-DEFAULT_MODEL = "era5_land"  # only used to name the target source in report mode
 LEGACY_CUTOFF = "2026-06-03"  # the Open-Meteo migration commit (02b4952)
 MIN_COVERAGE = 0.95  # fetched days / expected days below this means the fetch failed
 MIN_WINDOW_DAYS = 300  # of 365, for a rolling year to count towards the trend
@@ -412,15 +411,15 @@ async def run(args: argparse.Namespace) -> int:
         return 1
 
     needs_fetch = args.execute or args.compare
-    model = configured_model() if needs_fetch else ""
+    model = configured_model()
     if needs_fetch and not model:
         print("OPEN_METEO_ARCHIVE_MODEL is empty; refusing to fetch unpinned data", file=sys.stderr)
         return 1
-    source = f"open-meteo:{model or DEFAULT_MODEL}"
+    source = f"open-meteo:{model or 'unpinned'}"
 
     today = date.today()
     end = archive_end_date(today)
-    print(f"{_mode_label(args)}; model={model or '(not needed)'}; range ends {end}; target source={source!r}")
+    print(f"{_mode_label(args)}; model={model or '(unset)'}; range ends {end}; target source={source!r}")
 
     conn = await asyncpg.connect(dsn)
     try:

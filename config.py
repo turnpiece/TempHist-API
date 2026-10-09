@@ -110,9 +110,11 @@ OPEN_METEO_FORECAST_URL = os.getenv("OPEN_METEO_FORECAST_URL", "https://api.open
 # Reanalysis model for archive (historical) requests. Unpinned, Open-Meteo's best_match
 # switches model on 2017-01-01, which puts a location-dependent step (about -0.9 degC in Hong
 # Kong, +0.4 degC in Manchester) into the long-term series and distorts trends (P1-173).
-# era5_land is what best_match returned before the switch. Set empty to restore best_match.
+# era5 rather than era5_land: the two agree where checked (Manchester 0.34 v 0.32, Hong Kong
+# 0.28 v 0.25 degC/decade), but era5_land's land-only cells (0.1 deg, about 11 km) gave Singapore
+# 0.12 against 0.27 for era5 and the Meteorological Service Singapore's 0.25. Set empty to restore best_match.
 # Not applied to the forecast endpoint (the most recent days), which returns nothing for it.
-OPEN_METEO_ARCHIVE_MODEL = os.getenv("OPEN_METEO_ARCHIVE_MODEL", "era5_land").strip()
+OPEN_METEO_ARCHIVE_MODEL = os.getenv("OPEN_METEO_ARCHIVE_MODEL", "era5").strip()
 OPEN_METEO_FORECAST_PAST_DAYS = int(os.getenv("OPEN_METEO_FORECAST_PAST_DAYS", "7"))
 OPEN_METEO_MONITORING_ENABLED = os.getenv("OPEN_METEO_MONITORING_ENABLED", "true").lower() == "true"
 OPEN_METEO_STATS_WINDOW_SECONDS = int(os.getenv("OPEN_METEO_STATS_WINDOW_SECONDS", "300"))
