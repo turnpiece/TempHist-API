@@ -2,6 +2,20 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-09] - Refresh Location Description Trends After the ERA5 Backfill (unreleased)
+
+Part of P1-173 (#123). The 50-year trends quoted in the preapproved location descriptions were taken from history that mixed Visual Crossing and Open-Meteo data and had a step in 2017. After re-fetching the 24 preapproved locations from ERA5, the figures were taken again (yearly records, year ending 9 October 2026) and the same rule applied: quote a trend only where r² ≥ 0.4.
+
+### Changed
+
+- **Updated:** London 0.5 → 0.4 and Cardiff 0.4 → 0.3 °C per decade. Birmingham (0.4), Edinburgh (0.3) and Singapore (0.3) are unchanged.
+- **Added:** Manchester (0.3, r² 0.52), Hong Kong (0.3, r² 0.58), Melbourne (0.2, r² 0.47) and Auckland (0.2, r² 0.47). Manchester and Hong Kong were left out before because their stored trends were distorted, not because the warming was absent.
+- **Removed, because the fit is now below r² 0.4:** Glasgow (0.39), Belfast (0.37), Sydney (0.37) and Cape Town (0.34). Dublin (0.37) stays without one.
+- Melbourne's frost and snow sentence was shortened to keep the description within 100 words.
+- The preapproved response cache prefix is now `preapproved:v4` (was `v3`), so responses cached with the old text are not served. The old keys expire on their own TTL.
+
+---
+
 ## [2026-10-09] - Pin ERA5 Rather Than ERA5-Land (unreleased)
 
 Follow-up to the P1-173 model pin (#123).

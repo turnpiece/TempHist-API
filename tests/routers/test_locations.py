@@ -270,10 +270,10 @@ class TestUtilityFunctions:
 
     def test_get_cache_key(self):
         """Test cache key generation."""
-        assert get_cache_key() == "preapproved:v3:all"
-        assert get_cache_key("US") == "preapproved:v3:country:US"
-        assert get_cache_key(tier="global") == "preapproved:v3:tier:global"
-        assert get_cache_key("US", "global") == "preapproved:v3:country:US:tier:global"
+        assert get_cache_key() == "preapproved:v4:all"
+        assert get_cache_key("US") == "preapproved:v4:country:US"
+        assert get_cache_key(tier="global") == "preapproved:v4:tier:global"
+        assert get_cache_key("US", "global") == "preapproved:v4:country:US:tier:global"
 
     def test_filter_locations(self, sample_locations):
         """Test location filtering."""
@@ -543,7 +543,7 @@ class TestDataLoading:
         ):
             await initialize_locations_data(mock_redis)
 
-        # Verify cache was warmed (preapproved:v3:all only — popular cache is not pre-populated)
+        # Verify cache was warmed (preapproved:v4:all only — popular cache is not pre-populated)
         assert mock_redis.setex.call_count == 1
 
     @pytest.mark.asyncio

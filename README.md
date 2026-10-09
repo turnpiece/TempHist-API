@@ -1943,7 +1943,7 @@ The preapproved locations are stored in `data/preapproved_locations.json` and lo
 
 - **Warm cache manually:** The cache is automatically warmed on startup
 - **Clear cache:** Use Redis commands or restart the application
-- **Monitor cache:** Check Redis keys with pattern `preapproved:v3:*`
+- **Monitor cache:** Check Redis keys with pattern `preapproved:v4:*`
 
 #### Data Validation
 
