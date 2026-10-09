@@ -219,7 +219,7 @@ def _timeline_days_to_records(timeline_days: List[Dict[str, Any]], range_start: 
                 temp_max_c=temp_max,
                 temp_min_c=temp_min,
                 payload=filtered_payload,
-                source="timeline",
+                source=str(day_payload.get("source") or "timeline"),
             )
         )
     return records_to_store

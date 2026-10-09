@@ -443,3 +443,41 @@ async def test_fetch_days_omits_models_when_archive_model_empty(monkeypatch):
     await open_meteo_client.fetch_days(51.5, -0.1, date(2024, 6, 1), date(2024, 6, 1))
 
     assert "models=" not in get_client.session.requested_urls[0]
+
+
+def test_source_tags_name_the_pinned_model_and_the_forecast(monkeypatch):
+    monkeypatch.setattr("config.OPEN_METEO_ARCHIVE_MODEL", "era5")
+    assert open_meteo_client._source_for_endpoint("archive") == "open-meteo:era5"
+    assert open_meteo_client._source_for_endpoint("forecast") == "open-meteo:forecast"
+    monkeypatch.setattr("config.OPEN_METEO_ARCHIVE_MODEL", "")
+    assert open_meteo_client._source_for_endpoint("archive") == "open-meteo:best_match"
+
+
+def test_process_response_adds_source_only_when_given():
+    payload = {"daily": {"time": ["2024-06-01"], "temperature_2m_mean": [15.0],
+                         "temperature_2m_max": [20.0], "temperature_2m_min": [10.0]}}
+    day = date(2024, 6, 1)
+    assert "source" not in open_meteo_client._process_om_response(payload, day, day)[0]
+    assert open_meteo_client._process_om_response(payload, day, day, "open-meteo:era5")[0]["source"] == "open-meteo:era5"
+
+
+@pytest.mark.asyncio
+async def test_fetch_days_tags_archive_and_forecast_days_differently(monkeypatch):
+    monkeypatch.setattr("config.OPEN_METEO_API_KEY", "")
+    monkeypatch.setattr("config.OPEN_METEO_ARCHIVE_MODEL", "era5")
+    today = date.today()
+    old_day, new_day = today - timedelta(days=30), today
+    old_payload = {"daily": {"time": [old_day.isoformat()], "temperature_2m_mean": [10.0],
+                             "temperature_2m_max": [12.0], "temperature_2m_min": [8.0]}}
+    new_payload = {"daily": {"time": [new_day.isoformat()], "temperature_2m_mean": [11.0],
+                             "temperature_2m_max": [13.0], "temperature_2m_min": [9.0]}}
+    get_client = fake_get_client([FakeResponse(200, old_payload), FakeResponse(200, new_payload)])
+    monkeypatch.setattr(open_meteo_client, "_get_client", get_client)
+    monkeypatch.setattr(open_meteo_client, "_get_open_meteo_stats", lambda: None)
+
+    days, _meta = await open_meteo_client.fetch_days(51.5, -0.1, old_day, new_day)
+
+    assert {d["datetime"]: d["source"] for d in days} == {
+        old_day.isoformat(): "open-meteo:era5",
+        new_day.isoformat(): "open-meteo:forecast",
+    }
