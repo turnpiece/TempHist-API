@@ -146,9 +146,24 @@ def _om_requests_for_range(lat: float, lon: float, start: date, end: date) -> Li
 # ── Response normalisation ────────────────────────────────────────────────────
 
 
-def _process_om_response(payload: dict, filter_start: date, filter_end: date) -> List[Dict]:
-    """Normalise OM's array-based response to [{datetime, temp, tempmax, tempmin}],
-    filtered to [filter_start, filter_end] inclusive.
+def _source_for_endpoint(endpoint: str) -> str:
+    """Provenance tag stored with days fetched from the given endpoint.
+
+    Archive days carry the pinned model, so rows from different models can be told apart later;
+    the forecast endpoint (the newest ~7 days) is a different model and is tagged as such.
+    """
+    if endpoint == "forecast":
+        return "open-meteo:forecast"
+    from config import OPEN_METEO_ARCHIVE_MODEL
+
+    return f"open-meteo:{OPEN_METEO_ARCHIVE_MODEL or 'best_match'}"
+
+
+def _process_om_response(
+    payload: dict, filter_start: date, filter_end: date, source: Optional[str] = None
+) -> List[Dict]:
+    """Normalise OM's array-based response to [{datetime, temp, tempmax, tempmin, source}],
+    filtered to [filter_start, filter_end] inclusive. `source` is omitted when not given.
     """
     daily = payload.get("daily", {})
     times = daily.get("time", [])
@@ -165,7 +180,10 @@ def _process_om_response(payload: dict, filter_start: date, filter_end: date) ->
             continue
         if m is None and mx is not None and mn is not None:
             m = round((mx + mn) / 2, 1)
-        days.append({"datetime": t, "temp": m, "tempmax": mx, "tempmin": mn})
+        day = {"datetime": t, "temp": m, "tempmax": mx, "tempmin": mn}
+        if source:
+            day["source"] = source
+        days.append(day)
     return days
 
 
@@ -267,7 +285,7 @@ async def fetch_days(
     """Fetch temperature data for a date range from OM archive/forecast APIs.
 
     Returns (days, metadata) where:
-      - days: [{datetime, temp, tempmax, tempmin}] sorted by date, temperatures in °C
+      - days: [{datetime, temp, tempmax, tempmin, source}] sorted by date, temperatures in °C
       - metadata: {resolvedAddress, timezone, latitude, longitude}
 
     Handles archive/forecast splitting, retries, and 429 back-off automatically.
@@ -330,11 +348,13 @@ async def fetch_days(
                                 continue
                             if stats:
                                 failure_reason = (
-                                    "rate_limit_exceeded" if "rate" in reason or "limit" in reason else "open_meteo_error"
+                                    "rate_limit_exceeded"
+                                    if "rate" in reason or "limit" in reason
+                                    else "open_meteo_error"
                                 )
                                 stats.record_failure(failure_reason, endpoint=endpoint)
                             return
-                        days = _process_om_response(payload, fs, fe)
+                        days = _process_om_response(payload, fs, fe, _source_for_endpoint(endpoint))
                         all_days.extend(days)
                         if metadata["timezone"] is None:
                             metadata.update(_extract_metadata(payload))
