@@ -89,6 +89,12 @@ class LocationSummary:
     legacy_rows: int
     pending_rows: int
     future_rows: int
+    first_pending_day: Optional[date] = None
+
+    @property
+    def refresh_from(self) -> date:
+        """First day to re-fetch: the oldest row not on the target source, else the whole history."""
+        return self.first_pending_day or self.first_day
 
 
 def archive_end_date(today: date) -> date:
@@ -179,7 +185,8 @@ SUMMARY_SQL = """
            max(d.day) AS last_day,
            count(*) FILTER (WHERE d.updated_at < $1::timestamptz) AS legacy_rows,
            count(*) FILTER (WHERE d.source <> $2::text AND d.day <= $3::date) AS pending_rows,
-           count(*) FILTER (WHERE d.day > $4::date) AS future_rows
+           count(*) FILTER (WHERE d.day > $4::date) AS future_rows,
+           min(d.day) FILTER (WHERE d.source <> $2::text AND d.day <= $3::date) AS first_pending_day
     FROM locations l
     JOIN daily_temperatures d ON d.location_id = l.id
     WHERE ($5::bigint[] IS NULL OR l.id = ANY($5::bigint[]))
@@ -224,6 +231,7 @@ async def load_summaries(
             legacy_rows=r["legacy_rows"],
             pending_rows=r["pending_rows"],
             future_rows=r["future_rows"],
+            first_pending_day=r["first_pending_day"],
         )
         for r in rows
     ]
@@ -232,9 +240,10 @@ async def load_summaries(
 async def fetch_series(loc: LocationSummary, end: date) -> List[dict]:
     from utils.open_meteo_client import fetch_days
 
-    days, _meta = await fetch_days(loc.latitude, loc.longitude, loc.first_day, end)
+    start = loc.refresh_from
+    days, _meta = await fetch_days(loc.latitude, loc.longitude, start, end)
     usable = [d for d in days if d.get("temp") is not None]
-    check_coverage(len(usable), loc.first_day, end)
+    check_coverage(len(usable), start, end)
     return usable
 
 
@@ -269,7 +278,7 @@ async def write_backup(conn: asyncpg.Connection, loc: LocationSummary, end: date
         ORDER BY day
         """,
         loc.id,
-        loc.first_day,
+        loc.refresh_from,
         end,
     )
     path = backup_path(backup_dir, loc.id, loc.name)
@@ -280,7 +289,8 @@ async def write_backup(conn: asyncpg.Connection, loc: LocationSummary, end: date
 def describe(loc: LocationSummary) -> str:
     return (
         f"[{loc.id}] {loc.name} ({loc.latitude}, {loc.longitude}) {loc.first_day}..{loc.last_day} "
-        f"rows={loc.total_rows} pre-migration={loc.legacy_rows} not-pinned={loc.pending_rows} future-dated={loc.future_rows}"
+        f"rows={loc.total_rows} pre-migration={loc.legacy_rows} not-pinned={loc.pending_rows} future-dated={loc.future_rows} "
+        f"refresh-from={loc.refresh_from}"
     )
 
 
@@ -357,7 +367,7 @@ def select_work(summaries: Sequence[LocationSummary], args: argparse.Namespace) 
 def print_report(todo: Sequence[LocationSummary], skipped: int, end: date, source: str) -> None:
     total = 0
     for loc in todo:
-        calls = estimate_open_meteo_calls((end - loc.first_day).days + 1)
+        calls = estimate_open_meteo_calls((end - loc.refresh_from).days + 1)
         total += calls
         print(f"{describe(loc)} est-calls={calls}")
     print(

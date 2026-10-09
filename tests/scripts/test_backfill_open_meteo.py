@@ -187,6 +187,7 @@ def _summary_row(location_id=1, name="london__england__united_kingdom", lat=51.5
         "legacy_rows": 120,
         "pending_rows": pending,
         "future_rows": 0,
+        "first_pending_day": date(2020, 1, 1),
     }
 
 
@@ -207,6 +208,7 @@ def _summary_row_as_kwargs():
         "legacy_rows": row["legacy_rows"],
         "pending_rows": row["pending_rows"],
         "future_rows": row["future_rows"],
+        "first_pending_day": row["first_pending_day"],
     }
 
 
@@ -488,3 +490,30 @@ class TestModeLabel:
         assert backfill._mode_label(_args(execute=True)) == "EXECUTE"
         assert backfill._mode_label(_args(compare=True)) == "COMPARE (read-only)"
         assert backfill._mode_label(_args()) == "REPORT (read-only)"
+
+
+class TestRefreshWindow:
+    def test_starts_at_the_oldest_row_not_on_the_target_source(self):
+        assert _loc(first_day=date(1975, 1, 1), first_pending_day=date(2026, 9, 1)).refresh_from == date(2026, 9, 1)
+
+    def test_falls_back_to_the_whole_history_when_nothing_is_pending(self):
+        assert _loc(first_day=date(1975, 1, 1), first_pending_day=None).refresh_from == date(1975, 1, 1)
+
+    async def test_fetch_series_requests_only_the_refresh_window(self, monkeypatch):
+        seen = {}
+
+        async def fake_fetch_days(lat, lon, start, end):
+            seen["window"] = (start, end)
+            return _fetched_days(start, n=(end - start).days + 1), {}
+
+        monkeypatch.setattr("utils.open_meteo_client.fetch_days", fake_fetch_days)
+        loc = _loc(first_day=date(1975, 1, 1), first_pending_day=date(2026, 9, 1))
+
+        await backfill.fetch_series(loc, date(2026, 9, 30))
+
+        assert seen["window"] == (date(2026, 9, 1), date(2026, 9, 30))
+
+    def test_report_estimate_follows_the_window(self, capsys):
+        recent = _loc(first_day=date(1975, 1, 1), first_pending_day=date(2026, 9, 1))
+        backfill.print_report([recent], 0, date(2026, 9, 30), "s")
+        assert "est-calls=3\n" in capsys.readouterr().out
