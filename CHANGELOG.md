@@ -2,6 +2,21 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-09] - Pin ERA5 Rather Than ERA5-Land (unreleased)
+
+Follow-up to the P1-173 model pin (#123).
+
+### Changed
+
+- **`OPEN_METEO_ARCHIVE_MODEL` now defaults to `era5`** (was `era5_land`). After backfilling 24 locations on ERA5-Land, comparing the same locations on ERA5 showed the two agree where there is no reason to expect a difference (Manchester 0.32 v 0.34 °C/decade, Hong Kong 0.25 v 0.28) but not in Singapore, where ERA5-Land gave 0.12 (r² 0.45) against 0.27 (r² 0.82) for ERA5 and the Meteorological Service Singapore's 0.25 since 1948. ERA5 was not clearly worse anywhere tested (Cape Town 0.10 v 0.13, San Francisco 0.11 v 0.16, Chicago 0.20 v 0.25, Toronto 0.31 v 0.30). ERA5's cells are coarser (0.25°, about 25 km, against 0.1°, about 11 km for ERA5-Land). The README now documents where the data comes from and how values and trends are built.
+- `scripts/backfill_open_meteo.py` now names its target source from the configured model in report mode too, so the report counts locations still on another model as pending.
+
+### Note
+
+- Locations already backfilled on ERA5-Land are tagged `open-meteo:era5_land`, so the script treats them as pending and re-fetches them on ERA5 without `--force`. Rows written by the normal request path are tagged `timeline`, so they also show as pending.
+
+---
+
 ## [2026-10-07] - Pin Open-Meteo Archive Model (unreleased)
 
 Part of P1-173: unexpectedly low 50-year trends for Manchester, Hong Kong and Dublin (#123).
