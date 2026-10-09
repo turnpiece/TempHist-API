@@ -160,7 +160,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | `OPEN_METEO_API_KEY`      | *(none)*      | Paid-plan key, sent as `?apikey=` on every Open-Meteo request                |
 | `OPEN_METEO_ARCHIVE_URL`  | `https://archive-api.open-meteo.com/v1/archive` | Use `https://customer-archive-api.open-meteo.com/v1/archive` on a paid plan |
 | `OPEN_METEO_FORECAST_URL` | `https://api.open-meteo.com/v1/forecast` | Use `https://customer-api.open-meteo.com/v1/forecast` on a paid plan |
-| `OPEN_METEO_ARCHIVE_MODEL` | `era5_land` | Reanalysis model for historical requests. Empty restores Open-Meteo's `best_match`, which switches model on 2017-01-01 and distorts long-term trends |
+| `OPEN_METEO_ARCHIVE_MODEL` | `era5` | Reanalysis model for historical requests. Empty restores Open-Meteo's `best_match`, which switches model on 2017-01-01 and distorts long-term trends |
 
 > The free tier is capped at 10k calls/day and licensed for non-commercial use only. Set the three variables above on **both** the API service and the worker service — the worker fetches from Open-Meteo in-process.
 

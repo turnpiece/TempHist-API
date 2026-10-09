@@ -1,6 +1,6 @@
 # TempHist API
 
-A FastAPI backend for historical temperature data using Open-Meteo with comprehensive caching, rate limiting, and monitoring capabilities.
+A FastAPI backend for historical temperature data using Open-Meteo (ERA5 reanalysis; see *Data sources and methodology* below) with comprehensive caching, rate limiting, and monitoring capabilities.
 
 ## 🚀 Features
 
@@ -23,6 +23,61 @@ A FastAPI backend for historical temperature data using Open-Meteo with comprehe
 - **[CLOUDFLARE_OPTIMIZATION.md](CLOUDFLARE_OPTIMIZATION.md)** - CDN optimization guide
 - **[AGENTS.md](AGENTS.md)** - Internal developer guide (service architecture, local dev setup)
 - **[railway/](railway/)** - Railway-specific deployment tools and documentation
+
+## 🌡️ Data sources and methodology
+
+### Where the temperatures come from
+
+- **Provider:** [Open-Meteo](https://open-meteo.com)'s Historical Weather API, which serves the **ERA5 reanalysis** produced by ECMWF for the Copernicus Climate Change Service. The record starts in 1940.
+- **One dataset for the whole record:** archive requests pin `models=era5` (`OPEN_METEO_ARCHIVE_MODEL`). Open-Meteo's default `best_match` blends different models and switches model on 2017-01-01, which put steps of up to about 1 °C into the series and distorted long-term trends (see #123).
+- **What a value is:** a *modelled* estimate of the daily mean air temperature at 2 m, averaged over the grid cell (0.25°, about 25 km) that contains the location's coordinates, for the local calendar day at that location. It is not a reading from a weather station.
+- **Recent days:** ERA5 lags real time by about 5 days, so the newest ~7 days come from Open-Meteo's forecast endpoint (`best_match`), which is a different model. Today's value can therefore sit slightly above or below the ERA5 history it is compared with; in a few places by a degree or more.
+- **Storage:** daily values are stored in °C in Postgres, one row per location and day, and converted to °F only on output.
+- **Locations:** the preapproved locations use the coordinates in `data/preapproved_locations.json`; others use the coordinates of the geocoded result.
+
+### ERA5 and ERA5-Land
+
+Both come from ECMWF and are *reanalyses*: a weather model re-run over past years so that it agrees with the observations available at the time (stations, ships, balloons, satellites), giving a complete, consistent record with no gaps.
+
+| | ERA5 | ERA5-Land |
+|---|---|---|
+| Record | 1940 onwards | 1950 onwards |
+| Grid | 0.25° (about 25 km) | 0.1° (about 11 km), land only |
+| How it is made | Full atmosphere and land model with observations assimilated | A land-surface model replayed on its own, driven by ERA5's atmosphere |
+| Strength | Observations are built in, which keeps the record anchored | Finer detail over terrain and coastlines |
+| Weakness | Coarse; a cell can blend sea, city and hills | Inherits ERA5's biases without assimilating observations itself; land-only cells can be a poor match for coasts and islands |
+
+TempHist uses **ERA5**. In testing the two agreed where they should (Manchester 0.34 v 0.32 °C/decade, Hong Kong 0.28 v 0.25), but ERA5-Land gave 0.12 for Singapore against 0.27 for ERA5 and the 0.25 reported by the Meteorological Service Singapore. Open-Meteo recommends using one of the two consistently for multi-decade work. To change it, set `OPEN_METEO_ARCHIVE_MODEL` and run `scripts/backfill_open_meteo.py`, because rows already stored are not re-fetched.
+
+### How a value for a year is built
+
+For a chosen period and date, each of the last 51 years (the current year and the 50 before it) gets **one value**:
+
+| Period | Window | Counts a year only if |
+|---|---|---|
+| `daily` | the date itself | that day has data |
+| `weekly` | the 7 days ending on the date | at least 6 of 7 days |
+| `monthly` | the 31 days ending on the date | at least 28 of 31 days |
+| `yearly` | the 365 days ending on the date ("year ending 8th October") | at least 330 of 365 days |
+
+The current year is incomplete by nature, so it needs less: 4 of 7, 19 of 31 and 292 of 365 days. A year's value is the mean of the daily means in its window. Because the windows end on the date you choose, the yearly trend moves slightly from one date to the next.
+
+### Average, anomaly and trend
+
+- **Average and standard deviation:** the mean and population standard deviation of the yearly values.
+- **Anomaly:** each year's value minus that average.
+- **Trend:** an ordinary least-squares line through the yearly values against year, reported in **°C per decade** with its r² and the standard error of the slope. If years are missing, the error is widened by the square root of (years spanned ÷ years present).
+- **Reading r²:** it says how much of the year-to-year variation the line explains. A single date or a week is noisy, so its trend has a low r² and a large error; a yearly trend is much steadier. The location descriptions quote a trend only where r² ≥ 0.4.
+
+### Limits to keep in mind
+
+- Reanalysis is not station data. A 25 km cell averages the city, its surroundings and any nearby sea, so it can differ from an official station series by a degree or so on a given day, and by a tenth or two of a degree per decade in a trend.
+- Reanalyses can pick up changes in the observing network over the decades, so small apparent trends deserve caution.
+- A 50-year trend describes the past; it is not a forecast.
+
+### Licence and attribution
+
+Open-Meteo data is licensed CC BY 4.0 and Open-Meteo asks for attribution. Because ERA5 comes from the Copernicus Climate Change Service, it also asks users to credit Copernicus and ECMWF (*Hersbach et al., 2023*) with the notice "Generated using Copernicus Climate Change Service information". Check [open-meteo.com/en/license](https://open-meteo.com/en/license) and the Historical Weather API page for the current wording.
 
 ## 📋 Requirements
 

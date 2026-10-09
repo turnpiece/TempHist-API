@@ -131,6 +131,10 @@ class TestV1RecordsEndpoints:
         """Test the v1 subresource endpoints"""
         with (
             patch("routers.v1_records.get_temperature_data_v1", new_callable=AsyncMock) as mock_get_data,
+            # The subresource endpoints read through the cache and then the provider via this helper, so patching
+            # only get_temperature_data_v1 left them fetching live data: the ranking assertion below then failed
+            # whenever the current year tied with an earlier one.
+            patch("routers.v1_records._get_record_data_internal", new_callable=AsyncMock) as mock_record_data,
             patch("routers.v1_records.is_location_likely_invalid", return_value=False),
             patch("routers.dependencies.get_invalid_location_cache") as mock_get_cache,
         ):
@@ -161,6 +165,7 @@ class TestV1RecordsEndpoints:
                 "metadata": {"total_years": 3, "available_years": 3, "missing_years": [], "completeness": 100.0},
             }
             mock_get_data.return_value = mock_data
+            mock_record_data.return_value = mock_data
 
             response = client.get(
                 f"/v1/records/{period}/{location}/{identifier}/{subresource}",
@@ -185,6 +190,8 @@ class TestV1RecordsEndpoints:
                 assert r["cold"] >= 1
                 assert r["total"] >= 1
                 assert r["warm"] + r["cold"] == r["total"] + 1
+                # 2024 (15.5) is the warmest of the three mocked years and the last by coldness
+                assert (r["warm"], r["cold"], r["total"]) == (1, 3, 3)
 
     def test_removed_endpoints_return_410(self, client):
         """Test that removed legacy endpoints return 410 Gone"""
