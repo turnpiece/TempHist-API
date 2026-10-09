@@ -1,0 +1,6 @@
+$kind: http-request
+url: "{{baseURL}}/cache/invalidate/location/manchester__england__united_kingdom"
+method: DELETE
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
+order: 4209676900565630
