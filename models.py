@@ -42,7 +42,7 @@ _META_EXAMPLE = {
         "summary": _RECORD_EXAMPLE["summary"],
         "average": _RECORD_EXAMPLE["average"],
         "trend": _RECORD_EXAMPLE["trend"],
-        "ranking": {"warm": 3, "cold": 3, "total": 5},
+        "ranking": {"warm": 3, "cold": 3, "total": 5, "ties": 0},
         "current_anomaly": 0.35,
     },
     "metadata": _RECORD_EXAMPLE["metadata"],
@@ -107,11 +107,27 @@ class TrendData(BaseModel):
 
 
 class RankingData(BaseModel):
-    """Year ranking within the historical record."""
+    """Year ranking within the historical record.
 
-    warm: int = Field(..., description="Rank by warmth (1 = warmest on record)")
-    cold: int = Field(..., description="Rank by coldness (1 = coldest on record)")
+    Years with the same value share a rank, so warm + cold == total + 1 - ties.
+    """
+
+    warm: int = Field(
+        ...,
+        description="Rank by warmth (1 = warmest on record): 1 plus the number of years strictly warmer. "
+        "Years with the same value share a rank.",
+    )
+    cold: int = Field(
+        ...,
+        description="Rank by coldness (1 = coldest on record): 1 plus the number of years strictly colder. "
+        "Years with the same value share a rank.",
+    )
     total: int = Field(..., description="Total number of years with data")
+    ties: int = Field(
+        0,
+        description="Number of other years with exactly the same value as the most recent year (0 when it is "
+        "unique). When above 0 the ranks are joint, e.g. 'joint 10th warmest'.",
+    )
 
 
 class UpdatedResponse(BaseModel):
