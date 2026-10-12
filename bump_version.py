@@ -2,11 +2,17 @@
 """
 Version bumping script for TempHist API.
 Similar to 'npm version patch' but for Python projects.
+
+Run it on a feature branch and open a PR: develop, staging and main are
+protected. It commits the bump but does not tag; the Tag release workflow
+tags the merge commit when the new version reaches main.
 """
 
 import re
 import subprocess
 import sys
+
+PROTECTED_BRANCHES = {"main", "staging", "develop"}
 
 
 def get_current_version():
@@ -92,19 +98,24 @@ def update_pyproject_toml(new_version):
         print(f"❌ Error updating pyproject.toml: {e}")
 
 
-def git_commit_and_tag(new_version):
-    """Commit changes and create git tag"""
-    try:
-        # Add changed files
-        subprocess.run(["git", "add", "version.py", "pyproject.toml"], check=True)  # noqa: S603, S607
+def check_not_protected_branch():
+    """Exit if on a protected branch, where the bump commit could not be pushed"""
+    branch = subprocess.run(  # noqa: S603, S607
+        ["git", "branch", "--show-current"], capture_output=True, text=True, check=True
+    ).stdout.strip()
 
-        # Commit
+    if branch in PROTECTED_BRANCHES:
+        print(f"❌ On protected branch '{branch}'. Create a branch first:")
+        print("   git switch -c chore/bump-version")
+        sys.exit(1)
+
+
+def git_commit(new_version):
+    """Commit the version files"""
+    try:
+        subprocess.run(["git", "add", "version.py", "pyproject.toml"], check=True)  # noqa: S603, S607
         subprocess.run(["git", "commit", "-m", f"Bump version to {new_version}"], check=True)  # noqa: S603, S607
         print(f"✅ Committed version {new_version}")
-
-        # Create tag
-        subprocess.run(["git", "tag", f"v{new_version}"], check=True)  # noqa: S603, S607
-        print(f"✅ Created tag v{new_version}")
 
     except subprocess.CalledProcessError as e:
         print(f"❌ Git error: {e}")
@@ -122,6 +133,7 @@ def main():
         sys.exit(1)
 
     bump_type = sys.argv[1]
+    check_not_protected_branch()
     current_version = get_current_version()
     new_version = bump_version(current_version, bump_type)
 
@@ -133,15 +145,14 @@ def main():
 
     # Git operations
     print("\n📝 Git operations:")
-    git_commit_and_tag(new_version)
+    git_commit(new_version)
 
     print("\n🎉 Version bump complete!")
     print(f"   Old version: {current_version}")
     print(f"   New version: {new_version}")
-    print(f"   Tag created: v{new_version}")
     print("\n💡 Next steps:")
-    print("   git push origin main")
-    print(f"   git push origin v{new_version}")
+    print("   Push this branch and open a PR to develop.")
+    print(f"   v{new_version} is tagged automatically when the version reaches main.")
 
 
 if __name__ == "__main__":
