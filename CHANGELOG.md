@@ -2,6 +2,24 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-12] - Share Ranks Between Tied Years in the Meta Ranking (unreleased)
+
+P1-176 (#129). Found while fixing CI on #128.
+
+### Fixed
+
+- **`ranking` in `GET /v1/records/{period}/{location}/{identifier}/meta` no longer counts tied years as ahead of the current year twice.** Both ranks came from a stable sort, so every earlier year with the same value as the current year stayed in front of it in the warm ordering and in the cold ordering. Ranks are now competition ranks: `warm` is 1 plus the number of years strictly warmer and `cold` is 1 plus the number strictly colder, so tied years share a rank. London, daily, 15 January, ERA5 (2026 tied with 1989, 1998 and 2025 at 8.6 °C) returned `warm: 13, cold: 42` of 51 and now returns `warm: 10, cold: 39`.
+
+### Added
+
+- **`ranking.ties`**: the number of other years with exactly the same value as the most recent year (0 when it is unique), so a client can say "joint 10th warmest". With ties, `warm + cold == total + 1 - ties`.
+
+### Note
+
+- The returned `warm` and `cold` values change whenever the current year ties with another. Ties are routine for `daily` periods because Open-Meteo reports daily means to 0.1 °C; weekly, monthly and yearly means rarely tie. No first-party client reads `ranking`, so only direct API consumers of `/meta` are affected.
+
+---
+
 ## [2026-10-09] - Refresh Location Description Trends After the ERA5 Backfill (unreleased)
 
 Part of P1-173 (#123). The 50-year trends quoted in the preapproved location descriptions were taken from history that mixed Visual Crossing and Open-Meteo data and had a step in 2017. After re-fetching the 24 preapproved locations from ERA5, the figures were taken again (yearly records, year ending 9 October 2026) and the same rule applied: quote a trend only where r² ≥ 0.4.
