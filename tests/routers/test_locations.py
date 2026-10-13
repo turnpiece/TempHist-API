@@ -32,6 +32,8 @@ from routers.locations import (
     SelectionRequest,
     _find_preapproved_id,
     _geocode_mapbox,
+    _geocode_open_meteo,
+    _merge_and_rank_geocode_results,
     _resolve_canonical_id,
     convert_image_urls,
     filter_locations,
@@ -119,6 +121,17 @@ def app():
 def client(app):
     """Create test client."""
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def no_open_meteo_geocoding():
+    """Keep the Open-Meteo geocoding supplement (P1-177) off the network.
+
+    Tests of the Mapbox search path mock `_geocode_mapbox`; without this the endpoint
+    would also make a real Open-Meteo request. Tests of the supplement patch it again.
+    """
+    with patch("routers.locations._geocode_open_meteo", new=AsyncMock(return_value=[])):
+        yield
 
 
 @pytest.fixture
@@ -986,6 +999,453 @@ class TestGeocodeMapbox:
         assert results[0]["latitude"] is None
         assert results[0]["longitude"] is None
         assert results[0]["timezone"] is None
+
+
+class _FakeGeocodeResponse:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status = status
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def json(self):
+        return self._payload
+
+
+class _FakeGeocodeSession:
+    """Stands in for the shared aiohttp session; records each request."""
+
+    def __init__(self, payload=None, status=200, exc=None):
+        self._payload = payload
+        self._status = status
+        self._exc = exc
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if self._exc is not None:
+            raise self._exc
+        return _FakeGeocodeResponse(self._payload, self._status)
+
+
+# A country-level feature as Mapbox returns it for Macau (verified against the live API, P1-177)
+MAPBOX_MACAU_FEATURE = {
+    "place_type": ["country", "region", "place"],
+    "text": "Macau",
+    "center": [113.5439, 22.1987],
+    "properties": {"short_code": "mo"},
+}
+
+
+class TestGeocodeMapboxCountryLevelPlaces:
+    """City-states and special regions come back from Mapbox as their own country (P1-177)."""
+
+    @staticmethod
+    async def _geocode(features, mock_redis):
+        session = _FakeGeocodeSession({"features": features})
+        with (
+            patch("routers.locations.redis_client", mock_redis),
+            patch("routers.locations._get_mapbox_client", new=AsyncMock(return_value=session)),
+        ):
+            return await _geocode_mapbox("macau")
+
+    @pytest.mark.asyncio
+    async def test_country_level_place_is_returned_as_its_own_country(self, mock_redis):
+        results = await self._geocode([MAPBOX_MACAU_FEATURE], mock_redis)
+
+        assert results == [
+            {
+                "name": "Macau",
+                "admin1": "",
+                "country_name": "Macau",
+                "country_code": "MO",
+                "latitude": pytest.approx(22.1987),
+                "longitude": pytest.approx(113.5439),
+                "timezone": "Asia/Macau",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_place_with_a_country_context_is_unchanged(self, mock_redis):
+        feature = {
+            "place_type": ["place"],
+            "text": "Macau",
+            "center": [-36.63267, -5.114665],
+            "context": [
+                {"id": "region.1", "text": "Rio Grande do Norte", "short_code": "BR-RN"},
+                {"id": "country.2", "text": "Brazil", "short_code": "br"},
+            ],
+        }
+        results = await self._geocode([feature, MAPBOX_MACAU_FEATURE], mock_redis)
+
+        assert [(r["country_name"], r["country_code"]) for r in results] == [("Brazil", "BR"), ("Macau", "MO")]
+
+    @pytest.mark.asyncio
+    async def test_missing_short_code_gives_empty_country_code(self, mock_redis):
+        feature = {**MAPBOX_MACAU_FEATURE, "properties": {}}
+        results = await self._geocode([feature], mock_redis)
+
+        assert results[0]["country_name"] == "Macau"
+        assert results[0]["country_code"] == ""
+
+    @pytest.mark.asyncio
+    async def test_non_country_code_short_code_is_ignored(self, mock_redis):
+        feature = {**MAPBOX_MACAU_FEATURE, "properties": {"short_code": "XX-01"}}
+        results = await self._geocode([feature], mock_redis)
+
+        assert results[0]["country_code"] == ""
+
+    @pytest.mark.asyncio
+    async def test_features_without_country_context_or_country_type_are_still_dropped(self, mock_redis):
+        features = [
+            {"place_type": ["country"], "text": "France", "properties": {"short_code": "fr"}},
+            {"place_type": ["place"], "text": "Nowhere"},
+            {"text": "Untyped"},
+        ]
+        assert await self._geocode(features, mock_redis) == []
+
+    @pytest.mark.asyncio
+    async def test_cache_key_is_v3_so_results_cached_without_country_level_places_are_not_served(self, mock_redis):
+        await self._geocode([MAPBOX_MACAU_FEATURE], mock_redis)
+
+        mock_redis.get.assert_called_with("geocode:mapbox:v3:macau:10")
+        assert mock_redis.setex.call_args.args[0] == "geocode:mapbox:v3:macau:10"
+
+
+OPEN_METEO_TAIPA = {
+    "id": 1821263,
+    "name": "Taipa",
+    "latitude": 22.15583,
+    "longitude": 113.55694,
+    "feature_code": "PPL",
+    "country_code": "MO",
+    "timezone": "Asia/Macau",
+    "population": 112051,
+    "admin1": "Our Lady of Carmo",
+}
+
+
+class TestGeocodeOpenMeteo:
+    """_geocode_open_meteo — the supplementary geocoder (P1-177)."""
+
+    @staticmethod
+    async def _geocode(session, mock_redis, query="taipa", limit=10):
+        with (
+            patch("routers.locations.redis_client", mock_redis),
+            patch("routers.locations._get_mapbox_client", new=AsyncMock(return_value=session)),
+        ):
+            return await _geocode_open_meteo(query, limit=limit)
+
+    @pytest.mark.asyncio
+    async def test_maps_a_populated_place_to_the_search_shape(self, mock_redis):
+        session = _FakeGeocodeSession({"results": [OPEN_METEO_TAIPA]})
+        results = await self._geocode(session, mock_redis)
+
+        assert results == [
+            {
+                "name": "Taipa",
+                "admin1": "Our Lady of Carmo",
+                "country_name": "Macau",  # Open-Meteo omits `country` for MO
+                "country_code": "MO",
+                "latitude": 22.15583,
+                "longitude": 113.55694,
+                "timezone": "Asia/Macau",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_keeps_only_populated_places(self, mock_redis):
+        hong_kong = {"name": "Hong Kong", "latitude": 22.27832, "longitude": 114.17469, "country_code": "HK"}
+        session = _FakeGeocodeSession(
+            {
+                "results": [
+                    {**hong_kong, "feature_code": "PPLC"},
+                    {**hong_kong, "feature_code": "ISL"},
+                    {**hong_kong, "feature_code": "PCLS"},
+                    {**hong_kong, "name": "Hong Kong Airport", "feature_code": "AIRP"},
+                    {**hong_kong, "name": "Hong Kong Island", "feature_code": "PPLX"},
+                ]
+            }
+        )
+        results = await self._geocode(session, mock_redis, query="hong kong")
+
+        assert [r["name"] for r in results] == ["Hong Kong", "Hong Kong Island"]
+        assert results[0]["country_name"] == "Hong Kong"  # filled from pycountry
+        assert results[0]["timezone"] == "Asia/Hong_Kong"  # derived from coordinates
+
+    @pytest.mark.asyncio
+    async def test_uses_open_meteos_country_name_when_present(self, mock_redis):
+        item = {**OPEN_METEO_TAIPA, "country_code": "NZ", "country": "New Zealand", "timezone": "Pacific/Auckland"}
+        results = await self._geocode(_FakeGeocodeSession({"results": [item]}), mock_redis)
+
+        assert results[0]["country_name"] == "New Zealand"
+
+    @pytest.mark.asyncio
+    async def test_rows_missing_name_country_or_coordinates_are_skipped(self, mock_redis):
+        rows = [
+            {**OPEN_METEO_TAIPA, "name": ""},
+            {**OPEN_METEO_TAIPA, "country_code": None},
+            {**OPEN_METEO_TAIPA, "latitude": None},
+        ]
+        assert await self._geocode(_FakeGeocodeSession({"results": rows}), mock_redis) == []
+
+    @pytest.mark.asyncio
+    async def test_no_results_key_gives_empty_list(self, mock_redis):
+        assert await self._geocode(_FakeGeocodeSession({"generationtime_ms": 0.4}), mock_redis) == []
+
+    @pytest.mark.asyncio
+    async def test_sends_configured_url_with_apikey_when_set(self, mock_redis):
+        session = _FakeGeocodeSession({"results": []})
+        customer_url = "https://customer-geocoding-api.open-meteo.com/v1/search"
+        with (
+            patch("routers.locations.OPEN_METEO_API_KEY", "secret-key"),
+            patch("routers.locations.OPEN_METEO_GEOCODING_URL", customer_url),
+        ):
+            await self._geocode(session, mock_redis, query=" Taipa ", limit=5)
+
+        url, kwargs = session.calls[0]
+        assert url == customer_url
+        assert kwargs["params"] == {
+            "name": "Taipa",
+            "count": 10,
+            "language": "en",
+            "format": "json",
+            "apikey": "secret-key",
+        }
+
+    @pytest.mark.asyncio
+    async def test_omits_apikey_when_unset(self, mock_redis):
+        session = _FakeGeocodeSession({"results": []})
+        with patch("routers.locations.OPEN_METEO_API_KEY", ""):
+            await self._geocode(session, mock_redis)
+
+        assert "apikey" not in session.calls[0][1]["params"]
+
+    @pytest.mark.asyncio
+    async def test_a_short_timeout_is_used(self, mock_redis):
+        session = _FakeGeocodeSession({"results": []})
+        await self._geocode(session, mock_redis)
+
+        assert session.calls[0][1]["timeout"].total <= 5
+
+    @pytest.mark.asyncio
+    async def test_results_are_cached_under_their_own_key(self, mock_redis):
+        await self._geocode(_FakeGeocodeSession({"results": [OPEN_METEO_TAIPA]}), mock_redis, query="Taipa", limit=7)
+
+        mock_redis.get.assert_called_with("geocode:openmeteo:v1:taipa:7")
+        assert mock_redis.setex.call_args.args[0] == "geocode:openmeteo:v1:taipa:7"
+
+    @pytest.mark.asyncio
+    async def test_non_200_returns_empty_and_is_not_cached(self, mock_redis):
+        results = await self._geocode(_FakeGeocodeSession({"error": True}, status=429), mock_redis)
+
+        assert results == []
+        mock_redis.setex.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_request_failure_returns_empty_and_does_not_log_the_apikey(self, mock_redis, caplog):
+        boom = Exception("connect failed: https://customer-geocoding-api.open-meteo.com/v1/search?apikey=secret-key")
+        with patch("routers.locations.OPEN_METEO_API_KEY", "secret-key"):
+            results = await self._geocode(_FakeGeocodeSession(exc=boom), mock_redis)
+
+        assert results == []
+        mock_redis.setex.assert_not_called()
+        assert "secret-key" not in caplog.text
+
+
+class TestGeocoderLogsDoNotIncludeTheQuery:
+    """The search query is user input and must not reach the logs (log injection, P1-177)."""
+
+    FORGED_QUERY = "taipa\nWARNING routers.locations: forged log entry"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "geocode, session_payload",
+        [(_geocode_mapbox, {"features": []}), (_geocode_open_meteo, {"results": []})],
+        ids=["mapbox", "open_meteo"],
+    )
+    async def test_non_200_logs_the_status_but_not_the_query(self, geocode, session_payload, mock_redis, caplog):
+        session = _FakeGeocodeSession(session_payload, status=503)
+        with (
+            caplog.at_level("WARNING"),
+            patch("routers.locations.redis_client", mock_redis),
+            patch("routers.locations._get_mapbox_client", new=AsyncMock(return_value=session)),
+        ):
+            results = await geocode(self.FORGED_QUERY)
+
+        assert results == []
+        assert "503" in caplog.text
+        assert "forged" not in caplog.text
+        assert "taipa" not in caplog.text
+
+
+def _place(name, code, lat, lon, **extra):
+    return {
+        "name": name,
+        "admin1": "",
+        "country_name": extra.pop("country_name", ""),
+        "country_code": code,
+        "latitude": lat,
+        "longitude": lon,
+        "timezone": None,
+        **extra,
+    }
+
+
+class TestMergeAndRankGeocodeResults:
+    """_merge_and_rank_geocode_results — de-duplication and match-quality ranking (P1-177)."""
+
+    def test_exact_then_prefix_then_contains_then_rest(self):
+        mapbox = [
+            _place("Marau", "BR", -28.4, -52.2),
+            _place("Macaulay", "AU", -30.0, 150.0),
+            _place("Lamacau", "XX", 1.0, 1.0),
+            _place("Macau", "BR", -5.1, -36.6),
+        ]
+        ranked = _merge_and_rank_geocode_results("macau", mapbox, limit=10)
+
+        assert [r["name"] for r in ranked] == ["Macau", "Macaulay", "Lamacau", "Marau"]
+
+    def test_order_within_a_tier_follows_source_order(self):
+        mapbox = [_place("Springfield", "US", 39.8, -89.6), _place("Springfield", "US", 37.2, -93.3)]
+        open_meteo = [_place("Springfield", "AU", -27.7, 152.9)]
+        ranked = _merge_and_rank_geocode_results("springfield", mapbox, open_meteo, limit=10)
+
+        assert [(r["country_code"], r["latitude"]) for r in ranked] == [("US", 39.8), ("US", 37.2), ("AU", -27.7)]
+
+    def test_accents_and_case_are_ignored(self):
+        ranked = _merge_and_rank_geocode_results(
+            "MACAU", [_place("Marau", "BR", 0.0, 0.0), _place("Macaúbas", "BR", 1.0, 1.0)], limit=10
+        )
+
+        assert [r["name"] for r in ranked] == ["Macaúbas", "Marau"]
+
+    def test_a_match_from_a_later_source_outranks_a_worse_match_from_an_earlier_one(self):
+        mapbox = [_place("Taipalsaari", "FI", 61.1, 28.2), _place("Taipana", "IT", 46.2, 13.4)]
+        open_meteo = [_place("Taipa", "MO", 22.16, 113.56)]
+        ranked = _merge_and_rank_geocode_results("taipa", mapbox, open_meteo, limit=1)
+
+        assert [r["name"] for r in ranked] == ["Taipa"]
+
+    def test_same_place_from_two_sources_is_deduplicated_keeping_the_first(self):
+        mapbox = [_place("Macau", "MO", 22.1987, 113.5439, country_name="Macau")]
+        open_meteo = [_place("Macao", "MO", 22.19745, 113.54611, country_name="Macau")]
+        ranked = _merge_and_rank_geocode_results("macau", mapbox, open_meteo, limit=10)
+
+        assert [r["name"] for r in ranked] == ["Macau"]
+
+    def test_different_places_a_few_km_apart_are_not_merged(self):
+        mapbox = [_place("Macau", "MO", 22.1987, 113.5439)]
+        open_meteo = [_place("Taipa", "MO", 22.15583, 113.55694)]
+        ranked = _merge_and_rank_geocode_results("m", mapbox, open_meteo, limit=10)
+
+        assert {r["name"] for r in ranked} == {"Macau", "Taipa"}
+
+    def test_same_name_in_the_same_country_far_apart_is_not_merged(self):
+        mapbox = [_place("Springfield", "US", 39.80, -89.64)]  # Illinois
+        open_meteo = [_place("Springfield", "US", 37.21, -93.29)]  # Missouri
+        ranked = _merge_and_rank_geocode_results("springfield", mapbox, open_meteo, limit=10)
+
+        assert len(ranked) == 2
+
+    def test_same_name_in_different_countries_is_not_merged(self):
+        mapbox = [_place("Macau", "BR", -5.1, -36.6)]
+        open_meteo = [_place("Macau", "FR", 45.0, -0.6)]
+        assert len(_merge_and_rank_geocode_results("macau", mapbox, open_meteo, limit=10)) == 2
+
+    def test_missing_coordinates_still_deduplicate_on_name_and_country(self):
+        mapbox = [_place("Macau", "MO", None, None)]
+        open_meteo = [_place("Macau", "MO", 22.2, 113.5)]
+        assert len(_merge_and_rank_geocode_results("macau", mapbox, open_meteo, limit=10)) == 1
+
+    def test_truncates_to_limit_and_handles_empty_sources(self):
+        assert _merge_and_rank_geocode_results("x", [], [], limit=5) == []
+        many = [_place(f"X{i}", "GB", float(i), float(i)) for i in range(8)]
+        assert len(_merge_and_rank_geocode_results("x", many, limit=3)) == 3
+
+
+class TestSearchEndpointOpenMeteoSupplement:
+    """GET /v1/locations/search merges Mapbox with Open-Meteo geocoding (P1-177)."""
+
+    @staticmethod
+    def _search(client, url, mapbox, open_meteo):
+        if isinstance(open_meteo, Exception):
+            open_meteo_mock = AsyncMock(side_effect=open_meteo)
+        else:
+            open_meteo_mock = AsyncMock(return_value=open_meteo)
+        with (
+            patch("routers.locations.MAPBOX_TOKEN", "fake-token"),
+            patch("routers.locations._geocode_mapbox", new=AsyncMock(return_value=mapbox)),
+            patch("routers.locations._geocode_open_meteo", new=open_meteo_mock),
+        ):
+            return client.get(url)
+
+    def test_macau_sar_is_returned_ahead_of_fuzzy_matches(self, client, mock_locations_data):
+        mapbox = [
+            _place("Macaúbas", "BR", -13.0, -42.7, country_name="Brazil"),
+            _place("Macau", "MO", 22.1987, 113.5439, country_name="Macau"),
+            _place("Makó", "HU", 46.2, 20.5, country_name="Hungary"),
+        ]
+        response = self._search(client, "/v1/locations/search?q=macau", mapbox, [])
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == 3
+        assert body["locations"][0]["name"] == "Macau"
+        assert body["locations"][0]["country_code"] == "MO"
+
+    def test_taipa_comes_from_open_meteo_and_survives_a_small_limit(self, client, mock_locations_data):
+        mapbox = [
+            _place("Taipalsaari", "FI", 61.1, 28.2, country_name="Finland"),
+            _place("Taipana", "IT", 46.2, 13.4, country_name="Italy"),
+            _place("Taipas do Tocantins", "BR", -12.2, -47.7, country_name="Brazil"),
+        ]
+        taipa = _place("Taipa", "MO", 22.15583, 113.55694, country_name="Macau", timezone="Asia/Macau")
+        response = self._search(client, "/v1/locations/search?q=taipa&limit=2", mapbox, [taipa])
+
+        assert response.status_code == 200
+        locations = response.json()["locations"]
+        assert [loc["name"] for loc in locations] == ["Taipa", "Taipalsaari"]
+        assert locations[0]["timezone"] == "Asia/Macau"
+        assert locations[0]["location_id"] is None
+
+    def test_open_meteo_failure_degrades_to_mapbox_results(self, client, mock_locations_data):
+        mapbox = [_place("London", "GB", 51.5, -0.12, country_name="United Kingdom")]
+        response = self._search(client, "/v1/locations/search?q=london", mapbox, RuntimeError("boom"))
+
+        assert response.status_code == 200
+        assert [loc["name"] for loc in response.json()["locations"]] == ["London"]
+
+    def test_hong_kong_resolves_to_its_preapproved_location_id(self, client, mock_locations_data):
+        hong_kong = LocationItem(
+            **{
+                **SAMPLE_LOCATIONS[0],
+                "id": "hong_kong",
+                "slug": "hong_kong",
+                "name": "Hong Kong",
+                "admin1": "Hong Kong",
+                "country_name": "Hong Kong",
+                "country_code": "HK",
+                "timezone": "Asia/Hong_Kong",
+            }
+        )
+        mapbox = [_place("Hong Kong", "HK", 22.3, 114.17, country_name="Hong Kong")]
+        with patch("routers.locations.locations_data", [hong_kong]):
+            response = self._search(client, "/v1/locations/search?q=hong%20kong", mapbox, [])
+
+        assert response.status_code == 200
+        assert response.json()["locations"][0]["location_id"] == "hong_kong"
+
+    def test_duplicates_across_sources_are_not_returned_twice(self, client, mock_locations_data):
+        mapbox = [_place("Macau", "MO", 22.1987, 113.5439, country_name="Macau")]
+        open_meteo = [_place("Macao", "MO", 22.19745, 113.54611, country_name="Macau")]
+        response = self._search(client, "/v1/locations/search?q=macao", mapbox, open_meteo)
+
+        assert response.json()["count"] == 1
 
 
 class TestPopularStatsEndpoint:
