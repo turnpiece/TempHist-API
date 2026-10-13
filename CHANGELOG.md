@@ -2,6 +2,32 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-13] - Location Search Finds Macau, Hong Kong and Singapore (unreleased)
+
+P1-177 (#141). `GET /v1/locations/search?q=macau` returned Macau in Brazil and France but never Macau SAR; `macao`, `taipa` and `cotai` found nothing in Macau either.
+
+### Fixed
+
+- **Country-level places are no longer dropped from Mapbox results.** Mapbox returns city-states and special regions (Macau, Hong Kong, Singapore, Monaco, Gibraltar, Vatican City) as a country-level feature with an empty `context`, and the search skipped every feature without a country in its context. Such a feature is now treated as its own country: `country_name` is its own name and `country_code` comes from its `short_code` (Macau is `Macau` / `MO`, matching the existing Hong Kong entry, not `China`). A feature that is neither in a country nor a country-level place is still dropped.
+- Hong Kong now resolves to its preapproved `location_id` from search; before, it could not be found at all.
+
+### Added
+
+- **Open-Meteo geocoding supplements Mapbox in location search.** Mapbox has no Taipa, Cotai or Kowloon; Open-Meteo's GeoNames-based geocoder does. Both are queried concurrently and the results merged, de-duplicated (same accent-folded name and country within about 0.3°, so Taipa and Macau peninsula stay separate) and ranked: exact name match, then name starts with the query, then contains it, then the rest, keeping each source's own order within a tier. Only populated places (`PPL*`) are taken from Open-Meteo, results are cached for 24 h, and a slow or failing Open-Meteo never delays or breaks the Mapbox results (3 s timeout).
+- **`OPEN_METEO_GEOCODING_URL`** (default `https://geocoding-api.open-meteo.com/v1/search`). On a paid plan set it to `https://customer-geocoding-api.open-meteo.com/v1/search`; `OPEN_METEO_API_KEY` is sent as `apikey` when set, as for the archive and forecast calls. API service only: the worker does not geocode through it.
+
+### Changed
+
+- The Mapbox search cache prefix is now `geocode:mapbox:v3` (was `v2`), so results cached without the country-level places are not served. The old keys expire on their own TTL.
+- Results from Mapbox alone are now also ranked by name match, so a real match is no longer pushed down by fuzzy ones (`macau` used to list Makó and Machu Picchu among the first results).
+
+### Note
+
+- Each uncached search now makes one more upstream request (Open-Meteo geocoding). It counts against the paid plan once `OPEN_METEO_GEOCODING_URL` points at the customer host.
+- Not changed: queries of the form `City, Country` are still sent to the geocoders as typed and `admin1` is not matched locally.
+
+---
+
 ## [2026-10-12] - Share Ranks Between Tied Years in the Meta Ranking (unreleased)
 
 P1-176 (#129). Found while fixing CI on #128.

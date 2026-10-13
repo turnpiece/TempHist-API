@@ -104,9 +104,14 @@ WEATHER_PROVIDER = os.getenv("WEATHER_PROVIDER", "open_meteo").strip().lower()
 # Paid plans use the customer-* hosts and require OPEN_METEO_API_KEY:
 #   OPEN_METEO_ARCHIVE_URL=https://customer-archive-api.open-meteo.com/v1/archive
 #   OPEN_METEO_FORECAST_URL=https://customer-api.open-meteo.com/v1/forecast
+#   OPEN_METEO_GEOCODING_URL=https://customer-geocoding-api.open-meteo.com/v1/search
 OPEN_METEO_API_KEY = os.getenv("OPEN_METEO_API_KEY", "").strip()
 OPEN_METEO_ARCHIVE_URL = os.getenv("OPEN_METEO_ARCHIVE_URL", "https://archive-api.open-meteo.com/v1/archive").strip()
 OPEN_METEO_FORECAST_URL = os.getenv("OPEN_METEO_FORECAST_URL", "https://api.open-meteo.com/v1/forecast").strip()
+# Supplements Mapbox in location search (places Mapbox lacks, e.g. Taipa and Cotai in Macau; P1-177).
+OPEN_METEO_GEOCODING_URL = os.getenv(
+    "OPEN_METEO_GEOCODING_URL", "https://geocoding-api.open-meteo.com/v1/search"
+).strip()
 # Reanalysis model for archive (historical) requests. Unpinned, Open-Meteo's best_match
 # switches model on 2017-01-01, which puts a location-dependent step (about -0.9 degC in Hong
 # Kong, +0.4 degC in Manchester) into the long-term series and distorts trends (P1-173).
