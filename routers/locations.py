@@ -782,7 +782,7 @@ async def _geocode_open_meteo(query: str, limit: int = 10) -> List[Dict]:
     if cached is not None:
         return cached.get("results", [])
 
-    params: Dict[str, Union[str, int]] = {
+    params: Dict[str, str | int] = {
         "name": query.strip(),
         # Non-place features (countries, islands, airports) are filtered out below,
         # so ask for more than `limit` to still have enough left.
@@ -808,40 +808,40 @@ async def _geocode_open_meteo(query: str, limit: int = 10) -> List[Dict]:
         logger.warning("Open-Meteo geocoding request failed: %s", type(exc).__name__)
         return []
 
-    results: List[Dict] = []
-    for item in data.get("results") or []:
-        # GeoNames populated-place codes (PPL, PPLA, PPLC...). PCL* are countries.
-        if not str(item.get("feature_code") or "").startswith("PPL"):
-            continue
-        name = str(item.get("name") or "").strip()
-        country_code = str(item.get("country_code") or "").upper()
-        latitude = item.get("latitude")
-        longitude = item.get("longitude")
-        if not name or not country_code or latitude is None or longitude is None:
-            continue
-
-        country_name = (
-            item.get("country")
-            or _COUNTRY_NAME_OVERRIDES.get(country_code)
-            or _resolve_country_fields(country_code, None)[1]
-            or ""
-        )
-        timezone = item.get("timezone") or _tf.timezone_at(lng=longitude, lat=latitude)
-
-        results.append(
-            {
-                "name": name,
-                "admin1": item.get("admin1") or "",
-                "country_name": country_name,
-                "country_code": country_code,
-                "latitude": latitude,
-                "longitude": longitude,
-                "timezone": timezone,
-            }
-        )
+    parsed = (_parse_open_meteo_place(item) for item in data.get("results") or [])
+    results: List[Dict] = [place for place in parsed if place is not None]
 
     await set_cached_response(cache_key, {"results": results}, ttl=SEARCH_CACHE_TTL)
     return results
+
+
+def _parse_open_meteo_place(item: Dict) -> Optional[Dict]:
+    """Map one Open-Meteo geocoding result to the search result shape, or None if it is not a usable place."""
+    # GeoNames populated-place codes (PPL, PPLA, PPLC...). PCL* are countries.
+    if not str(item.get("feature_code") or "").startswith("PPL"):
+        return None
+    name = str(item.get("name") or "").strip()
+    country_code = str(item.get("country_code") or "").upper()
+    latitude = item.get("latitude")
+    longitude = item.get("longitude")
+    if not name or not country_code or latitude is None or longitude is None:
+        return None
+
+    country_name = (
+        item.get("country")
+        or _COUNTRY_NAME_OVERRIDES.get(country_code)
+        or _resolve_country_fields(country_code, None)[1]
+        or ""
+    )
+    return {
+        "name": name,
+        "admin1": item.get("admin1") or "",
+        "country_name": country_name,
+        "country_code": country_code,
+        "latitude": latitude,
+        "longitude": longitude,
+        "timezone": item.get("timezone") or _tf.timezone_at(lng=longitude, lat=latitude),
+    }
 
 
 def _fold_name(text: str) -> str:
@@ -849,6 +849,31 @@ def _fold_name(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text.casefold())
     folded = "".join(ch for ch in decomposed if not unicodedata.combining(ch)).strip()
     return _DEDUPE_NAME_ALIASES.get(folded, folded)
+
+
+def _is_same_place(a: Dict, b: Dict) -> bool:
+    """Whether two geocoder results are the same place: same folded name and country, and nearby (if known)."""
+    if _fold_name(a.get("name", "")) != _fold_name(b.get("name", "")):
+        return False
+    if (a.get("country_code") or "") != (b.get("country_code") or ""):
+        return False
+    coordinates = (a.get("latitude"), a.get("longitude"), b.get("latitude"), b.get("longitude"))
+    if None in coordinates:
+        return True
+    a_lat, a_lon, b_lat, b_lon = coordinates
+    return abs(a_lat - b_lat) <= _DEDUPE_RADIUS_DEG and abs(a_lon - b_lon) <= _DEDUPE_RADIUS_DEG
+
+
+def _name_match_tier(needle: str, item: Dict) -> int:
+    """0 exact name, 1 name starts with the query, 2 name contains it, 3 anything else (needle is folded)."""
+    name = _fold_name(item.get("name", ""))
+    if name == needle:
+        return 0
+    if name.startswith(needle):
+        return 1
+    if needle in name:
+        return 2
+    return 3
 
 
 def _merge_and_rank_geocode_results(query: str, *sources: List[Dict], limit: int) -> List[Dict]:
@@ -859,37 +884,33 @@ def _merge_and_rank_geocode_results(query: str, *sources: List[Dict], limit: int
     (earlier source first, then the source's own relevance order). Truncated to `limit`.
     """
     kept: List[Dict] = []
-    for source in sources:
-        for item in source:
-            name = _fold_name(item.get("name", ""))
-            code = item.get("country_code") or ""
-            lat, lon = item.get("latitude"), item.get("longitude")
-            duplicate = False
-            for other in kept:
-                if _fold_name(other.get("name", "")) != name or (other.get("country_code") or "") != code:
-                    continue
-                o_lat, o_lon = other.get("latitude"), other.get("longitude")
-                if None in (lat, lon, o_lat, o_lon) or (
-                    abs(lat - o_lat) <= _DEDUPE_RADIUS_DEG and abs(lon - o_lon) <= _DEDUPE_RADIUS_DEG
-                ):
-                    duplicate = True
-                    break
-            if not duplicate:
-                kept.append(item)
+    for item in (item for source in sources for item in source):
+        if not any(_is_same_place(item, other) for other in kept):
+            kept.append(item)
 
     needle = _fold_name(query)
+    return sorted(kept, key=lambda item: _name_match_tier(needle, item))[:limit]  # sorted() is stable
 
-    def tier(item: Dict) -> int:
-        name = _fold_name(item.get("name", ""))
-        if name == needle:
-            return 0
-        if name.startswith(needle):
-            return 1
-        if needle in name:
-            return 2
-        return 3
 
-    return sorted(kept, key=tier)[:limit]  # sorted() is stable
+async def _search_geocoders(query: str, limit: int) -> List[Dict]:
+    """Query Mapbox and Open-Meteo concurrently and return their merged, ranked results.
+
+    Open-Meteo is a best-effort supplement: if it fails, Mapbox's results alone are returned.
+    A Mapbox failure propagates.
+    """
+    mapbox_results, open_meteo_results = await asyncio.gather(
+        _geocode_mapbox(query, limit=limit),
+        _geocode_open_meteo(query, limit=limit),
+        return_exceptions=True,
+    )
+    if isinstance(mapbox_results, BaseException):
+        raise mapbox_results
+    if isinstance(open_meteo_results, BaseException):
+        if not isinstance(open_meteo_results, Exception):
+            raise open_meteo_results  # cancellation etc.
+        logger.warning("Open-Meteo geocoding failed: %s", type(open_meteo_results).__name__)
+        open_meteo_results = []
+    return _merge_and_rank_geocode_results(query, mapbox_results, open_meteo_results, limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -1000,20 +1021,7 @@ async def search_locations(
 
     # --- Mapbox path (supplemented by Open-Meteo geocoding) ---
     if MAPBOX_TOKEN:
-        mapbox_results, open_meteo_results = await asyncio.gather(
-            _geocode_mapbox(q, limit=limit),
-            _geocode_open_meteo(q, limit=limit),
-            return_exceptions=True,
-        )
-        if isinstance(mapbox_results, BaseException):
-            raise mapbox_results
-        if isinstance(open_meteo_results, BaseException):
-            if not isinstance(open_meteo_results, Exception):
-                raise open_meteo_results  # cancellation etc.
-            # The supplement is best-effort: Mapbox results alone are still a usable answer.
-            logger.warning("Open-Meteo geocoding failed: %s", type(open_meteo_results).__name__)
-            open_meteo_results = []
-        results = _merge_and_rank_geocode_results(q, mapbox_results, open_meteo_results, limit=limit)
+        results = await _search_geocoders(q, limit)
         # Both geocoders return fresh dicts (JSON-deserialised on each call),
         # so mutation here is safe.
         for result in results:
