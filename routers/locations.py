@@ -695,7 +695,8 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
     try:
         async with session.get(url) as resp:
             if resp.status != 200:
-                logger.warning("Mapbox returned status %s for query %r", resp.status, query)
+                # The query is user input, so it is deliberately not logged (log injection).
+                logger.warning("Mapbox returned status %s", resp.status)
                 return []
             data = await resp.json()
     except Exception as exc:
@@ -798,7 +799,8 @@ async def _geocode_open_meteo(query: str, limit: int = 10) -> List[Dict]:
     try:
         async with session.get(OPEN_METEO_GEOCODING_URL, params=params, timeout=_OPEN_METEO_GEOCODE_TIMEOUT) as resp:
             if resp.status != 200:
-                logger.warning("Open-Meteo geocoding returned status %s for query %r", resp.status, query)
+                # The query is user input, so it is deliberately not logged (log injection).
+                logger.warning("Open-Meteo geocoding returned status %s", resp.status)
                 return []
             data = await resp.json()
     except Exception as exc:

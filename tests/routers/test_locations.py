@@ -1257,6 +1257,32 @@ class TestGeocodeOpenMeteo:
         assert "secret-key" not in caplog.text
 
 
+class TestGeocoderLogsDoNotIncludeTheQuery:
+    """The search query is user input and must not reach the logs (log injection, P1-177)."""
+
+    FORGED_QUERY = "taipa\nWARNING routers.locations: forged log entry"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "geocode, session_payload",
+        [(_geocode_mapbox, {"features": []}), (_geocode_open_meteo, {"results": []})],
+        ids=["mapbox", "open_meteo"],
+    )
+    async def test_non_200_logs_the_status_but_not_the_query(self, geocode, session_payload, mock_redis, caplog):
+        session = _FakeGeocodeSession(session_payload, status=503)
+        with (
+            caplog.at_level("WARNING"),
+            patch("routers.locations.redis_client", mock_redis),
+            patch("routers.locations._get_mapbox_client", new=AsyncMock(return_value=session)),
+        ):
+            results = await geocode(self.FORGED_QUERY)
+
+        assert results == []
+        assert "503" in caplog.text
+        assert "forged" not in caplog.text
+        assert "taipa" not in caplog.text
+
+
 def _place(name, code, lat, lon, **extra):
     return {
         "name": name,
