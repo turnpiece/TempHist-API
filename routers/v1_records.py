@@ -809,16 +809,20 @@ _PERIOD_FRIENDLY_PREFIX = {"weekly": "week ending ", "monthly": "month ending ",
 
 
 def _build_ranking_block(values: List[Dict]) -> Dict:
-    """Compute warm/cold rank of the most recent year against the full series."""
+    """Compute warm/cold rank of the most recent year against the full series.
+
+    Years with the same value share a rank (competition ranking): each rank is 1 plus the number of years strictly
+    warmer or colder, and ``ties`` counts the other years sharing the current year's value.
+    """
     scored = [(v["year"], v["temperature"]) for v in values if v.get("temperature") is not None]
     if not scored:
-        return {"warm": 1, "cold": 1, "total": 0}
+        return {"warm": 1, "cold": 1, "total": 0, "ties": 0}
     current_year = max(y for y, _ in scored)
-    by_warm = sorted(scored, key=lambda x: x[1], reverse=True)
-    by_cold = sorted(scored, key=lambda x: x[1])
-    warm_rank = next(i + 1 for i, (y, _) in enumerate(by_warm) if y == current_year)
-    cold_rank = next(i + 1 for i, (y, _) in enumerate(by_cold) if y == current_year)
-    return {"warm": warm_rank, "cold": cold_rank, "total": len(scored)}
+    current_temp = next(t for y, t in scored if y == current_year)
+    warmer = sum(1 for _, t in scored if t > current_temp)
+    colder = sum(1 for _, t in scored if t < current_temp)
+    ties = sum(1 for y, t in scored if y != current_year and t == current_temp)
+    return {"warm": warmer + 1, "cold": colder + 1, "total": len(scored), "ties": ties}
 
 
 def _build_summary_text(

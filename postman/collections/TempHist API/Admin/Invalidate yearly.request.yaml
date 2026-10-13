@@ -1,0 +1,9 @@
+$kind: http-request
+url: "{{baseURL}}/cache/invalidate/pattern?pattern=records:*&dry_run=true"
+method: DELETE
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
+queryParams:
+  pattern: records:*
+  dry_run: "true"
+order: 4291401862392088

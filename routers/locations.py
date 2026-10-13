@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, FrozenSet, List, Optional, Tuple, Union
@@ -29,6 +30,8 @@ from config import (
     BASE_URL,
     LOCATIONS_CACHE_CONTROL_HEADER,
     MAPBOX_TOKEN,
+    OPEN_METEO_API_KEY,
+    OPEN_METEO_GEOCODING_URL,
     POPULARITY_MAX_LOCATIONS,
     POPULARITY_WINDOW_DAYS,
     SAME_LOCATION_RADIUS_KM,
@@ -678,7 +681,9 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
     """
     # v2: added latitude/longitude/timezone (P1-161) — bumped so stale v1
     # entries (missing those fields) aren't served from cache after deploy.
-    cache_key = f"geocode:mapbox:v2:{query.strip().lower()}:{limit}"
+    # v3: country-level places (Macau, Hong Kong, Singapore...) are no longer
+    # dropped (P1-177) — bumped so cached results that lack them aren't served.
+    cache_key = f"geocode:mapbox:v3:{query.strip().lower()}:{limit}"
     cached = await get_cached_response(cache_key)
     if cached is not None:
         return cached.get("results", [])
@@ -690,7 +695,8 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
     try:
         async with session.get(url) as resp:
             if resp.status != 200:
-                logger.warning("Mapbox returned status %s for query %r", resp.status, query)
+                # The query is user input, so it is deliberately not logged (log injection).
+                logger.warning("Mapbox returned status %s", resp.status)
                 return []
             data = await resp.json()
     except Exception as exc:
@@ -713,8 +719,16 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
                 country_name = ctx.get("text", "").strip()
                 sc = ctx.get("short_code", "")
                 country_code = sc[:2].upper() if sc else ""
+        place_types = feature.get("place_type") or []
+        if not country_name and "country" in place_types and "place" in place_types:
+            # City-states and special regions (Macau, Hong Kong, Singapore, Monaco...) come
+            # back as a country-level feature that is also a place, with an empty context:
+            # the feature is its own country.
+            country_name = name
+            short_code = str((feature.get("properties") or {}).get("short_code") or "")
+            country_code = short_code.upper() if re.fullmatch(r"[A-Za-z]{2}", short_code) else ""
         if not country_name:
-            # Top-level feature may itself be a country-level result; skip it
+            # No country context and not a country-level place; unusable
             continue
 
         center = feature.get("center") or []
@@ -736,6 +750,167 @@ async def _geocode_mapbox(query: str, limit: int = 10) -> List[Dict]:
 
     await set_cached_response(cache_key, {"results": results}, ttl=SEARCH_CACHE_TTL)
     return results
+
+
+# ---------------------------------------------------------------------------
+# Open-Meteo geocoding (supplements Mapbox, P1-177)
+# ---------------------------------------------------------------------------
+# Mapbox has no Taipa or Cotai in Macau (nor Kowloon); Open-Meteo's GeoNames-based
+# geocoder does. Its results are merged with Mapbox's and ranked together.
+_OPEN_METEO_GEOCODE_TIMEOUT = aiohttp.ClientTimeout(total=3.0, connect=2.0)
+
+# Open-Meteo omits `country` for some territories (null for MO and HK); pycountry's
+# name for MO is "Macao", but Mapbox and the preapproved list say "Macau".
+_COUNTRY_NAME_OVERRIDES: Dict[str, str] = {"MO": "Macau"}
+
+# GeoNames spellings that name the same place as the Mapbox one, so they de-duplicate.
+_DEDUPE_NAME_ALIASES: Dict[str, str] = {"macao": "macau"}
+# Same name + country within this many degrees (~33 km) is the same place. Not used
+# alone: Taipa and the Macau peninsula are ~5 km apart but are different places.
+_DEDUPE_RADIUS_DEG = 0.3
+
+
+async def _geocode_open_meteo(query: str, limit: int = 10) -> List[Dict]:
+    """
+    Call the Open-Meteo Geocoding API and return the same dict shape as
+    `_geocode_mapbox` (name, admin1, country_name, country_code, latitude,
+    longitude, timezone), populated places only. Cached in Redis for
+    SEARCH_CACHE_TTL seconds. Returns [] on any failure.
+    """
+    cache_key = f"geocode:openmeteo:v1:{query.strip().lower()}:{limit}"
+    cached = await get_cached_response(cache_key)
+    if cached is not None:
+        return cached.get("results", [])
+
+    params: Dict[str, str | int] = {
+        "name": query.strip(),
+        # Non-place features (countries, islands, airports) are filtered out below,
+        # so ask for more than `limit` to still have enough left.
+        "count": min(limit * 2, 100),
+        "language": "en",
+        "format": "json",
+    }
+    if OPEN_METEO_API_KEY:
+        params["apikey"] = OPEN_METEO_API_KEY
+
+    # The shared aiohttp session is reused; only the timeout is tighter, so a slow
+    # supplementary lookup can't hold up the Mapbox results for long.
+    session = await _get_mapbox_client()
+    try:
+        async with session.get(OPEN_METEO_GEOCODING_URL, params=params, timeout=_OPEN_METEO_GEOCODE_TIMEOUT) as resp:
+            if resp.status != 200:
+                # The query is user input, so it is deliberately not logged (log injection).
+                logger.warning("Open-Meteo geocoding returned status %s", resp.status)
+                return []
+            data = await resp.json()
+    except Exception as exc:
+        # Only the type: aiohttp error text can include the request URL, and with it the apikey.
+        logger.warning("Open-Meteo geocoding request failed: %s", type(exc).__name__)
+        return []
+
+    parsed = (_parse_open_meteo_place(item) for item in data.get("results") or [])
+    results: List[Dict] = [place for place in parsed if place is not None]
+
+    await set_cached_response(cache_key, {"results": results}, ttl=SEARCH_CACHE_TTL)
+    return results
+
+
+def _parse_open_meteo_place(item: Dict) -> Optional[Dict]:
+    """Map one Open-Meteo geocoding result to the search result shape, or None if it is not a usable place."""
+    # GeoNames populated-place codes (PPL, PPLA, PPLC...). PCL* are countries.
+    if not str(item.get("feature_code") or "").startswith("PPL"):
+        return None
+    name = str(item.get("name") or "").strip()
+    country_code = str(item.get("country_code") or "").upper()
+    latitude = item.get("latitude")
+    longitude = item.get("longitude")
+    if not name or not country_code or latitude is None or longitude is None:
+        return None
+
+    country_name = (
+        item.get("country")
+        or _COUNTRY_NAME_OVERRIDES.get(country_code)
+        or _resolve_country_fields(country_code, None)[1]
+        or ""
+    )
+    return {
+        "name": name,
+        "admin1": item.get("admin1") or "",
+        "country_name": country_name,
+        "country_code": country_code,
+        "latitude": latitude,
+        "longitude": longitude,
+        "timezone": item.get("timezone") or _tf.timezone_at(lng=longitude, lat=latitude),
+    }
+
+
+def _fold_name(text: str) -> str:
+    """Case- and accent-fold a place name for comparison ("Macaúbas" -> "macaubas")."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    folded = "".join(ch for ch in decomposed if not unicodedata.combining(ch)).strip()
+    return _DEDUPE_NAME_ALIASES.get(folded, folded)
+
+
+def _is_same_place(a: Dict, b: Dict) -> bool:
+    """Whether two geocoder results are the same place: same folded name and country, and nearby (if known)."""
+    if _fold_name(a.get("name", "")) != _fold_name(b.get("name", "")):
+        return False
+    if (a.get("country_code") or "") != (b.get("country_code") or ""):
+        return False
+    coordinates = (a.get("latitude"), a.get("longitude"), b.get("latitude"), b.get("longitude"))
+    if None in coordinates:
+        return True
+    a_lat, a_lon, b_lat, b_lon = coordinates
+    return abs(a_lat - b_lat) <= _DEDUPE_RADIUS_DEG and abs(a_lon - b_lon) <= _DEDUPE_RADIUS_DEG
+
+
+def _name_match_tier(needle: str, item: Dict) -> int:
+    """0 exact name, 1 name starts with the query, 2 name contains it, 3 anything else (needle is folded)."""
+    name = _fold_name(item.get("name", ""))
+    if name == needle:
+        return 0
+    if name.startswith(needle):
+        return 1
+    if needle in name:
+        return 2
+    return 3
+
+
+def _merge_and_rank_geocode_results(query: str, *sources: List[Dict], limit: int) -> List[Dict]:
+    """Merge geocoder result lists, drop duplicates and rank by how well the name matches.
+
+    Earlier sources win a duplicate. Ranking tiers are exact name, name starts with the
+    query, name contains the query, anything else; order within a tier is preserved
+    (earlier source first, then the source's own relevance order). Truncated to `limit`.
+    """
+    kept: List[Dict] = []
+    for item in (item for source in sources for item in source):
+        if not any(_is_same_place(item, other) for other in kept):
+            kept.append(item)
+
+    needle = _fold_name(query)
+    return sorted(kept, key=lambda item: _name_match_tier(needle, item))[:limit]  # sorted() is stable
+
+
+async def _search_geocoders(query: str, limit: int) -> List[Dict]:
+    """Query Mapbox and Open-Meteo concurrently and return their merged, ranked results.
+
+    Open-Meteo is a best-effort supplement: if it fails, Mapbox's results alone are returned.
+    A Mapbox failure propagates.
+    """
+    mapbox_results, open_meteo_results = await asyncio.gather(
+        _geocode_mapbox(query, limit=limit),
+        _geocode_open_meteo(query, limit=limit),
+        return_exceptions=True,
+    )
+    if isinstance(mapbox_results, BaseException):
+        raise mapbox_results
+    if isinstance(open_meteo_results, BaseException):
+        if not isinstance(open_meteo_results, Exception):
+            raise open_meteo_results  # cancellation etc.
+        logger.warning("Open-Meteo geocoding failed: %s", type(open_meteo_results).__name__)
+        open_meteo_results = []
+    return _merge_and_rank_geocode_results(query, mapbox_results, open_meteo_results, limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -844,10 +1019,10 @@ async def search_locations(
     if not allowed:
         raise rate_limited(reason)
 
-    # --- Mapbox path ---
+    # --- Mapbox path (supplemented by Open-Meteo geocoding) ---
     if MAPBOX_TOKEN:
-        results = await _geocode_mapbox(q, limit=limit)
-        # _geocode_mapbox returns fresh dicts (JSON-deserialised on each call),
+        results = await _search_geocoders(q, limit)
+        # Both geocoders return fresh dicts (JSON-deserialised on each call),
         # so mutation here is safe.
         for result in results:
             result["location_id"] = _find_preapproved_id(result.get("name", ""), result.get("country_code", ""))

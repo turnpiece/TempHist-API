@@ -189,9 +189,9 @@ class TestV1RecordsEndpoints:
                 assert r["warm"] >= 1
                 assert r["cold"] >= 1
                 assert r["total"] >= 1
-                assert r["warm"] + r["cold"] == r["total"] + 1
+                assert r["warm"] + r["cold"] == r["total"] + 1 - r["ties"]
                 # 2024 (15.5) is the warmest of the three mocked years and the last by coldness
-                assert (r["warm"], r["cold"], r["total"]) == (1, 3, 3)
+                assert (r["warm"], r["cold"], r["total"], r["ties"]) == (1, 3, 3, 0)
 
     def test_removed_endpoints_return_410(self, client):
         """Test that removed legacy endpoints return 410 Gone"""

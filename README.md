@@ -103,6 +103,7 @@ VISUAL_CROSSING_API_KEY=your_key_here # required only when WEATHER_PROVIDER=visu
 OPEN_METEO_API_KEY=your_key_here
 OPEN_METEO_ARCHIVE_URL=https://customer-archive-api.open-meteo.com/v1/archive
 OPEN_METEO_FORECAST_URL=https://customer-api.open-meteo.com/v1/forecast
+OPEN_METEO_GEOCODING_URL=https://customer-geocoding-api.open-meteo.com/v1/search  # location search (API service only)
 
 # Redis Configuration
 REDIS_URL=redis://localhost:6379  # Optional, defaults to localhost
@@ -893,7 +894,7 @@ GET /v1/records/daily/london/01-15/trend
 | `GET /v1/locations/popular/display-strings` | Same ranking as `/popular` but returns plain display strings (used by the cache prewarmer) | Public |
 | `GET /v1/locations/popular/stats` | Selection counts and signal status for ops/debugging | Public |
 | `GET /v1/locations/popular/status` | Service health for the popular locations service | Public |
-| `GET /v1/locations/search` | Search for locations by city name | Public |
+| `GET /v1/locations/search` | Search for locations by city name (Mapbox, supplemented by Open-Meteo geocoding; results merged, de-duplicated and ranked by name match) | Public |
 | `POST /v1/locations/selections` | Record that a user selected a location — powers the popular ranking | Firebase |
 
 ### Social Sharing Endpoints
@@ -1661,10 +1662,11 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 WEATHER_PROVIDER=open_meteo                        # open_meteo (default) or visual_crossing
 VISUAL_CROSSING_API_KEY=your_key_here              # Required only when WEATHER_PROVIDER=visual_crossing
 
-# Open-Meteo paid plan — omit all three to use the free, non-commercial hosts
+# Open-Meteo paid plan — omit all four to use the free, non-commercial hosts
 OPEN_METEO_API_KEY=your_key_here                   # Sent as ?apikey= on every Open-Meteo request
 OPEN_METEO_ARCHIVE_URL=https://customer-archive-api.open-meteo.com/v1/archive
 OPEN_METEO_FORECAST_URL=https://customer-api.open-meteo.com/v1/forecast
+OPEN_METEO_GEOCODING_URL=https://customer-geocoding-api.open-meteo.com/v1/search  # location search (API service only)
 ```
 
 > Set these on **both** the API service and the worker service — the worker fetches from Open-Meteo in-process while building records.
