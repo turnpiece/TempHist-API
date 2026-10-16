@@ -2,6 +2,20 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-16] - Share Preview Image Matches the Chart (unreleased)
+
+P1-183 (#145). The share preview image (`GET /v1/og/{share_id}.png`) drew its bars from 0° rather than from the left axis, so for locations with cold or mixed-sign years (e.g. Kirkenes) it looked nothing like the chart on the share page.
+
+### Fixed
+
+- **Bars now start at the left edge of the chart**, as on the share page, instead of pivoting around the 0° tick.
+- The temperature axis uses the same integer-aligned min/max and tick step (1, 2 or 5) as the web chart, replacing the old free-form padding. A new `_temperature_axis_extents()` mirrors the web's `calculateTemperatureRange()` and `getTemperatureLinearAxisExtents()`.
+- The left (year) and top (temperature) axis lines are drawn, and the average line is solid rather than dotted, as in the web chart.
+
+### Note
+
+`Cache-Control` on the image is 24 h and social platforms cache previews for longer, so existing shares pick up the new image once those caches expire.
+
 ## [2026-10-13] - Location Search Finds Macau, Hong Kong and Singapore (unreleased)
 
 P1-177 (#141). `GET /v1/locations/search?q=macau` returned Macau in Brazil and France but never Macau SAR; `macao`, `taipa` and `cotai` found nothing in Macau either.
