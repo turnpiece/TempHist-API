@@ -10,7 +10,6 @@ from starlette.exceptions import HTTPException
 
 from config import DEBUG
 from models import ErrorResponse
-from utils.ip_utils import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,6 @@ def register_exception_handlers(app):
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         """Handle Pydantic validation errors with standardized error format (MED-008)."""
-        client_ip = get_client_ip(request)
         request_id = getattr(request.state, "request_id", None)
 
         # Extract detailed error information
@@ -48,9 +46,7 @@ def register_exception_handlers(app):
             field = " -> ".join(str(loc) for loc in error["loc"])
             error_details.append({"field": field, "message": error["msg"], "type": error["type"]})
 
-        logger.error(
-            f"❌ VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}"
-        )
+        logger.error(f"❌ VALIDATION ERROR: {exc.errors()} | Path={request.url.path} | Request-ID={request_id}")
 
         error_response = ErrorResponse(
             error="VALIDATION_ERROR",
@@ -67,7 +63,6 @@ def register_exception_handlers(app):
     @app.exception_handler(ValidationError)
     async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
         """Handle Pydantic model validation errors with standardized format (MED-008)."""
-        client_ip = get_client_ip(request)
         request_id = getattr(request.state, "request_id", None)
 
         error_details = []
@@ -76,7 +71,7 @@ def register_exception_handlers(app):
             error_details.append({"field": field, "message": error["msg"], "type": error["type"]})
 
         logger.error(
-            f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | IP={client_ip} | Path={request.url.path} | Request-ID={request_id}"
+            f"❌ PYDANTIC VALIDATION ERROR: {exc.errors()} | Path={request.url.path} | Request-ID={request_id}"
         )
 
         error_response = ErrorResponse(

@@ -2,6 +2,23 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-17] - Client IP Addresses Are No Longer Stored or Logged (unreleased)
+
+P1-184. The client IP address was saved with every analytics record and written to many request and error log lines.
+
+### Changed
+
+- **Analytics records no longer include the client IP.** Nothing read it back. The record ID's random suffix no longer derives from it.
+- **`GET /analytics/recent` and `GET /analytics/session/{session_id}` omit `client_ip`** for records stored before this change, which expire on their own 7-day TTL.
+- **Log lines no longer include the client IP**: analytics submission and error logs, request/response and slow-request logs, request-size and validation errors, rate-limit and location-diversity decisions, and the auth and App Check lines. The "whitelisted" log line is now worded `WHITELISTED CLIENT`.
+
+### Note
+
+- The IP is still used (not logged) for the per-IP rate limits and the IP whitelist/blacklist. Blocking abusive clients by address is expected to be done at the edge (Cloudflare).
+- Not changed: `GET /rate-limit-status` still echoes the caller's own address back to that caller.
+
+---
+
 ## [2026-10-16] - Share Preview Image Matches the Chart (unreleased)
 
 P1-183 (#145). The share preview image (`GET /v1/og/{share_id}.png`) drew its bars from 0° rather than from the left axis, so for locations with cold or mixed-sign years (e.g. Kirkenes) it looked nothing like the chart on the share page.
@@ -15,6 +32,8 @@ P1-183 (#145). The share preview image (`GET /v1/og/{share_id}.png`) drew its ba
 ### Note
 
 `Cache-Control` on the image is 24 h and social platforms cache previews for longer, so existing shares pick up the new image once those caches expire.
+
+---
 
 ## [2026-10-13] - Location Search Finds Macau, Hong Kong and Singapore (unreleased)
 

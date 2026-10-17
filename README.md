@@ -984,6 +984,8 @@ The analytics system collects **client-reported** session data submitted by the 
 | `GET /analytics/recent` | Most recent submitted records (query param: `limit`, 1–1000, default 100) | Public |
 | `GET /analytics/session/{session_id}` | All records for a specific session ID | Public |
 
+The submitting client's IP address is used only for the per-IP rate limit (a short-lived counter in Redis). It is not stored in analytics records, returned by these endpoints, or written to the application logs.
+
 #### `POST /analytics` request body
 
 | Field | Type | Required | Description |
