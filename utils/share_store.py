@@ -83,6 +83,7 @@ class ShareStore:
                 CREATE INDEX IF NOT EXISTS shares_created_at_idx ON shares (created_at);
                 ALTER TABLE shares ADD COLUMN IF NOT EXISTS latitude  DOUBLE PRECISION;
                 ALTER TABLE shares ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+                ALTER TABLE shares ADD COLUMN IF NOT EXISTS country_code VARCHAR(2);
             """)
 
     async def create_share(
@@ -94,6 +95,7 @@ class ShareStore:
         unit: str,
         latitude: Optional[float] = None,
         longitude: Optional[float] = None,
+        country_code: Optional[str] = None,
     ) -> Optional[dict]:
         pool = await self._ensure_pool()
         if not pool:
@@ -107,9 +109,9 @@ class ShareStore:
                     row = await conn.fetchrow(
                         """
                         INSERT INTO shares
-                            (id, location, period, identifier, ref_year, unit, latitude, longitude)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        RETURNING id, location, period, identifier, ref_year, unit, created_at
+                            (id, location, period, identifier, ref_year, unit, latitude, longitude, country_code)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        RETURNING id
                         """,
                         share_id,
                         location,
@@ -119,6 +121,7 @@ class ShareStore:
                         unit,
                         latitude,
                         longitude,
+                        country_code,
                     )
                     return {
                         "id": row["id"],
@@ -149,7 +152,7 @@ class ShareStore:
             rows = await conn.fetch(
                 """
                 SELECT id, location, period, identifier, ref_year, unit,
-                       created_at, latitude, longitude
+                       created_at, latitude, longitude, country_code
                 FROM shares
                 WHERE ($1::text IS NULL OR period = $1)
                 ORDER BY created_at DESC
@@ -188,6 +191,7 @@ class ShareStore:
                         "identifier": row["identifier"],
                         "ref_year": row["ref_year"],
                         "unit": row["unit"],
+                        "country_code": row["country_code"],
                         "created_at": row["created_at"].isoformat(),
                         "og_image_url": f"/v1/og/{row['id']}.png",
                         "share_url": f"/s/{row['id']}",
@@ -211,7 +215,8 @@ class ShareStore:
 
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, location, period, identifier, ref_year, unit, created_at FROM shares WHERE id = $1",
+                "SELECT id, location, period, identifier, ref_year, unit, country_code, created_at "
+                "FROM shares WHERE id = $1",
                 share_id,
             )
         if row is None:
@@ -223,5 +228,28 @@ class ShareStore:
             "identifier": row["identifier"],
             "ref_year": row["ref_year"],
             "unit": row["unit"],
+            "country_code": row["country_code"],
             "created_at": row["created_at"].isoformat(),
         }
+
+    async def list_shares_missing_country(self) -> Optional[List[dict]]:
+        """Shares with no country_code yet (for the backfill script), oldest first."""
+        pool = await self._ensure_pool()
+        if not pool:
+            return None
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, location, latitude, longitude FROM shares WHERE country_code IS NULL ORDER BY created_at"
+            )
+        return [dict(row) for row in rows]
+
+    async def set_country_code(self, share_id: str, country_code: str) -> bool:
+        """Set the country of a share that doesn't have one. Returns whether a row changed."""
+        pool = await self._ensure_pool()
+        if not pool:
+            return False
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE shares SET country_code = $2 WHERE id = $1 AND country_code IS NULL", share_id, country_code
+            )
+        return result == "UPDATE 1"

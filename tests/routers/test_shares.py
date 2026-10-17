@@ -187,6 +187,46 @@ class TestCreateShare:
         assert response.status_code == 422
 
 
+class TestCreateShareCountryCode:
+    """POST /v1/shares stores the share's country, from the client or worked out by the API."""
+
+    @staticmethod
+    def _post(client, **overrides):
+        store_mock = AsyncMock()
+        store_mock.create_share.return_value = {"id": "aB3xY7qZ", "url": "/s/aB3xY7qZ"}
+        with (
+            patch("routers.shares.get_share_store", return_value=store_mock),
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])),
+        ):
+            response = client.post(
+                "/v1/shares",
+                json={**VALID_CREATE_BODY, **overrides},
+                headers={"Authorization": "Bearer firebase-token"},
+            )
+        return response, store_mock
+
+    def test_client_supplied_country_code_is_stored_normalised(self, client, mock_redis):
+        response, store = self._post(client, location="Kirkenes", country_code="no")
+        assert response.status_code == 201
+        assert store.create_share.await_args.kwargs["country_code"] == "NO"
+
+    def test_country_worked_out_from_location_text(self, client, mock_redis):
+        response, store = self._post(client, location="Kirkenes, Finnmark, Norway")
+        assert response.status_code == 201
+        assert store.create_share.await_args.kwargs["country_code"] == "NO"
+
+    def test_unresolvable_country_is_stored_as_null(self, client, mock_redis):
+        response, store = self._post(client, location="Nowhereville")
+        assert response.status_code == 201
+        assert store.create_share.await_args.kwargs["country_code"] is None
+
+    @pytest.mark.parametrize("bad", ["XX", "EU", "NOR", "1"])
+    def test_invalid_country_code_rejected(self, client, mock_redis, bad):
+        response, store = self._post(client, country_code=bad)
+        assert response.status_code == 422
+        store.create_share.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/shares  (public feed)
 # ---------------------------------------------------------------------------
@@ -287,6 +327,16 @@ class TestListShares:
         assert response.status_code == 200
         assert response.json()["shares"] == []
 
+    def test_list_shares_includes_country_code(self, client, mock_redis):
+        store_mock = AsyncMock()
+        store_mock.list_shares.return_value = [
+            {**SHARE_LIST[0], "country_code": "GB"},
+            {**SHARE_LIST[1], "country_code": None},
+        ]
+        with patch("routers.shares.get_share_store", return_value=store_mock):
+            shares = client.get("/v1/shares").json()["shares"]
+        assert [s["country_code"] for s in shares] == ["GB", None]
+
     def test_list_shares_response_includes_og_url(self, client, mock_redis):
         store_mock = AsyncMock()
         store_mock.list_shares.return_value = SHARE_LIST
@@ -312,6 +362,16 @@ class TestGetShare:
         assert data["id"] == "aB3xY7qZ"
         assert data["location"] == VALID_SHARE["location"]
         assert data["unit"] == "celsius"
+
+    def test_get_share_includes_country_code(self, client, mock_redis):
+        mock_redis.get.return_value = json.dumps({**VALID_SHARE, "country_code": "GB"}).encode()
+        assert client.get("/v1/shares/aB3xY7qZ").json()["country_code"] == "GB"
+
+    def test_get_share_cached_before_country_code_existed_returns_null(self, client, mock_redis):
+        mock_redis.get.return_value = json.dumps(VALID_SHARE).encode()  # no country_code key
+        response = client.get("/v1/shares/aB3xY7qZ")
+        assert response.status_code == 200
+        assert response.json()["country_code"] is None
 
     def test_get_share_from_store(self, client, mock_redis):
         """Cache miss falls back to the Postgres store."""
@@ -600,6 +660,7 @@ class TestListSharesProximityDedup:
             "created_at": created_at or datetime(2024, 4, 11, 10, 0, 0, tzinfo=timezone.utc),
             "latitude": lat,
             "longitude": lon,
+            "country_code": None,
         }
 
     def _run(self, coro):

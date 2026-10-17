@@ -2,6 +2,22 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-17] - Shares Carry Their Country (unreleased)
+
+P1-187 (#151). Share pages and the feed only showed a country flag for the 20 preapproved locations, because the web app matched the city name against that list and the API never said which country a share is in. Kirkenes, Madrid, Greater London and most other places had no flag.
+
+### Added
+
+- **`country_code` on shares.** `GET /v1/shares/{id}` and `GET /v1/shares` now return the share's ISO 3166-1 alpha-2 `country_code`, or `null` when it could not be determined. New `country_code` column on `shares` (added automatically).
+- **`POST /v1/shares` accepts an optional `country_code`** (validated; `uk` is accepted as `GB`; `EU` and unknown codes are rejected with 422). When it is omitted the API works it out: a preapproved location by ID or name, then the country named at the end of `City, Region, Country`, then the Open-Meteo geocoder (nearest hit within 100 km of the share's coordinates, or an exact-name hit when every match is in the same country). Anything still ambiguous is stored as `null` rather than guessed.
+- **`python -m scripts.backfill_share_country`** fills in existing shares (dry run by default, `--execute` to apply). It also deletes each updated share's `share:{id}` Redis entry, since `GET /v1/shares/{id}` caches shares for 30 days.
+
+### Note
+
+The web app still needs to use `country_code` for the feed cards and share page (and send it when creating a share) before the flags appear.
+
+---
+
 ## [2026-10-17] - Client IP Addresses Are No Longer Stored or Logged (unreleased)
 
 P1-184. The client IP address was saved with every analytics record and written to many request and error log lines.
