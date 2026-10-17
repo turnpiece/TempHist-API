@@ -74,6 +74,14 @@ class TestResolveShareCountryCode:
         assert await resolve_share_country_code("Taito, Japan") == "JP"
         self.geocode.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "location,expected",
+        [("London, UK", "GB"), ("London, uk", "GB"), ("Springfield, USA", "US"), ("Dubai, UAE", "AE")],
+    )
+    async def test_common_country_abbreviations_at_the_end(self, location, expected):
+        assert await resolve_share_country_code(location) == expected
+        self.geocode.assert_not_called()
+
     async def test_region_or_state_code_at_the_end_is_not_a_country(self):
         # "IL" is Israel's code, but here it's a US state; a region name is not a country either
         assert await resolve_share_country_code("Springfield, IL") is None

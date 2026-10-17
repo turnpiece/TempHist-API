@@ -28,11 +28,25 @@ import redis
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import routers.locations as locations_module  # noqa: E402
 from routers._share_country import resolve_share_country_code  # noqa: E402
 from utils.share_store import ShareStore  # noqa: E402
 
 
+async def prepare_resolver(r: Optional[redis.Redis]) -> None:
+    """Set up what the app sets up at startup and the resolver relies on.
+
+    - the preapproved-locations list (empty until loaded, so name matches would otherwise find nothing)
+    - the Redis client the geocoder caches its results in (without it every lookup logs a
+      "Redis client not initialized" warning and nothing is cached)
+    """
+    locations_module.locations_data, _etag, _modified = await locations_module.load_locations_data()
+    if r is not None:
+        locations_module.redis_client = r
+
+
 async def backfill(store: ShareStore, r: Optional[redis.Redis], execute: bool) -> Dict[str, int]:
+    await prepare_resolver(r)
     shares = await store.list_shares_missing_country()
     if shares is None:
         raise SystemExit("No Postgres DSN configured (TEMPHIST_PG_DSN or DATABASE_URL).")
