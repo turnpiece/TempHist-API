@@ -471,10 +471,7 @@ async def performance_timing_middleware(request: Request, call_next):
 
     # Log slow requests (>1000ms)
     if total_time_ms > 1000:
-        client_ip = get_client_ip(request)
-        logger.warning(
-            f"⚠️  SLOW REQUEST: {request.method} {request.url.path} took {total_time_ms:.0f}ms | IP={client_ip}"
-        )
+        logger.warning(f"⚠️  SLOW REQUEST: {request.method} {request.url.path} took {total_time_ms:.0f}ms")
 
     return response
 
@@ -503,7 +500,7 @@ def _check_ip_blacklist(request: Request, client_ip: str) -> Optional[JSONRespon
     if request.url.path in ("/health",) or request.url.path.startswith("/analytics"):
         return None
     if DEBUG:
-        logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {client_ip} | {request.method} {request.url.path}")
+        logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {request.method} {request.url.path}")
     return JSONResponse(status_code=403, content={"detail": "Access denied", "reason": "IP address is blacklisted"})
 
 
@@ -569,7 +566,7 @@ def _detect_service_job(auth_header: Optional[str], request: Request, client_ip:
     if not (API_ACCESS_TOKEN and token == API_ACCESS_TOKEN):
         return False
     if DEBUG:
-        logger.info(f"🔧 SERVICE JOB DETECTED: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
+        logger.info(f"🔧 SERVICE JOB DETECTED: {request.method} {request.url.path} | Rate limiting bypassed")
     return True
 
 
@@ -586,19 +583,19 @@ def _check_rate_limits(
     )
     if not rate_limiting_active:
         if is_ip_whitelisted(client_ip) and DEBUG:
-            logger.info(f"⭐ WHITELISTED IP: {client_ip} | {request.method} {request.url.path} | Rate limiting bypassed")
+            logger.info(f"⭐ WHITELISTED CLIENT: {request.method} {request.url.path} | Rate limiting bypassed")
         return None
 
     vc_api_paths = ("/weather/", "/forecast/", "/v1/records/")
     if not any(request.url.path.startswith(p) for p in vc_api_paths):
         if DEBUG:
-            logger.debug(f"ℹ️  NON-VC ENDPOINT: {client_ip} | {request.method} {request.url.path} | Rate limiting skipped")
+            logger.debug(f"ℹ️  NON-VC ENDPOINT: {request.method} {request.url.path} | Rate limiting skipped")
         return None
 
     rate_allowed, rate_reason = request_monitor.check_request_rate(client_ip)
     if not rate_allowed:
         if DEBUG:
-            logger.warning(f"🚫 RATE LIMIT EXCEEDED: {client_ip} | {request.method} {request.url.path} | {rate_reason}")
+            logger.warning(f"🚫 RATE LIMIT EXCEEDED: {request.method} {request.url.path} | {rate_reason}")
         return JSONResponse(
             status_code=429,
             content={
@@ -609,7 +606,7 @@ def _check_rate_limits(
             headers={"Retry-After": str(RATE_LIMIT_WINDOW_HOURS * 3600)},
         )
     if DEBUG:
-        logger.debug(f"✅ RATE LIMIT CHECK: {client_ip} | {request.method} {request.url.path} | Rate: OK")
+        logger.debug(f"✅ RATE LIMIT CHECK: {request.method} {request.url.path} | Rate: OK")
 
     location, _endpoint = extract_location_from_path(request.url.path)
     if location:
@@ -617,7 +614,7 @@ def _check_rate_limits(
         if not location_allowed:
             if DEBUG:
                 logger.warning(
-                    f"🌍 LOCATION DIVERSITY LIMIT: {client_ip} | {request.method} {request.url.path} | {sanitize_for_logging(location_reason)}"
+                    f"🌍 LOCATION DIVERSITY LIMIT: {request.method} {request.url.path} | {sanitize_for_logging(location_reason)}"
                 )
             return JSONResponse(
                 status_code=429,
@@ -630,7 +627,7 @@ def _check_rate_limits(
             )
         if DEBUG:
             logger.debug(
-                f"✅ LOCATION DIVERSITY CHECK: {client_ip} | {request.method} {request.url.path} | Location: {sanitize_for_logging(location)} | OK"
+                f"✅ LOCATION DIVERSITY CHECK: {request.method} {request.url.path} | Location: {sanitize_for_logging(location)} | OK"
             )
 
     return None
@@ -655,9 +652,9 @@ def _check_app_check(request: Request, uid: str, client_ip: str) -> Optional[JSO
         return None
     reason = app_check_error or "missing X-Firebase-AppCheck header"
     if APP_CHECK_ENFORCEMENT == "enforce":
-        logger.warning(f"App Check: BLOCKED uid={uid} ip={client_ip} path={request.url.path} reason={reason}")
+        logger.warning(f"App Check: BLOCKED uid={uid} path={request.url.path} reason={reason}")
         return JSONResponse(status_code=403, content={"detail": "App Check verification failed"})
-    logger.warning(f"App Check: MONITOR uid={uid} ip={client_ip} path={request.url.path} reason={reason}")
+    logger.warning(f"App Check: MONITOR uid={uid} path={request.url.path} reason={reason}")
     return None
 
 
@@ -685,7 +682,7 @@ async def _verify_firebase_auth(
         decoded_token = auth.verify_id_token(id_token)
         provider = decoded_token.get("firebase", {}).get("sign_in_provider", "unknown")
         uid = decoded_token.get("uid", "unknown")
-        logger.info(f"Auth: uid={uid} provider={provider} ip={client_ip} path={request.url.path}")
+        logger.info(f"Auth: uid={uid} provider={provider} path={request.url.path}")
         request.state.user = decoded_token
         return _check_app_check(request, uid, client_ip)
     except Exception as e:
@@ -707,8 +704,6 @@ async def verify_token_middleware(request: Request, call_next):
         return await call_next(request)
 
     client_ip = get_client_ip(request)
-    if DEBUG:
-        logger.debug(f"[DEBUG] Middleware: Client IP: {client_ip}")
 
     block = _check_ip_blacklist(request, client_ip)
     if block:

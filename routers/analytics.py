@@ -201,9 +201,7 @@ async def submit_analytics(
             if current_count:
                 current_count = int(current_count) if isinstance(current_count, (str, bytes)) else current_count
                 if current_count >= ANALYTICS_RATE_LIMIT:
-                    logger.warning(
-                        f"⚠️  ANALYTICS RATE LIMIT EXCEEDED: {client_ip} ({current_count}/{ANALYTICS_RATE_LIMIT})"
-                    )
+                    logger.warning(f"⚠️  ANALYTICS RATE LIMIT EXCEEDED ({current_count}/{ANALYTICS_RATE_LIMIT})")
                     # Track global 429 count for health monitoring (1-hour window)
                     try:
                         redis_client.incr("analytics_429:total")
@@ -231,11 +229,11 @@ async def submit_analytics(
         content_type = request.headers.get("content-type", "")
         content_length = request.headers.get("content-length", "unknown")
 
-        logger.info(f"📊 ANALYTICS REQUEST: IP={client_ip} | Content-Type={content_type} | Length={content_length}")
+        logger.info(f"📊 ANALYTICS REQUEST: Content-Type={content_type} | Length={content_length}")
 
         # Validate content type
         if not content_type.startswith("application/json"):
-            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-TYPE: {content_type} | IP={client_ip}")
+            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-TYPE: {content_type}")
             raise HTTPException(status_code=415, detail="Content-Type must be application/json")
 
         # Check content length (limit to 1MB for analytics data)
@@ -243,24 +241,24 @@ async def submit_analytics(
         try:
             content_length_int = int(content_length) if content_length != "unknown" else None
             if content_length_int and content_length_int > max_content_length:
-                logger.warning(f"⚠️  ANALYTICS REQUEST TOO LARGE: {content_length_int} bytes | IP={client_ip}")
+                logger.warning(f"⚠️  ANALYTICS REQUEST TOO LARGE: {content_length_int} bytes")
                 raise HTTPException(
                     status_code=413, detail=f"Request body too large. Maximum size is {max_content_length} bytes"
                 )
         except ValueError:
             # If we can't parse content-length, continue but log it
-            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-LENGTH: {content_length} | IP={client_ip}")
+            logger.warning(f"⚠️  ANALYTICS INVALID CONTENT-LENGTH: {content_length}")
 
         # Read and parse request body
         try:
             body = await request.body()
             if not body:
-                logger.warning(f"⚠️  ANALYTICS EMPTY BODY: IP={client_ip}")
+                logger.warning("⚠️  ANALYTICS EMPTY BODY")
                 raise HTTPException(status_code=400, detail="Request body cannot be empty")
 
             # Check actual body size
             if len(body) > max_content_length:
-                logger.warning(f"⚠️  ANALYTICS BODY TOO LARGE: {len(body)} bytes | IP={client_ip}")
+                logger.warning(f"⚠️  ANALYTICS BODY TOO LARGE: {len(body)} bytes")
                 raise HTTPException(
                     status_code=413, detail=f"Request body too large. Maximum size is {max_content_length} bytes"
                 )
@@ -274,13 +272,13 @@ async def submit_analytics(
             try:
                 json_data = json.loads(body_str)
             except json.JSONDecodeError as e:
-                logger.error(f"❌ ANALYTICS JSON PARSE ERROR: {e} | IP={client_ip} | Body: {body_preview}")
+                logger.error(f"❌ ANALYTICS JSON PARSE ERROR: {e} | Body: {body_preview}")
                 raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"❌ ANALYTICS BODY READ ERROR: {e} | IP={client_ip}")
+            logger.error(f"❌ ANALYTICS BODY READ ERROR: {e}")
             raise HTTPException(status_code=400, detail="Failed to read request body")
 
         # Sanitize analytics payload before validation
@@ -290,7 +288,7 @@ async def submit_analytics(
         try:
             analytics_data = AnalyticsData(**sanitized_payload)
         except Exception as e:
-            logger.error(f"❌ ANALYTICS VALIDATION ERROR: {e} | IP={client_ip} | Data: {sanitized_payload}")
+            logger.error(f"❌ ANALYTICS VALIDATION ERROR: {e} | Data: {sanitized_payload}")
 
             # Provide detailed validation error information
             if hasattr(e, "errors"):
@@ -313,14 +311,14 @@ async def submit_analytics(
 
         # Store analytics data
         try:
-            analytics_id = analytics_storage.store_analytics(analytics_data, client_ip)
-            logger.info(f"📊 ANALYTICS STORED: {analytics_id} | IP={client_ip}")
+            analytics_id = analytics_storage.store_analytics(analytics_data)
+            logger.info(f"📊 ANALYTICS STORED: {analytics_id}")
         except Exception as e:
-            logger.error(f"❌ ANALYTICS STORAGE ERROR: {e} | IP={client_ip}")
+            logger.error(f"❌ ANALYTICS STORAGE ERROR: {e}")
             raise HTTPException(status_code=500, detail="Failed to store analytics data")
 
         if sanitization_warnings:
-            logger.warning(f"⚠️  ANALYTICS SANITIZATION WARNINGS: {sanitization_warnings} | IP={client_ip}")
+            logger.warning(f"⚠️  ANALYTICS SANITIZATION WARNINGS: {sanitization_warnings}")
 
         response_message = "Analytics data submitted successfully"
         if sanitization_warnings:
@@ -334,7 +332,7 @@ async def submit_analytics(
         # Re-raise HTTP exceptions (they already have proper status codes)
         raise
     except Exception as e:
-        logger.error(f"❌ ANALYTICS UNEXPECTED ERROR: {e} | IP={client_ip}")
+        logger.error(f"❌ ANALYTICS UNEXPECTED ERROR: {e}")
         raise HTTPException(status_code=500, detail="Internal server error while processing analytics data")
 
 
