@@ -2,6 +2,23 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-17] - Client IP Addresses Are No Longer Stored or Logged (unreleased)
+
+P1-184. The client IP address was saved with every analytics record and written to many request and error log lines.
+
+### Changed
+
+- **Analytics records no longer include the client IP.** Nothing read it back. The record ID's random suffix no longer derives from it.
+- **`GET /analytics/recent` and `GET /analytics/session/{session_id}` omit `client_ip`** for records stored before this change, which expire on their own 7-day TTL.
+- **Log lines no longer include the client IP**: analytics submission and error logs, request/response and slow-request logs, request-size and validation errors, rate-limit and location-diversity decisions, and the auth and App Check lines. The "whitelisted" log line is now worded `WHITELISTED CLIENT`.
+
+### Note
+
+- The IP is still used (not logged) for the per-IP rate limits and the IP whitelist/blacklist. Blocking abusive clients by address is expected to be done at the edge (Cloudflare).
+- Not changed: `GET /rate-limit-status` still echoes the caller's own address back to that caller.
+
+---
+
 ## [2026-10-13] - Location Search Finds Macau, Hong Kong and Singapore (unreleased)
 
 P1-177 (#141). `GET /v1/locations/search?q=macau` returned Macau in Brazil and France but never Macau SAR; `macao`, `taipa` and `cotai` found nothing in Macau either.
