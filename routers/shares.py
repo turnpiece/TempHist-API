@@ -6,10 +6,11 @@ from typing import Annotated, List, Literal, Optional
 
 import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from routers._params import ShareIdParam
 from routers._responses import error_responses
+from routers._share_country import normalise_country_code, resolve_share_country_code
 from routers.dependencies import get_redis_client
 from routers.locations import locations_data
 from utils.share_store import get_share_store
@@ -70,6 +71,7 @@ class ShareCreate(BaseModel):
                     "unit": "celsius",
                     "latitude": 51.5074,
                     "longitude": -0.1278,
+                    "country_code": "GB",
                 }
             ]
         }
@@ -86,6 +88,19 @@ class ShareCreate(BaseModel):
         None, ge=-90, le=90, description="Latitude of the location, used to merge near-duplicate shares in listings"
     )
     longitude: Optional[float] = Field(None, ge=-180, le=180, description="Longitude of the location")
+    country_code: Optional[str] = Field(
+        None,
+        description=(
+            "ISO 3166-1 alpha-2 country code of the location, e.g. `NO`. Clients show it as a flag. "
+            "When omitted the API works it out from the location where it can."
+        ),
+        examples=["GB"],
+    )
+
+    @field_validator("country_code")
+    @classmethod
+    def _validate_country_code(cls, value: Optional[str]) -> Optional[str]:
+        return normalise_country_code(value) if value else None
 
 
 class ShareCreatedResponse(BaseModel):
@@ -106,6 +121,11 @@ class ShareRecord(BaseModel):
     identifier: str = Field(..., description="Period end date as `MM-DD`", examples=["01-15"])
     ref_year: int = Field(..., description="The year the shared record highlights", examples=[2025])
     unit: Literal["celsius", "fahrenheit"] = Field(..., description="Temperature unit shown on the share")
+    country_code: Optional[str] = Field(
+        None,
+        description="ISO 3166-1 alpha-2 country code of the location, or null if it could not be determined",
+        examples=["GB"],
+    )
     created_at: str = Field(..., description="When the share was created, as an ISO 8601 timestamp")
 
 
@@ -181,6 +201,9 @@ async def create_share(
         raise HTTPException(status_code=401, detail="Authentication required.")
 
     store = get_share_store()
+    country_code = await resolve_share_country_code(
+        body.location, body.country_code, latitude=body.latitude, longitude=body.longitude
+    )
     result = await store.create_share(
         location=_resolve_location_name(body.location),
         period=body.period,
@@ -189,6 +212,7 @@ async def create_share(
         unit=body.unit,
         latitude=body.latitude,
         longitude=body.longitude,
+        country_code=country_code,
     )
     if result is None:
         raise HTTPException(
@@ -238,4 +262,5 @@ async def get_share(
 
     # Computed fresh on every request, never cached — see _compute_is_today.
     # Copy rather than mutate: `share` may be a dict owned by the store/cache layer.
-    return {**share, "is_today": _compute_is_today(share, redis_client)}
+    # country_code defaults to null: records cached before the field existed don't have the key.
+    return {"country_code": None, **share, "is_today": _compute_is_today(share, redis_client)}
