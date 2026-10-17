@@ -16,6 +16,7 @@ from scripts.backfill_share_country import backfill
 PREAPPROVED = [
     SimpleNamespace(id="london", name="London", country_name="United Kingdom", country_code="GB"),
     SimpleNamespace(id="dublin", name="Dublin", country_name="Ireland", country_code="IE"),
+    SimpleNamespace(id="new_york_city", name="New York", country_name="United States", country_code="US"),
 ]
 
 
@@ -53,6 +54,13 @@ class TestResolveShareCountryCode:
 
     async def test_preapproved_bare_name(self):
         assert await resolve_share_country_code("Dublin") == "IE"
+
+    async def test_preapproved_bare_name_whose_id_differs(self):
+        assert await resolve_share_country_code("New York") == "US"
+
+    async def test_empty_location_resolves_to_nothing(self):
+        assert await resolve_share_country_code(" , ") is None
+        self.geocode.assert_not_called()
 
     async def test_preapproved_name_with_matching_country(self):
         assert await resolve_share_country_code("London, England, United Kingdom") == "GB"
