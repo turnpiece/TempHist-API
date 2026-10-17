@@ -252,7 +252,12 @@ def _temperature_axis_extents(temps) -> tuple:
     lo = actual_min - 1 if float(actual_min).is_integer() else math.floor(actual_min)
     hi = actual_max + 1 if float(actual_max).is_integer() else math.ceil(actual_max)
     temp_range = hi - lo
-    step = 1 if temp_range <= 10 else 2 if temp_range <= 20 else 5
+    if temp_range <= 10:
+        step = 1
+    elif temp_range <= 20:
+        step = 2
+    else:
+        step = 5
     return math.floor(lo / step) * step, math.ceil(hi / step) * step, step
 
 
