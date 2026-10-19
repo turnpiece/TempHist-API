@@ -9,8 +9,8 @@ P1-187 (#151). Share pages and the feed only showed a country flag for the 20 pr
 ### Added
 
 - **`country_code` on shares.** `GET /v1/shares/{id}` and `GET /v1/shares` now return the share's ISO 3166-1 alpha-2 `country_code`, or `null` when it could not be determined. New `country_code` column on `shares` (added automatically).
-- **`POST /v1/shares` accepts an optional `country_code`** (validated; `uk` is accepted as `GB`; `EU` and unknown codes are rejected with 422). When it is omitted the API works it out: a preapproved location by ID or name, then the country named at the end of `City, Region, Country`, then the Open-Meteo geocoder (nearest hit within 100 km of the share's coordinates, or an exact-name hit when every match is in the same country). Anything still ambiguous is stored as `null` rather than guessed.
-- **`python -m scripts.backfill_share_country`** fills in existing shares (dry run by default, `--execute` to apply). It also deletes each updated share's `share:{id}` Redis entry, since `GET /v1/shares/{id}` caches shares for 30 days.
+- **`POST /v1/shares` accepts an optional `country_code`** (validated; `uk` is accepted as `GB`; `EU` and unknown codes are rejected with 422). When it is omitted the API works it out: a preapproved location by ID or name, then the country named at the end of `City, Region, Country` (full name, or `UK`, `USA` or `UAE`: `London, UK` is `GB`), then the Open-Meteo geocoder (nearest hit within 100 km of the share's coordinates, or an exact-name hit when every match is in the same country). Anything still ambiguous is stored as `null` rather than guessed.
+- **`python -m scripts.backfill_share_country`** fills in existing shares (dry run by default, `--execute` to apply). It loads the preapproved locations and uses the Redis client for the geocoder's cache, as the app does at startup. It also deletes each updated share's `share:{id}` Redis entry, since `GET /v1/shares/{id}` caches shares for 30 days.
 
 ### Note
 

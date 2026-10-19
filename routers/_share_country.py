@@ -18,6 +18,9 @@ from routers.locations import COUNTRY_CODE_ALIASES, _geocode_open_meteo
 
 logger = logging.getLogger(__name__)
 
+# Abbreviations people write after a city that aren't a country's name or ISO code ("London, UK")
+_COUNTRY_TEXT_ALIASES = {"uk": "GB", "usa": "US", "uae": "AE"}
+
 # A geocoder hit this close to the share's coordinates is taken to be the same place.
 _MAX_GEOCODE_DISTANCE_KM = 100.0
 
@@ -59,11 +62,16 @@ def _country_code_from_preapproved(location: str) -> Optional[str]:
 def _country_code_from_text(location: str) -> Optional[str]:
     """Country named at the end of "City, Region, Country", or None.
 
-    Exact name lookup only (no fuzzy search, no codes): "Finnmark" or "IL" at the end of a
-    string must not be mistaken for a country.
+    Exact name lookup only (no fuzzy search, no ISO codes) plus a few well-known abbreviations
+    (UK, USA, UAE): "Finnmark" or "IL" at the end of a string must not be mistaken for a country.
     """
     parts = [p.strip() for p in location.split(",") if p.strip()]
-    if len(parts) < 2 or len(parts[-1]) <= 3:
+    if len(parts) < 2:
+        return None
+    alias = _COUNTRY_TEXT_ALIASES.get(parts[-1].lower())
+    if alias:
+        return alias
+    if len(parts[-1]) <= 3:
         return None
     try:
         return pycountry.countries.lookup(parts[-1]).alpha_2

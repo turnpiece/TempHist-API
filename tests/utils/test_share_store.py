@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 
+import routers.locations as locations_module
 from scripts import backfill_share_country
 from utils.share_store import ShareStore
 
@@ -126,6 +127,39 @@ class TestCountryBackfillQueries:
 
 
 class TestBackfillScript:
+    @pytest.fixture(autouse=True)
+    def restore_locations_module(self, monkeypatch):
+        """The script sets module globals the way app startup does; undo that after each test."""
+        monkeypatch.setattr(locations_module, "locations_data", [])
+        monkeypatch.setattr(locations_module, "redis_client", None)
+
+    async def test_prepare_resolver_loads_preapproved_locations_and_redis(self):
+        r = MagicMock()
+        await backfill_share_country.prepare_resolver(r)
+        assert locations_module.locations_data, "preapproved locations should be loaded"
+        assert locations_module.redis_client is r
+
+    async def test_prepare_resolver_without_redis_leaves_client_unset(self):
+        await backfill_share_country.prepare_resolver(None)
+        assert locations_module.locations_data
+        assert locations_module.redis_client is None
+
+    async def test_backfill_uses_preapproved_list_and_geocoder_cache(self):
+        """Backfill must prepare the resolver: a bare preapproved name resolves without the geocoder."""
+        store = MagicMock()
+        store.list_shares_missing_country = AsyncMock(
+            return_value=[{"id": "aB3xY7qZ", "location": "London", "latitude": None, "longitude": None}]
+        )
+        store.set_country_code = AsyncMock(return_value=True)
+        r = MagicMock()
+        geocode = AsyncMock(return_value=[])
+        with patch("routers._share_country._geocode_open_meteo", new=geocode):
+            summary = await backfill_share_country.backfill(store, r, execute=True)
+        assert summary["updated"] == 1
+        store.set_country_code.assert_awaited_once_with("aB3xY7qZ", "GB")
+        geocode.assert_not_called()
+        assert locations_module.redis_client is r
+
     async def test_no_database_configured_exits(self):
         store = MagicMock()
         store.list_shares_missing_country = AsyncMock(return_value=None)
