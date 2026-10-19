@@ -60,7 +60,9 @@ from routers.dependencies import get_invalid_location_cache, get_redis_client
 from utils.cache_headers import set_weather_cache_headers
 from utils.daily_temperature_store import (
     DailyTemperatureRecord,
+    drop_future_records,
     get_daily_temperature_store,
+    local_today,
     resolve_location_cache_identity,
     resolve_location_cache_slug,
 )
@@ -450,6 +452,13 @@ async def _fetch_and_store_timeline_ranges(
         if timeline_metadata and upsert_metadata is None:
             upsert_metadata = timeline_metadata
         records_to_store.extend(_timeline_days_to_records(timeline_days, range_start, range_end))
+
+    # Providers return climatological estimates for days that have not happened yet.
+    # Drop them before they reach the store or the in-memory cache, so those days stay
+    # "missing" rather than being served as data.
+    timezone_name = (upsert_metadata or {}).get("timezone") or (upsert_metadata or {}).get("tz")
+    today = local_today(timezone_name) if timezone_name else get_local_today(location)
+    records_to_store = drop_future_records(records_to_store, today)
 
     if records_to_store:
         await store.upsert(location, records_to_store, metadata=upsert_metadata)
