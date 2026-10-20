@@ -7,6 +7,7 @@ No authentication required (social media crawlers don't have app credentials).
 import io
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Annotated, Optional
 
@@ -33,6 +34,7 @@ _REF_YEAR = "#51cf66"
 _AVG_LINE = "#ffffff"
 _TREND_LINE = "#C8C400"
 _TICK_COLOR = "#cccccc"
+_AXIS_LINE = (236 / 255, 236 / 255, 236 / 255, 0.35)  # matches the web chart's axis border
 _TITLE_COLOR = (1.0, 1.0, 1.0, 0x66 / 0xFF)  # white at ~40% opacity
 _FONT_FAMILY = ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"]
 
@@ -238,6 +240,27 @@ def _compute_bar_colors(years: list, temps: list, ref_year) -> list:
     return [_color_for_temp(t, mean, std_dev) for t in temps]
 
 
+def _temperature_axis_extents(temps) -> tuple:
+    """Return (min, max, step) for the temperature axis.
+
+    Mirrors calculateTemperatureRange() in web/src/api/temperature/client.ts and
+    getTemperatureLinearAxisExtents() in web/src/chart/chart.ts so the preview image
+    and the share page chart use the same axis.
+    """
+    actual_min = min(temps)
+    actual_max = max(temps)
+    lo = actual_min - 1 if float(actual_min).is_integer() else math.floor(actual_min)
+    hi = actual_max + 1 if float(actual_max).is_integer() else math.ceil(actual_max)
+    temp_range = hi - lo
+    if temp_range <= 10:
+        step = 1
+    elif temp_range <= 20:
+        step = 2
+    else:
+        step = 5
+    return math.floor(lo / step) * step, math.ceil(hi / step) * step, step
+
+
 def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:
     """Render a horizontal bar chart of per-year temperatures as PNG bytes."""
     import matplotlib
@@ -287,14 +310,8 @@ def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:
     intercept = mean_t - slope_per_year * mean_y
     trend_temps = [slope_per_year * y + intercept for y in years]
 
-    # Axis limits
-    t_min = min(temps)
-    t_max = max(temps)
-    span = t_max - t_min
-    pad_low = max(span * 0.15, 2.0)
-    pad_high = max(span * 0.12, 1.5)
-    x_min = t_min - pad_low
-    x_max = t_max + pad_high
+    # Axis limits — same integer-aligned extents as the share page chart
+    x_min, x_max, x_step = _temperature_axis_extents(temps)
     y_min_axis = min(years) - 0.5
     y_max_axis = max(years) + 0.5
 
@@ -321,22 +338,23 @@ def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:
     ax = fig.add_axes([0.24, 0.06, 0.52, 0.80])
     ax.set_facecolor("none")  # transparent so figure-level gradient shows through
 
-    # Historical average (excludes ref_year) — white dotted vertical line
+    # Historical average (excludes ref_year) — solid white vertical line
     hist_temps = [t for y, t in zip(years, temps) if y != ref_year]
     if hist_temps:
         avg = sum(hist_temps) / len(hist_temps)
         ax.axvline(
             avg,
             color=_AVG_LINE,
-            linestyle=":",
+            linestyle="-",
             linewidth=2,
             alpha=0.9,
             zorder=1,
         )
 
-    # Horizontal bars: ref_year in green, historical years in climate-stripes colours
+    # Horizontal bars start at the left axis edge (not at 0°), as on the share page.
+    # Colours come from the real temperatures; only the bar geometry is shifted.
     bar_colors = _compute_bar_colors(years, temps, ref_year)
-    ax.barh(years, temps, color=bar_colors, height=0.75, zorder=2, alpha=0.9)
+    ax.barh(years, [t - x_min for t in temps], left=x_min, color=bar_colors, height=0.75, zorder=2, alpha=0.9)
 
     # Trend line — opacity maps to statistical significance via |gradient_factor|
     trend_alpha = min(1.0, max(0.05, abs(gf)))
@@ -370,9 +388,14 @@ def _render_chart(share: dict, records: list, show_title: bool = True) -> bytes:
     ax.set_ylabel("")
     ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0f}{unit_symbol}"))
     ax.tick_params(colors=_TICK_COLOR, which="both", labelsize=11)
+    ax.xaxis.set_major_locator(MultipleLocator(x_step))
     ax.yaxis.set_major_locator(MultipleLocator(5))
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+    # Keep the left (year) and top (temperature) axis lines so the bars visibly start at an axis
+    for name, spine in ax.spines.items():
+        if name in ("left", "top"):
+            spine.set_color(_AXIS_LINE)
+        else:
+            spine.set_visible(False)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor())

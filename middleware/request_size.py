@@ -5,14 +5,11 @@ import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from utils.ip_utils import get_client_ip
-
 logger = logging.getLogger(__name__)
 
 
 async def request_size_middleware(request: Request, call_next):
     """Middleware to enforce request size limits and validate content types."""
-    client_ip = get_client_ip(request)
 
     # Only apply to POST/PUT/PATCH requests with bodies
     if request.method in ["POST", "PUT", "PATCH"]:
@@ -21,7 +18,7 @@ async def request_size_middleware(request: Request, call_next):
 
         # Check content type for JSON endpoints
         if request.url.path.startswith("/analytics") and not content_type.startswith("application/json"):
-            logger.warning(f"⚠️  INVALID CONTENT-TYPE: {content_type} | IP={client_ip} | Path={request.url.path}")
+            logger.warning(f"⚠️  INVALID CONTENT-TYPE: {content_type} | Path={request.url.path}")
             return JSONResponse(
                 status_code=415,
                 content={
@@ -37,9 +34,7 @@ async def request_size_middleware(request: Request, call_next):
             try:
                 content_length_int = int(content_length)
                 if content_length_int > max_size:
-                    logger.warning(
-                        f"⚠️  REQUEST TOO LARGE: {content_length_int} bytes | IP={client_ip} | Path={request.url.path}"
-                    )
+                    logger.warning(f"⚠️  REQUEST TOO LARGE: {content_length_int} bytes | Path={request.url.path}")
                     return JSONResponse(
                         status_code=413,
                         content={
@@ -49,9 +44,7 @@ async def request_size_middleware(request: Request, call_next):
                         },
                     )
             except ValueError:
-                logger.warning(
-                    f"⚠️  INVALID CONTENT-LENGTH: {content_length} | IP={client_ip} | Path={request.url.path}"
-                )
+                logger.warning(f"⚠️  INVALID CONTENT-LENGTH: {content_length} | Path={request.url.path}")
 
     response = await call_next(request)
     return response

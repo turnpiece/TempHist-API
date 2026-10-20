@@ -7,6 +7,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9
+    ZoneInfo = None  # type: ignore[assignment,misc]
+
 import asyncpg  # type: ignore[import-untyped]
 
 from cache.keys import normalize_location_for_cache
@@ -23,6 +28,29 @@ def _calculate_insert_fields(records: List["DailyTemperatureRecord"]) -> Tuple[b
 
 
 logger = logging.getLogger(__name__)
+
+
+def local_today(timezone_name: Optional[str] = None) -> date:
+    """Today's date in ``timezone_name``, falling back to UTC when it is missing or invalid."""
+    if timezone_name and ZoneInfo:
+        try:
+            return datetime.now(ZoneInfo(timezone_name)).date()
+        except Exception:
+            logger.debug("Unknown timezone %r; falling back to UTC for 'today'", timezone_name)
+    return datetime.now(timezone.utc).date()
+
+
+def drop_future_records(records: List["DailyTemperatureRecord"], today: date) -> List["DailyTemperatureRecord"]:
+    """Drop records dated after ``today``.
+
+    Providers return statistical estimates for dates that have not happened yet.
+    Those are not observations and must never be persisted or served as data.
+    """
+    kept = [record for record in records if record.date <= today]
+    dropped = len(records) - len(kept)
+    if dropped:
+        logger.info("Dropped %d future-dated record(s) after %s; not persisting provider estimates", dropped, today)
+    return kept
 
 
 @dataclass(frozen=True)
@@ -1008,7 +1036,8 @@ class DailyTemperatureStore:
         """Insert or update a batch of temperature records for a location.
 
         Automatically resolves the canonical location_id using aliases and nearby
-        location matching. Creates new locations and aliases as needed.
+        location matching. Creates new locations and aliases as needed. Records dated
+        after the location's local today are dropped, never stored.
 
         Args:
             location: Location name string (will be normalized)
@@ -1087,6 +1116,14 @@ class DailyTemperatureStore:
                 async with conn.transaction():
                     location_id = await self._get_or_create_location_id(conn, location, normalized_location, metadata)
                     if location_id is None:
+                        return
+                    # Never persist days that have not happened yet in the location's
+                    # own timezone (providers return climatological estimates for them).
+                    timezone_name = self._extract_metadata_value(metadata, ["timezone", "tz"])
+                    if not timezone_name:
+                        timezone_name = await conn.fetchval("SELECT timezone FROM locations WHERE id = $1", location_id)
+                    records = drop_future_records(records, local_today(timezone_name))
+                    if not records:
                         return
                     param_rows = [
                         self._build_insert_params(

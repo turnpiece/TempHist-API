@@ -2,6 +2,7 @@
 
 import json
 import logging
+import secrets
 import time
 from datetime import datetime
 from typing import List
@@ -58,6 +59,16 @@ def _compute_percentiles(values: List[int]) -> dict:
 logger = logging.getLogger(__name__)
 
 
+# Fields that must never be served from the analytics endpoints. Records stored
+# before the IP address stopped being saved still carry it until they expire
+# (7 days), so it is stripped on read as well.
+_PRIVATE_FIELDS = ("client_ip",)
+
+
+def _without_private_fields(record: dict) -> dict:
+    return {k: v for k, v in record.items() if k not in _PRIVATE_FIELDS}
+
+
 class AnalyticsStorage:
     """Store and manage client analytics data."""
 
@@ -72,15 +83,18 @@ class AnalyticsStorage:
         self.retention_seconds = 7 * 24 * 3600  # 7 days retention
         self.max_errors_per_session = 50  # Limit errors per session
 
-    def store_analytics(self, analytics_data: AnalyticsData, client_ip: str) -> str:
-        """Store analytics data and return unique ID."""
-        analytics_id = f"analytics_{int(time.time() * 1000)}_{hash(client_ip) % 10000}"
+    def store_analytics(self, analytics_data: AnalyticsData) -> str:
+        """Store analytics data and return unique ID.
+
+        The client's IP address is deliberately not stored: nothing reads it back
+        and these records are served by the public analytics endpoints.
+        """
+        analytics_id = f"analytics_{int(time.time() * 1000)}_{secrets.randbelow(10000)}"
 
         # Prepare data for storage
         analytics_record = {
             "id": analytics_id,
             "timestamp": datetime.now().isoformat(),
-            "client_ip": client_ip,
             "session_duration": analytics_data.session_duration,
             "api_calls": analytics_data.api_calls,
             "api_failure_rate": analytics_data.api_failure_rate,
@@ -325,7 +339,7 @@ class AnalyticsStorage:
             for record in records:
                 if record:
                     record_str = record.decode("utf-8") if isinstance(record, bytes) else record
-                    analytics_records.append(json.loads(record_str))
+                    analytics_records.append(_without_private_fields(json.loads(record_str)))
 
             return analytics_records
 
