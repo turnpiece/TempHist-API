@@ -2,6 +2,22 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-17] - Shares Carry Their Country (unreleased)
+
+P1-187 (#151). Share pages and the feed only showed a country flag for the 20 preapproved locations, because the web app matched the city name against that list and the API never said which country a share is in. Kirkenes, Madrid, Greater London and most other places had no flag.
+
+### Added
+
+- **`country_code` on shares.** `GET /v1/shares/{id}` and `GET /v1/shares` now return the share's ISO 3166-1 alpha-2 `country_code`, or `null` when it could not be determined. New `country_code` column on `shares` (added automatically).
+- **`POST /v1/shares` accepts an optional `country_code`** (validated; `uk` is accepted as `GB`; `EU` and unknown codes are rejected with 422). When it is omitted the API works it out: a preapproved location by ID or name, then the country named at the end of `City, Region, Country` (full name, or `UK`, `USA` or `UAE`: `London, UK` is `GB`), then the Open-Meteo geocoder (nearest hit within 100 km of the share's coordinates, or an exact-name hit when every match is in the same country). Anything still ambiguous is stored as `null` rather than guessed.
+- **`python -m scripts.backfill_share_country`** fills in existing shares (dry run by default, `--execute` to apply). It loads the preapproved locations and uses the Redis client for the geocoder's cache, as the app does at startup. It also deletes each updated share's `share:{id}` Redis entry, since `GET /v1/shares/{id}` caches shares for 30 days.
+
+### Note
+
+The web app still needs to use `country_code` for the feed cards and share page (and send it when creating a share) before the flags appear.
+
+---
+
 ## [2026-10-17] - Client IP Addresses Are No Longer Stored or Logged (unreleased)
 
 P1-184. The client IP address was saved with every analytics record and written to many request and error log lines.
@@ -16,6 +32,22 @@ P1-184. The client IP address was saved with every analytics record and written 
 
 - The IP is still used (not logged) for the per-IP rate limits and the IP whitelist/blacklist. Blocking abusive clients by address is expected to be done at the edge (Cloudflare).
 - Not changed: `GET /rate-limit-status` still echoes the caller's own address back to that caller.
+
+---
+
+## [2026-10-16] - Share Preview Image Matches the Chart (unreleased)
+
+P1-183 (#145). The share preview image (`GET /v1/og/{share_id}.png`) drew its bars from 0° rather than from the left axis, so for locations with cold or mixed-sign years (e.g. Kirkenes) it looked nothing like the chart on the share page.
+
+### Fixed
+
+- **Bars now start at the left edge of the chart**, as on the share page, instead of pivoting around the 0° tick.
+- The temperature axis uses the same integer-aligned min/max and tick step (1, 2 or 5) as the web chart, replacing the old free-form padding. A new `_temperature_axis_extents()` mirrors the web's `calculateTemperatureRange()` and `getTemperatureLinearAxisExtents()`.
+- The left (year) and top (temperature) axis lines are drawn, and the average line is solid rather than dotted, as in the web chart.
+
+### Note
+
+`Cache-Control` on the image is 24 h and social platforms cache previews for longer, so existing shares pick up the new image once those caches expire.
 
 ---
 
