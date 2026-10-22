@@ -1,20 +1,22 @@
 """Work out which country a share is in, so clients can show its flag.
 
-Resolution order for a share (see resolve_share_country_code):
+Resolution order for a share (see resolve_share_country):
   1. a country code the client supplied (validated),
   2. a preapproved location (by ID, or by name + country),
   3. the country at the end of a "City, Region, Country" string,
-  4. the geocoder, for bare names such as "Madrid".
+  4. Open-Meteo's geocoder, for bare names such as "Madrid",
+  5. Mapbox's top exact-name match, to break ties the previous step won't guess at
+     ("Kyoto" also exists in Tanzania; Mapbox ranks the Japanese one first).
 """
 
 import logging
 import math
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 import pycountry
 
 import routers.locations as locations_module
-from routers.locations import COUNTRY_CODE_ALIASES, _geocode_open_meteo
+from routers.locations import COUNTRY_CODE_ALIASES, _fold_name, _geocode_mapbox, _geocode_open_meteo
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +109,100 @@ def _pick_geocoder_country(
     return countries.pop() if len(countries) == 1 else None
 
 
-async def _country_code_from_geocoder(
+def _explain_geocoder_miss(
+    city: str, places: List[dict], latitude: Optional[float], longitude: Optional[float]
+) -> str:
+    """Why _pick_geocoder_country found nothing, for the backfill's report."""
+    named = [p for p in places if (p.get("name") or "").strip().lower() == city.lower() and p.get("country_code")]
+    if not named:
+        return "Open-Meteo has no exact-name match"
+    if latitude is not None and longitude is not None:
+        return f"no Open-Meteo match within {_MAX_GEOCODE_DISTANCE_KM:.0f} km of the share's coordinates"
+    countries = ", ".join(sorted({p["country_code"] for p in named}))
+    return f"ambiguous without coordinates (Open-Meteo matches in {countries})"
+
+
+def _pick_mapbox_country(
+    city: str, places: List[dict], latitude: Optional[float], longitude: Optional[float]
+) -> tuple:
+    """Return (country_code, why_not) from Mapbox results, which arrive ranked by relevance.
+
+    Takes the top result whose name is exactly `city` (ignoring case and accents). With the
+    share's coordinates, that result must also be within _MAX_GEOCODE_DISTANCE_KM of them,
+    otherwise it's a different place with the same name.
+    """
+    if not places:
+        return None, "Mapbox returned nothing"
+    folded = _fold_name(city)
+    for place in places:
+        if not place.get("country_code") or _fold_name(place.get("name") or "") != folded:
+            continue
+        has_coordinates = place.get("latitude") is not None and place.get("longitude") is not None
+        if latitude is not None and longitude is not None and has_coordinates:
+            if _distance_km(latitude, longitude, place["latitude"], place["longitude"]) > _MAX_GEOCODE_DISTANCE_KM:
+                return None, f"Mapbox's match is more than {_MAX_GEOCODE_DISTANCE_KM:.0f} km from the share's coordinates"
+        return place["country_code"], ""
+    return None, f"Mapbox has no exact-name match (top result: {places[0].get('name')})"
+
+
+class CountryResolution(NamedTuple):
+    """A share's country, or None. `detail` is where the code came from, or why there isn't one."""
+
+    code: Optional[str]
+    detail: str
+
+
+async def _resolve_with_geocoders(
     location: str, latitude: Optional[float], longitude: Optional[float]
-) -> Optional[str]:
+) -> CountryResolution:
     city = location.split(",")[0].strip()
     if not city:
-        return None
+        return CountryResolution(None, "no place name in the location")
+
+    notes: List[str] = []
     try:
         places = await _geocode_open_meteo(city, limit=10)
-    except Exception as exc:  # the geocoder is best-effort; never fail a share over it
+    except Exception as exc:  # the geocoders are best-effort; never fail a share over them
         logger.warning("Share country geocode failed: %s", type(exc).__name__)
-        return None
-    return _pick_geocoder_country(city, places, latitude, longitude)
+        notes.append("Open-Meteo lookup failed")
+    else:
+        code = _pick_geocoder_country(city, places, latitude, longitude)
+        if code:
+            return CountryResolution(code, "Open-Meteo geocoder")
+        notes.append(_explain_geocoder_miss(city, places, latitude, longitude))
+
+    try:
+        mapbox_places = await _geocode_mapbox(city, limit=5)
+    except Exception as exc:
+        logger.warning("Share country Mapbox geocode failed: %s", type(exc).__name__)
+        notes.append("Mapbox lookup failed")
+    else:
+        code, why_not = _pick_mapbox_country(city, mapbox_places, latitude, longitude)
+        if code:
+            return CountryResolution(code, "Mapbox top match")
+        notes.append(why_not)
+    return CountryResolution(None, "; ".join(notes))
+
+
+async def resolve_share_country(
+    location: str,
+    client_code: Optional[str] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+) -> CountryResolution:
+    """Work out the share's ISO 3166-1 alpha-2 country code, or None if it can't be determined confidently.
+
+    `client_code` must already be normalised (see normalise_country_code).
+    """
+    if client_code:
+        return CountryResolution(client_code, "supplied by the client")
+    code = _country_code_from_preapproved(location)
+    if code:
+        return CountryResolution(code, "preapproved location")
+    code = _country_code_from_text(location)
+    if code:
+        return CountryResolution(code, "country named in the location")
+    return await _resolve_with_geocoders(location, latitude, longitude)
 
 
 async def resolve_share_country_code(
@@ -127,14 +211,5 @@ async def resolve_share_country_code(
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
 ) -> Optional[str]:
-    """Return the share's ISO 3166-1 alpha-2 country code, or None if it can't be determined confidently.
-
-    `client_code` must already be normalised (see normalise_country_code).
-    """
-    if client_code:
-        return client_code
-    return (
-        _country_code_from_preapproved(location)
-        or _country_code_from_text(location)
-        or await _country_code_from_geocoder(location, latitude, longitude)
-    )
+    """Like resolve_share_country, but just the code."""
+    return (await resolve_share_country(location, client_code, latitude, longitude)).code

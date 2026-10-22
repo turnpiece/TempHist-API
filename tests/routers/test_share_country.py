@@ -8,6 +8,7 @@ import pytest
 from routers._share_country import (
     _pick_geocoder_country,
     normalise_country_code,
+    resolve_share_country,
     resolve_share_country_code,
 )
 from scripts.backfill_share_country import backfill
@@ -41,8 +42,12 @@ class TestResolveShareCountryCode:
     @pytest.fixture(autouse=True)
     def no_geocoder(self):
         """Resolution must not need the network unless a test opts in."""
-        with patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])) as geocode:
+        with (
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])) as geocode,
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])) as mapbox,
+        ):
             self.geocode = geocode
+            self.mapbox = mapbox
             yield
 
     async def test_client_code_wins(self):
@@ -138,7 +143,10 @@ class TestBackfill:
 
     async def test_dry_run_changes_nothing(self):
         store, r = self._store(self.SHARES), MagicMock()
-        with patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])):
+        with (
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])),
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])),
+        ):
             summary = await backfill(store, r, execute=False)
         assert summary == {"missing": 2, "resolved": 1, "unresolved": 1, "updated": 0}
         store.set_country_code.assert_not_called()
@@ -146,8 +154,126 @@ class TestBackfill:
 
     async def test_execute_updates_resolved_shares_and_clears_their_cache(self):
         store, r = self._store(self.SHARES), MagicMock()
-        with patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])):
+        with (
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])),
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])),
+        ):
             summary = await backfill(store, r, execute=True)
         assert summary["updated"] == 1
         store.set_country_code.assert_awaited_once_with("aaaaaaaa", "NO")
         r.delete.assert_called_once_with("share:aaaaaaaa")
+
+
+def _place(name, country, lat=None, lon=None):
+    return {"name": name, "country_code": country, "latitude": lat, "longitude": lon}
+
+
+class TestMapboxTiebreak:
+    """When Open-Meteo's exact-name hits span several countries, Mapbox's top exact-name hit decides."""
+
+    @pytest.fixture(autouse=True)
+    def geocoders(self):
+        with (
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])) as open_meteo,
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])) as mapbox,
+        ):
+            self.open_meteo, self.mapbox = open_meteo, mapbox
+            yield
+
+    async def test_breaks_a_tie_between_countries(self):
+        self.open_meteo.return_value = [_place("Kyoto", "JP"), _place("Kyoto", "TZ")]
+        self.mapbox.return_value = [_place("Kyoto", "JP"), _place("Kyotomanyi", "UG")]
+        assert await resolve_share_country("Kyoto") == ("JP", "Mapbox top match")
+
+    async def test_finds_places_open_meteo_does_not_list(self):
+        # Macau SAR isn't a populated place in GeoNames, so Open-Meteo only has the villages
+        self.open_meteo.return_value = [_place("Macau", "FR"), _place("Macau", "BR")]
+        self.mapbox.return_value = [_place("Macau", "MO"), _place("Macaúbas", "BR"), _place("Macau", "BR")]
+        assert (await resolve_share_country("Macau")).code == "MO"
+
+    async def test_open_meteo_still_goes_first_and_mapbox_is_not_called(self):
+        self.open_meteo.return_value = [_place("Madrid", "ES")]
+        assert await resolve_share_country("Madrid") == ("ES", "Open-Meteo geocoder")
+        self.mapbox.assert_not_called()
+
+    async def test_name_comparison_ignores_case_and_accents(self):
+        self.mapbox.return_value = [_place("Ōta", "JP")]
+        assert (await resolve_share_country("ota")).code == "JP"
+
+    async def test_no_exact_name_match_is_left_unresolved_with_a_reason(self):
+        self.open_meteo.return_value = [_place("Ota", c) for c in ("NG", "FR", "PT")]
+        self.mapbox.return_value = [_place("Otaru", "JP"), _place("Ota-shi", "JP")]
+        result = await resolve_share_country("Ota")
+        assert result.code is None
+        assert "ambiguous without coordinates (Open-Meteo matches in FR, NG, PT)" in result.detail
+        assert "Mapbox has no exact-name match (top result: Otaru)" in result.detail
+
+    async def test_coordinates_reject_a_mapbox_match_in_another_place(self):
+        self.mapbox.return_value = [_place("Birmingham", "US", 33.52, -86.8)]
+        result = await resolve_share_country("Birmingham", latitude=52.48, longitude=-1.9)
+        assert result.code is None
+        assert "Mapbox's match is more than 100 km from the share's coordinates" in result.detail
+
+    async def test_coordinates_accept_a_nearby_mapbox_match(self):
+        self.mapbox.return_value = [_place("Birmingham", "GB", 52.48, -1.9)]
+        assert (await resolve_share_country("Birmingham", latitude=52.5, longitude=-1.9)).code == "GB"
+
+    async def test_reason_when_neither_geocoder_knows_the_name(self):
+        result = await resolve_share_country("Nowhereville")
+        assert result == (None, "Open-Meteo has no exact-name match; Mapbox returned nothing")
+
+    async def test_reason_when_coordinates_match_nothing_nearby(self):
+        self.open_meteo.return_value = [_place("Springfield", "US", 39.8, -89.6)]
+        result = await resolve_share_country("Springfield", latitude=51.5, longitude=-0.1)
+        assert "no Open-Meteo match within 100 km of the share's coordinates" in result.detail
+
+    async def test_open_meteo_failure_falls_through_to_mapbox(self):
+        self.open_meteo.side_effect = RuntimeError("boom")
+        self.mapbox.return_value = [_place("Kyoto", "JP")]
+        assert (await resolve_share_country("Kyoto")).code == "JP"
+
+    async def test_both_geocoders_failing_is_reported_not_raised(self):
+        self.open_meteo.side_effect = RuntimeError("boom")
+        self.mapbox.side_effect = RuntimeError("boom")
+        assert await resolve_share_country("Kyoto") == (None, "Open-Meteo lookup failed; Mapbox lookup failed")
+
+
+class TestResolutionDetail:
+    @pytest.fixture(autouse=True)
+    def no_geocoder(self):
+        with (
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])),
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])),
+        ):
+            yield
+
+    @pytest.mark.parametrize(
+        "location,client_code,expected",
+        [
+            ("Kirkenes", "NO", ("NO", "supplied by the client")),
+            ("Dublin", None, ("IE", "preapproved location")),
+            ("Kirkenes, Finnmark, Norway", None, ("NO", "country named in the location")),
+            (" , ", None, (None, "no place name in the location")),
+        ],
+    )
+    async def test_detail_says_where_the_code_came_from(self, location, client_code, expected):
+        assert await resolve_share_country(location, client_code) == expected
+
+
+class TestBackfillReport:
+    async def test_report_says_where_each_country_came_from_or_why_it_is_missing(self, capsys):
+        store = MagicMock()
+        store.list_shares_missing_country = AsyncMock(
+            return_value=[
+                {"id": "aaaaaaaa", "location": "Kirkenes, Finnmark, Norway", "latitude": None, "longitude": None},
+                {"id": "bbbbbbbb", "location": "Nowhereville", "latitude": None, "longitude": None},
+            ]
+        )
+        with (
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])),
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])),
+        ):
+            await backfill(store, None, execute=False)
+        out = capsys.readouterr().out
+        assert "NO aaaaaaaa  'Kirkenes, Finnmark, Norway'  (country named in the location)" in out
+        assert "?  bbbbbbbb  'Nowhereville'  (left NULL: Open-Meteo has no exact-name match; Mapbox returned nothing)" in out

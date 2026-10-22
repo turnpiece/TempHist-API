@@ -29,7 +29,7 @@ import redis
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import routers.locations as locations_module  # noqa: E402
-from routers._share_country import resolve_share_country_code  # noqa: E402
+from routers._share_country import resolve_share_country  # noqa: E402
 from utils.share_store import ShareStore  # noqa: E402
 
 
@@ -53,15 +53,15 @@ async def backfill(store: ShareStore, r: Optional[redis.Redis], execute: bool) -
 
     summary = {"missing": len(shares), "resolved": 0, "unresolved": 0, "updated": 0}
     for share in shares:
-        code = await resolve_share_country_code(
+        code, detail = await resolve_share_country(
             share["location"], None, latitude=share["latitude"], longitude=share["longitude"]
         )
         if code is None:
             summary["unresolved"] += 1
-            print(f"  ?  {share['id']}  {share['location']!r}  (left NULL)")
+            print(f"  ?  {share['id']}  {share['location']!r}  (left NULL: {detail})")
             continue
         summary["resolved"] += 1
-        print(f"  {code} {share['id']}  {share['location']!r}")
+        print(f"  {code} {share['id']}  {share['location']!r}  ({detail})")
         if execute and await store.set_country_code(share["id"], code):
             summary["updated"] += 1
             if r is not None:
