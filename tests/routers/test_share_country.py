@@ -87,6 +87,23 @@ class TestResolveShareCountryCode:
         assert await resolve_share_country_code(location) == expected
         self.geocode.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "location,expected",
+        [
+            ("Moscow, Russia", "RU"),
+            ("Istanbul, Turkey", "TR"),
+            ("Abidjan, Ivory Coast", "CI"),
+            ("Sarajevo, Bosnia & Herzegovina", "BA"),
+            ("Kinshasa, Congo - Kinshasa", "CD"),
+            ("Hong Kong, Hong Kong SAR China", "HK"),
+            ("Oxford, England", "GB"),
+            ("Edinburgh, Scotland", "GB"),
+        ],
+    )
+    async def test_country_names_pycountry_does_not_know(self, location, expected):
+        assert await resolve_share_country_code(location) == expected
+        self.geocode.assert_not_called()
+
     async def test_region_or_state_code_at_the_end_is_not_a_country(self):
         # "IL" is Israel's code, but here it's a US state; a region name is not a country either
         assert await resolve_share_country_code("Springfield, IL") is None
@@ -106,6 +123,62 @@ class TestResolveShareCountryCode:
 
     async def test_unresolvable(self):
         assert await resolve_share_country_code("Nowhereville") is None
+
+
+class TestPopularFallback:
+    """Bare names that aren't preapproved resolve from the popular (user-selected) locations."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.metadata = {
+            "oxford_england_united_kingdom": {"name": "Oxford", "country_code": "GB"},
+            "worcester_england_united_kingdom": {"name": "Worcester", "country_code": "GB"},
+            "worcester_massachusetts_united_states": {"name": "Worcester", "country_code": "US"},
+            "malaga": {"name": "Málaga", "country_code": "ES"},
+            "no_country": {"name": "Nowhereville"},
+        }
+        self.tracker = MagicMock()
+        self.tracker.get_popular_from_selections.return_value = [(i, 1) for i in self.metadata]
+        self.tracker.get_location_metadata.side_effect = self.metadata.get
+        with (
+            patch("routers._share_country.get_usage_tracker", return_value=self.tracker),
+            patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])) as geocode,
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])) as mapbox,
+        ):
+            self.geocode = geocode
+            self.mapbox = mapbox
+            yield
+
+    async def test_bare_name_takes_the_popular_locations_country(self):
+        assert await resolve_share_country_code("Oxford") == "GB"
+        self.geocode.assert_not_called()
+        self.mapbox.assert_not_called()
+
+    async def test_match_ignores_case_and_accents(self):
+        assert await resolve_share_country_code("malaga") == "ES"
+        assert await resolve_share_country_code("MÁLAGA") == "ES"
+
+    async def test_name_popular_in_two_countries_is_left_alone(self):
+        assert await resolve_share_country_code("Worcester") is None
+
+    async def test_name_with_a_region_is_not_looked_up(self):
+        # "Oxford, Mississippi" is not the popular Oxford
+        assert await resolve_share_country_code("Oxford, Mississippi") is None
+
+    async def test_metadata_without_a_country_is_ignored(self):
+        assert await resolve_share_country_code("Nowhereville") is None
+
+    async def test_popular_beats_the_geocoder(self):
+        self.geocode.return_value = [{"name": "Oxford", "country_code": "US", "latitude": 34.4, "longitude": -89.5}]
+        assert await resolve_share_country_code("Oxford") == "GB"
+
+    async def test_no_tracker_falls_through_to_the_geocoder(self):
+        with patch("routers._share_country.get_usage_tracker", return_value=None):
+            assert await resolve_share_country_code("Oxford") is None
+
+    async def test_tracker_failure_falls_through(self):
+        self.tracker.get_popular_from_selections.side_effect = RuntimeError("redis down")
+        assert await resolve_share_country_code("Oxford") is None
 
 
 class TestPickGeocoderCountry:

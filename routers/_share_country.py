@@ -4,8 +4,9 @@ Resolution order for a share (see resolve_share_country):
   1. a country code the client supplied (validated),
   2. a preapproved location (by ID, or by name + country),
   3. the country at the end of a "City, Region, Country" string,
-  4. Open-Meteo's geocoder, for bare names such as "Madrid",
-  5. Mapbox's top exact-name match, to break ties the previous step won't guess at
+  4. a popular (user-selected) location of that name, when they all agree on the country,
+  5. Open-Meteo's geocoder, for bare names such as "Madrid",
+  6. Mapbox's top exact-name match, to break ties the previous step won't guess at
      ("Kyoto" also exists in Tanzania; Mapbox ranks the Japanese one first).
 """
 
@@ -16,12 +17,60 @@ from typing import List, NamedTuple, Optional
 import pycountry
 
 import routers.locations as locations_module
+from cache.accessors import get_usage_tracker
+from config import POPULARITY_WINDOW_DAYS
 from routers.locations import COUNTRY_CODE_ALIASES, _fold_name, _geocode_mapbox, _geocode_open_meteo
 
 logger = logging.getLogger(__name__)
 
-# Abbreviations people write after a city that aren't a country's name or ISO code ("London, UK")
-_COUNTRY_TEXT_ALIASES = {"uk": "GB", "usa": "US", "uae": "AE"}
+# Country names and abbreviations written after a city that pycountry's exact name lookup rejects
+# ("London, UK", "Moscow, Russia", and the names iOS gives placemarks, e.g. "Bosnia & Herzegovina").
+# England, Scotland and Wales are not countries in ISO 3166-1, but a share there is a GB share.
+_COUNTRY_TEXT_ALIASES = {
+    "uk": "GB",
+    "great britain": "GB",
+    "england": "GB",
+    "scotland": "GB",
+    "wales": "GB",
+    "northern ireland": "GB",
+    "usa": "US",
+    "america": "US",
+    "uae": "AE",
+    "russia": "RU",
+    "turkey": "TR",
+    "ivory coast": "CI",
+    "cape verde": "CV",
+    "brunei": "BN",
+    "macau": "MO",
+    "macao sar china": "MO",
+    "hong kong sar china": "HK",
+    "palestine": "PS",
+    "myanmar (burma)": "MM",
+    "burma": "MM",
+    "congo - kinshasa": "CD",
+    "congo - brazzaville": "CG",
+    "democratic republic of the congo": "CD",
+    "bosnia & herzegovina": "BA",
+    "trinidad & tobago": "TT",
+    "antigua & barbuda": "AG",
+    "st. kitts & nevis": "KN",
+    "st. lucia": "LC",
+    "st. vincent & grenadines": "VC",
+    "sao tome & principe": "ST",
+    "swaziland": "SZ",
+    "east timor": "TL",
+    "falkland islands": "FK",
+    "vatican city": "VA",
+    "the netherlands": "NL",
+    "holland": "NL",
+    "the gambia": "GM",
+    "the bahamas": "BS",
+    "micronesia": "FM",
+    "u.s. virgin islands": "VI",
+}
+
+# How many of the most-selected locations to look through for a bare name.
+_POPULAR_LOOKUP_LIMIT = 500
 
 # A geocoder hit this close to the share's coordinates is taken to be the same place.
 _MAX_GEOCODE_DISTANCE_KM = 100.0
@@ -79,6 +128,37 @@ def _country_code_from_text(location: str) -> Optional[str]:
         return pycountry.countries.lookup(parts[-1]).alpha_2
     except LookupError:
         return None
+
+
+def _country_code_from_popular(location: str) -> Optional[str]:
+    """Country of a popular location with the same name as `location`, or None.
+
+    Covers places that aren't preapproved but have been selected often enough to be popular, which
+    is where the poster gets its non-preapproved names from. Their stored metadata carries a country
+    code that a bare "Oxford" lacks. Matches by name only (accent- and case-insensitive), and only when
+    every match is in the same country: if "Oxford" is popular in two countries, it's a guess. Only
+    bare names are looked up: "Oxford, Mississippi" must not take the country of a popular Oxford.
+    """
+    if "," in location:
+        return None
+    city = _fold_name(location)
+    if not city:
+        return None
+    tracker = get_usage_tracker()
+    if tracker is None:
+        return None
+    try:
+        countries = set()
+        for location_id, _score in tracker.get_popular_from_selections(
+            limit=_POPULAR_LOOKUP_LIMIT, days=POPULARITY_WINDOW_DAYS
+        ):
+            meta = tracker.get_location_metadata(location_id)
+            if meta and meta.get("country_code") and _fold_name(str(meta.get("name") or "")) == city:
+                countries.add(str(meta["country_code"]).upper())
+    except Exception as exc:  # best-effort, like the geocoder: never fail a share over it
+        logger.warning("Share country popular lookup failed: %s", type(exc).__name__)
+        return None
+    return countries.pop() if len(countries) == 1 else None
 
 
 def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -202,6 +282,9 @@ async def resolve_share_country(
     code = _country_code_from_text(location)
     if code:
         return CountryResolution(code, "country named in the location")
+    code = _country_code_from_popular(location)
+    if code:
+        return CountryResolution(code, "popular location of that name")
     return await _resolve_with_geocoders(location, latitude, longitude)
 
 

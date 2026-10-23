@@ -2,6 +2,22 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-22] - Bare City Names Now Get a Country (unreleased)
+
+Follow-up to #151. Shares created by the poster were still `country_code: null` on production (Oxford, Hastings, Worcester, Brighton...). The poster sends only a bare city name, no coordinates and no country code, and the geocoder refuses to guess when a name exists in several countries. Mobile can hit the same wall for country names `pycountry` doesn't know.
+
+### Changed
+
+- **Country resolution for shares** now tries the popular (user-selected) locations before the geocoders: a bare name such as `Oxford` takes the country stored for the popular location of that name, as long as every match agrees. Names with a region (`Oxford, Mississippi`) are not looked up this way.
+- **More country names are recognised at the end of a location string**: Russia, Turkey, Ivory Coast, Cape Verde, Brunei, Macau, Palestine, England/Scotland/Wales/Northern Ireland/Great Britain (all `GB`) and the forms iOS gives placemarks (`Bosnia & Herzegovina`, `Congo - Kinshasa`, `Hong Kong SAR China`, `Myanmar (Burma)`, `Trinidad & Tobago`...).
+- **`scripts.backfill_share_country`** sets up the usage tracker so the popular-locations lookup works there too.
+
+### Note
+
+The real fix is for the poster and mobile app to send `country_code` (and coordinates) when creating a share; this only makes the API cope better when they don't. Popular locations only cover names selected in the last `POPULARITY_WINDOW_DAYS`, so run the backfill soon after deploying.
+
+---
+
 ## [2026-10-17] - Shares Carry Their Country (unreleased)
 
 P1-187 (#151). Share pages and the feed only showed a country flag for the 20 preapproved locations, because the web app matched the city name against that list and the API never said which country a share is in. Kirkenes, Madrid, Greater London and most other places had no flag.

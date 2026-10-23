@@ -3,9 +3,10 @@
 
 Shares made before country_code existed have it NULL, so clients can't show their
 flag. This resolves the country of each such share the same way new shares are
-resolved (preapproved location, country named in the location text, then the
-geocoder using the share's coordinates when it has them) and stores it. Shares
-whose country can't be determined confidently are left NULL.
+resolved (preapproved location, country named in the location text, a popular
+location of the same name, then the geocoder using the share's coordinates when it
+has them) and stores it. Shares whose country can't be determined confidently are
+left NULL.
 
 GET /v1/shares/{id} caches each share in Redis for 30 days under `share:{id}`, so
 the cache entry of every updated share is deleted; otherwise the new country
@@ -28,8 +29,11 @@ import redis
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import cache.accessors as accessors  # noqa: E402
 import routers.locations as locations_module  # noqa: E402
+from config import USAGE_RETENTION_DAYS  # noqa: E402
 from routers._share_country import resolve_share_country  # noqa: E402
+from tracking.usage import LocationUsageTracker  # noqa: E402
 from utils.share_store import ShareStore  # noqa: E402
 
 
@@ -39,10 +43,12 @@ async def prepare_resolver(r: Optional[redis.Redis]) -> None:
     - the preapproved-locations list (empty until loaded, so name matches would otherwise find nothing)
     - the Redis client the geocoder caches its results in (without it every lookup logs a
       "Redis client not initialized" warning and nothing is cached)
+    - the usage tracker, whose popular locations resolve bare names that aren't preapproved
     """
     locations_module.locations_data, _etag, _modified = await locations_module.load_locations_data()
     if r is not None:
         locations_module.redis_client = r
+        accessors.usage_tracker = LocationUsageTracker(r, USAGE_RETENTION_DAYS)
 
 
 async def backfill(store: ShareStore, r: Optional[redis.Redis], execute: bool) -> Dict[str, int]:
