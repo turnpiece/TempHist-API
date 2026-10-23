@@ -2,6 +2,22 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-22] - Bare City Names Now Get a Country (unreleased)
+
+Follow-up to #151. Shares created by the poster were still `country_code: null` on production (Oxford, Hastings, Worcester, Brighton...). The poster sends only a bare city name, no coordinates and no country code, and the geocoder refuses to guess when a name exists in several countries. Mobile can hit the same wall for country names `pycountry` doesn't know.
+
+### Changed
+
+- **Country resolution for shares** now tries the popular (user-selected) locations before the geocoders: a bare name such as `Oxford` takes the country stored for the popular location of that name, as long as every match agrees. Names with a region (`Oxford, Mississippi`) are not looked up this way.
+- **More country names are recognised at the end of a location string**: Russia, Turkey, Ivory Coast, Cape Verde, Brunei, Macau, Palestine, England/Scotland/Wales/Northern Ireland/Great Britain (all `GB`) and the forms iOS gives placemarks (`Bosnia & Herzegovina`, `Congo - Kinshasa`, `Hong Kong SAR China`, `Myanmar (Burma)`, `Trinidad & Tobago`...).
+- **`scripts.backfill_share_country`** sets up the usage tracker so the popular-locations lookup works there too.
+
+### Note
+
+The real fix is for the poster and mobile app to send `country_code` (and coordinates) when creating a share; this only makes the API cope better when they don't. Popular locations only cover names selected in the last `POPULARITY_WINDOW_DAYS`, so run the backfill soon after deploying.
+
+---
+
 ## [2026-10-17] - Shares Carry Their Country (unreleased)
 
 P1-187 (#151). Share pages and the feed only showed a country flag for the 20 preapproved locations, because the web app matched the city name against that list and the API never said which country a share is in. Kirkenes, Madrid, Greater London and most other places had no flag.
@@ -9,8 +25,8 @@ P1-187 (#151). Share pages and the feed only showed a country flag for the 20 pr
 ### Added
 
 - **`country_code` on shares.** `GET /v1/shares/{id}` and `GET /v1/shares` now return the share's ISO 3166-1 alpha-2 `country_code`, or `null` when it could not be determined. New `country_code` column on `shares` (added automatically).
-- **`POST /v1/shares` accepts an optional `country_code`** (validated; `uk` is accepted as `GB`; `EU` and unknown codes are rejected with 422). When it is omitted the API works it out: a preapproved location by ID or name, then the country named at the end of `City, Region, Country` (full name, or `UK`, `USA` or `UAE`: `London, UK` is `GB`), then the Open-Meteo geocoder (nearest hit within 100 km of the share's coordinates, or an exact-name hit when every match is in the same country). Anything still ambiguous is stored as `null` rather than guessed.
-- **`python -m scripts.backfill_share_country`** fills in existing shares (dry run by default, `--execute` to apply). It loads the preapproved locations and uses the Redis client for the geocoder's cache, as the app does at startup. It also deletes each updated share's `share:{id}` Redis entry, since `GET /v1/shares/{id}` caches shares for 30 days.
+- **`POST /v1/shares` accepts an optional `country_code`** (validated; `uk` is accepted as `GB`; `EU` and unknown codes are rejected with 422). When it is omitted the API works it out: a preapproved location by ID or name, then the country named at the end of `City, Region, Country` (full name, or `UK`, `USA` or `UAE`: `London, UK` is `GB`), then the Open-Meteo geocoder (nearest hit within 100 km of the share's coordinates, or an exact-name hit when every match is in the same country). If that is ambiguous (`Kyoto` also exists in Tanzania, `Macau` is not a populated place in GeoNames) the top exact-name result from Mapbox, the search behind the app's location box, decides; with coordinates it must also be within 100 km of them. Anything still ambiguous is stored as `null` rather than guessed (`Ota` is).
+- **`python -m scripts.backfill_share_country`** fills in existing shares (dry run by default, `--execute` to apply). For each share it prints where the country came from, or why it was left `NULL` (no match, ambiguous countries, no coordinates). It loads the preapproved locations and uses the Redis client for the geocoder's cache, as the app does at startup. It also deletes each updated share's `share:{id}` Redis entry, since `GET /v1/shares/{id}` caches shares for 30 days.
 
 ### Note
 
