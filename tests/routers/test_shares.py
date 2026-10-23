@@ -197,6 +197,7 @@ class TestCreateShareCountryCode:
         with (
             patch("routers.shares.get_share_store", return_value=store_mock),
             patch("routers._share_country._geocode_open_meteo", new=AsyncMock(return_value=[])),
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])),
         ):
             response = client.post(
                 "/v1/shares",

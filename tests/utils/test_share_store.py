@@ -153,7 +153,10 @@ class TestBackfillScript:
         store.set_country_code = AsyncMock(return_value=True)
         r = MagicMock()
         geocode = AsyncMock(return_value=[])
-        with patch("routers._share_country._geocode_open_meteo", new=geocode):
+        with (
+            patch("routers._share_country._geocode_open_meteo", new=geocode),
+            patch("routers._share_country._geocode_mapbox", new=AsyncMock(return_value=[])),
+        ):
             summary = await backfill_share_country.backfill(store, r, execute=True)
         assert summary["updated"] == 1
         store.set_country_code.assert_awaited_once_with("aB3xY7qZ", "GB")
