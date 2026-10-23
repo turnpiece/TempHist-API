@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 
+import cache.accessors as accessors
 import routers.locations as locations_module
 from scripts import backfill_share_country
 from utils.share_store import ShareStore
@@ -132,17 +133,20 @@ class TestBackfillScript:
         """The script sets module globals the way app startup does; undo that after each test."""
         monkeypatch.setattr(locations_module, "locations_data", [])
         monkeypatch.setattr(locations_module, "redis_client", None)
+        monkeypatch.setattr(accessors, "usage_tracker", None)
 
     async def test_prepare_resolver_loads_preapproved_locations_and_redis(self):
         r = MagicMock()
         await backfill_share_country.prepare_resolver(r)
         assert locations_module.locations_data, "preapproved locations should be loaded"
         assert locations_module.redis_client is r
+        assert accessors.usage_tracker is not None, "popular locations are needed to resolve bare names"
 
     async def test_prepare_resolver_without_redis_leaves_client_unset(self):
         await backfill_share_country.prepare_resolver(None)
         assert locations_module.locations_data
         assert locations_module.redis_client is None
+        assert accessors.usage_tracker is None
 
     async def test_backfill_uses_preapproved_list_and_geocoder_cache(self):
         """Backfill must prepare the resolver: a bare preapproved name resolves without the geocoder."""
