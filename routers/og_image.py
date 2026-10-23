@@ -21,12 +21,15 @@ from routers._responses import error_responses
 from routers.dependencies import get_redis_client
 from utils.daily_temperature_store import resolve_location_cache_identity
 from utils.share_store import get_share_store
+from utils.weather import missing_past_years
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Shares"])
 
 _SHARE_CACHE_TTL = 30 * 24 * 3600  # 30 days — share records never change
 _IMG_W, _IMG_H = 1200, 630
+_CHART_CACHE_CONTROL = "public, max-age=86400"
+_PLACEHOLDER_CACHE_CONTROL = "public, max-age=300"
 
 # Brand colours — match the website / mobile app
 _BG = "#242456"
@@ -161,6 +164,7 @@ async def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optiona
     period = share["period"]
     identifier = share["identifier"]
 
+    current_year = datetime.now(timezone.utc).year
     bundle_data, _bundle_etag, _hit_slug = get_bundle_with_slug_fallback(
         redis_client, period, lookup_slugs, identifier
     )
@@ -168,16 +172,15 @@ async def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optiona
         try:
             data = json.loads(bundle_data.decode() if isinstance(bundle_data, bytes) else bundle_data)
             records = data.get("records", [])
-            if records:
+            if records and _is_complete(records, current_year, share, "bundle"):
                 return records
         except Exception as exc:
             logger.warning("Redis bundle read failed for share %s: %s", share.get("id"), exc)
 
     logger.info("OG bundle miss for share=%s, falling back to per-year records", share.get("id"))
-    current_year = datetime.now(timezone.utc).year
     years = list(range(1950, current_year + 1))
-    records = []
     for try_slug in lookup_slugs:
+        records = []
         keys = [rec_key(period, try_slug, identifier, y) for y in years]
         try:
             values = redis_client.mget(keys)
@@ -187,13 +190,27 @@ async def _get_bundle_records(share: dict, redis_client: redis.Redis) -> Optiona
                         records.append(json.loads(value.decode() if isinstance(value, bytes) else value))
                     except Exception as _e:
                         logger.debug("Could not decode OG per-year record: %s", _e)
-            if records:
+            if records and _is_complete(records, current_year, share, "per-year"):
                 logger.info("OG per-year fallback: share=%s found %d records", share.get("id"), len(records))
                 return records
         except Exception as exc:
             logger.warning("Redis per-year read failed for share %s: %s", share.get("id"), exc)
 
     return None
+
+
+def _is_complete(records: list, current_year: int, share: dict, source: str) -> bool:
+    """True when ``records`` covers every historical year; a partial set must never be drawn as the full series."""
+    missing = missing_past_years((r.get("year") for r in records), current_year)
+    if missing:
+        logger.warning(
+            "OG %s records incomplete for share=%s: %d historical years missing (%s)",
+            source,
+            share.get("id"),
+            len(missing),
+            missing,
+        )
+    return not missing
 
 
 def _celsius_to_fahrenheit(t: float) -> float:
@@ -523,14 +540,24 @@ async def og_image(
 
     records = await _get_bundle_records(share, redis_client)
 
-    # Redis cold (or CACHE_ENABLED=false) — fetch live as a fallback
+    # Redis cold, partial (or CACHE_ENABLED=false) — fetch live as a fallback
     if not records:
         records = await _fetch_records_live(share, redis_client)
+        current_year = datetime.now(timezone.utc).year
+        if records and not _is_complete(records, current_year, share, "live"):
+            records = None
 
+    # Only a full chart is cached for long; a placeholder is a stopgap that must not outlive the data gap.
+    cache_control = _CHART_CACHE_CONTROL
     try:
-        png = _render_chart(share, records, show_title=show_title) if records else _render_placeholder(share)
-    except Exception as exc:
+        if records:
+            png = _render_chart(share, records, show_title=show_title)
+        else:
+            png = _render_placeholder(share)
+            cache_control = _PLACEHOLDER_CACHE_CONTROL
+    except Exception:
         logger.exception("OG image render failed for share %s", share_id)
+        cache_control = _PLACEHOLDER_CACHE_CONTROL
         try:
             png = _render_placeholder(share)
         except Exception:
@@ -539,5 +566,5 @@ async def og_image(
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": cache_control},
     )
