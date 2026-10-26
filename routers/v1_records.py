@@ -76,7 +76,7 @@ from utils.temperature import (
     get_friendly_date,
 )
 from utils.validation import validate_location_for_ssrf
-from utils.weather import create_metadata, get_year_range, track_missing_year
+from utils.weather import create_metadata, get_year_range, missing_past_years, track_missing_year
 from utils.weather_data import get_temperature_series
 from utils.weather_provider import LocationNotFoundError, fetch_timeline_days
 
@@ -601,7 +601,34 @@ async def _collect_rolling_window_values(
         aggregated.append(avg_temp)
         coverage_details.append(coverage_entry)
 
+    _log_dropped_historical_years(location, period, month, day, current_year_now, missing_years)
+
     return values, aggregated, missing_years, coverage_details
+
+
+def _log_dropped_historical_years(
+    location: str, period: str, month: int, day: int, current_year: int, missing_years: List[Dict]
+) -> None:
+    """Warn once per computation about historical years that were dropped, with the reason for each.
+
+    Dropped years are otherwise only visible in the response metadata, which makes a partial series
+    (see P1-190) hard to trace back to a cause from the logs.
+    """
+    dropped = [e for e in missing_years if e.get("year") is not None and e["year"] < current_year]
+    if not dropped:
+        return
+    reasons: Dict[str, List[int]] = {}
+    for entry in dropped:
+        reasons.setdefault(entry.get("reason", "unknown"), []).append(entry["year"])
+    logger.warning(
+        "Dropped %d historical years for %s %s %02d-%02d: %s",
+        len(dropped),
+        sanitize_for_logging(location),
+        period,
+        month,
+        day,
+        "; ".join(f"{reason}={sorted(years)}" for reason, years in reasons.items()),
+    )
 
 
 _PERIOD_DATE_RANGE_DAYS = {"daily": 1, "weekly": 7, "monthly": 31, "yearly": 365}
@@ -1199,6 +1226,22 @@ def _enqueue_record_refresh_job(
         logger.warning("Failed to enqueue refresh job: %s", e)
 
 
+def _is_incomplete_bundle(bundle_payload: Dict, current_year: int, bundle_key_str: str) -> bool:
+    """True when a non-empty cached bundle is missing historical years (and so was assembled from a partial set)."""
+    records = bundle_payload.get("records")
+    if not records:
+        return False
+    missing = missing_past_years((r.get("year") for r in records), current_year)
+    if missing:
+        logger.warning(
+            "Ignoring incomplete bundle %s: %d historical years missing (%s)",
+            bundle_key_str,
+            len(missing),
+            missing,
+        )
+    return bool(missing)
+
+
 def _try_serve_bundle_cache(
     *,
     redis_client: redis.Redis,
@@ -1230,6 +1273,11 @@ def _try_serve_bundle_cache(
         data_str = bundle_data.decode("utf-8") if isinstance(bundle_data, bytes) else bundle_data
         bundle_payload = json.loads(data_str)
         bundle_etag_str = bundle_etag.decode("utf-8") if isinstance(bundle_etag, bytes) else bundle_etag
+
+        # A partial bundle (written before incomplete sets were rejected) must not be served, or 304'd
+        # against: fall through so the missing years are fetched and the bundle is rebuilt.
+        if _is_incomplete_bundle(bundle_payload, current_year, bundle_key_str):
+            return None
 
         if if_none_match:
             from cache.core import ETagGenerator
@@ -1361,6 +1409,8 @@ async def _try_serve_stale_bundle_for_current_year(
         data_str = bundle_data.decode("utf-8") if isinstance(bundle_data, bytes) else bundle_data
         bundle_payload = json.loads(data_str)
         if not bundle_payload.get("records"):
+            return None
+        if _is_incomplete_bundle(bundle_payload, current_year, bundle_key(period, slug, identifier)):
             return None
 
         data = _rebuild_full_response_from_values(
@@ -1499,6 +1549,17 @@ def _try_store_temporal_cache(
         logger.warning("Failed to store in temporal cache: %s", e)
 
 
+def _log_uncached_partial_bundle(location: str, period: str, identifier: str, past_missing: List[int]) -> None:
+    logger.warning(
+        "Not caching bundle for %s %s/%s: %d historical years missing (%s)",
+        sanitize_for_logging(location),
+        period,
+        identifier,
+        len(past_missing),
+        past_missing,
+    )
+
+
 async def _fetch_fresh_and_build_cache(
     *,
     redis_client: redis.Redis,
@@ -1524,8 +1585,17 @@ async def _fetch_fresh_and_build_cache(
     current_year_missing = "metadata" in data and any(
         e.get("year") == current_year for e in data["metadata"].get("missing_years", [])
     )
+    past_missing = missing_past_years(per_year_records.keys(), current_year)
     bundle_etag = None
-    if not current_year_missing:
+    if past_missing:
+        # Never cache a bundle with holes in it: it would be served (and drawn) as if it were the full series.
+        # The per-year records stored above are kept, so a later request only has to fetch the missing years.
+        _log_uncached_partial_bundle(location, period, identifier, past_missing)
+        year_etags = await get_year_etags(
+            redis_client, period, slug, identifier, list(per_year_records.keys()), lookup_slugs=lookup_slugs
+        )
+        bundle_etag = compute_bundle_etag(year_etags)
+    elif not current_year_missing:
         year_etags = await get_year_etags(
             redis_client, period, slug, identifier, list(per_year_records.keys()), lookup_slugs=lookup_slugs
         )
@@ -1570,7 +1640,13 @@ async def _assemble_cached_record(
     year_etags = await get_year_etags(
         redis_client, period, slug, identifier, list(year_data.keys()), lookup_slugs=lookup_slugs
     )
-    _, bundle_etag = await assemble_and_cache(redis_client, period, slug, identifier, year_data, year_etags)
+    # ``year_data`` has had its missing years filled in place by now, so what is still absent is a real gap.
+    past_missing = missing_past_years(year_data.keys(), current_year)
+    if past_missing:
+        _log_uncached_partial_bundle(location, period, identifier, past_missing)
+        bundle_etag = compute_bundle_etag(year_etags)
+    else:
+        _, bundle_etag = await assemble_and_cache(redis_client, period, slug, identifier, year_data, year_etags)
 
     if if_none_match and ETagGenerator.matches_etag(bundle_etag, if_none_match):
         response.status_code = 304
@@ -1774,7 +1850,9 @@ async def get_record(
         if bundle_etag is None:
             bundle_etag = _resolve_bundle_etag(redis_client, period, slug, identifier, data)
 
-        if CACHE_ENABLED and celsius_records:
+        if CACHE_ENABLED and celsius_records and not missing_past_years(
+            (r.get("year") for r in celsius_records), current_year
+        ):
             _try_store_temporal_cache(
                 redis_client=redis_client, period=period, location=location,
                 end_date=end_date, celsius_records=celsius_records,

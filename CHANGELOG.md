@@ -2,6 +2,27 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-23] - Incomplete Year Sets Are Rejected (unreleased)
+
+P1-190 (#163). Some yearly share images showed bars for only a handful of years (every fourth year for Taito, Japan) while weekly shares for the same place were fine. The bars were real data: a partial set of per-year records had been cached as a bundle, and the OG image route drew whatever non-empty set it found.
+
+### Fixed
+
+- **Partial bundles are no longer cached.** A bundle is only written when every historical year in the 50-year range is present (the current year is exempt, as before). Per-year records that did succeed are still kept, so a later request only fetches what is missing. The temporal cache applies the same rule.
+- **Existing partial bundles are ignored** when read, so they heal on the next request instead of being served (or answered with `304`) until they expire.
+- **The OG image route rejects incomplete sets** from the bundle, the per-year keys and the live fetch. If the live fetch is also incomplete it renders the placeholder rather than a misleading chart.
+- **Placeholder and failed-render images are cached for 5 minutes**, not 24 hours, so a gap in the data can't stick in the CDN or with crawlers after it heals. Full charts keep the 24-hour cache.
+
+### Added
+
+- A single `WARNING` per computation lists the historical years that were dropped and why (`coverage_below_threshold`, `timeline_error`, ...). Until now only the current year was logged, so a partial series could not be traced from the logs.
+
+### Note
+
+The root cause of the missing years on develop is still unconfirmed: the logs show no rate limiting. The new warning should show the reason the next time it happens. A location with a permanent gap in its history now renders the placeholder instead of a partial chart and is recomputed per request rather than served from a cached bundle.
+
+---
+
 ## [2026-10-22] - Bare City Names Now Get a Country (unreleased)
 
 Follow-up to #151. Shares created by the poster were still `country_code: null` on production (Oxford, Hastings, Worcester, Brighton...). The poster sends only a bare city name, no coordinates and no country code, and the geocoder refuses to guess when a name exists in several countries. Mobile can hit the same wall for country names `pycountry` doesn't know.

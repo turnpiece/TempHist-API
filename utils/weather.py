@@ -2,7 +2,7 @@
 
 from datetime import date as dt_date
 from datetime import timedelta
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 import redis
 
@@ -12,6 +12,16 @@ from config import FORECAST_DAY_CACHE_DURATION_SECONDS, FORECAST_NIGHT_CACHE_DUR
 def get_year_range(current_year: int, years_back: int = 50) -> List[int]:
     """Get a list of years for historical data analysis."""
     return list(range(current_year - years_back, current_year + 1))
+
+
+def missing_past_years(present_years: Iterable[int], current_year: int, years_back: int = 50) -> List[int]:
+    """Return the historical years (before ``current_year``) in the analysis range that are absent.
+
+    The current year is excluded: it is incomplete by nature and has its own, relaxed handling.
+    A non-empty result means a record set is partial and must not be cached or drawn as if complete.
+    """
+    present = set(present_years)
+    return [y for y in get_year_range(current_year, years_back) if y < current_year and y not in present]
 
 
 def create_metadata(
