@@ -1,4 +1,7 @@
 $kind: http-request
 url: "{{baseURL}}/analytics/session/test-session-001"
 method: GET
+description: All analytics records for one session_id. Admin only.
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 order: 4000
