@@ -30,6 +30,7 @@ from routers.locations import (
     MAX_DESCRIPTION_WORDS,
     LocationItem,
     SelectionRequest,
+    _build_popular_locations,
     _find_preapproved_id,
     _geocode_mapbox,
     _geocode_open_meteo,
@@ -1797,6 +1798,50 @@ class TestSelectionEndpoint:
                 headers={"Authorization": "Bearer test-token"},
             )
         assert response.status_code == 429
+
+
+class TestPopularProximityDedup:
+    """_build_popular_locations leaves out entries near a higher-ranked one."""
+
+    META = {
+        "london": {"id": "london", "name": "London", "latitude": 51.5074, "longitude": -0.1278},
+        # ~8.5 km from central London, labelled by the device geocoder
+        "greater_london": {"id": "greater_london", "name": "Greater London", "latitude": 51.4341, "longitude": -0.1008},
+        # ~14.7 km from central London: a separate town that should still list
+        "croydon": {"id": "croydon", "name": "Croydon", "latitude": 51.3762, "longitude": -0.0982},
+        "paris": {"id": "paris", "name": "Paris", "latitude": 48.8566, "longitude": 2.3522},
+        "no_coords": {"id": "no_coords", "name": "Nowhere"},
+    }
+
+    def _build(self, ranked, limit=10, preapproved=()):
+        tracker = MagicMock()
+        tracker.get_popular_from_selections.return_value = [(i, 1) for i in ranked]
+        tracker.get_location_metadata.side_effect = self.META.get
+        with (
+            patch("routers.locations.get_usage_tracker", return_value=tracker),
+            patch("routers.locations.locations_data", list(preapproved)),
+        ):
+            return [loc["id"] for loc in _build_popular_locations(limit)]
+
+    def test_entry_near_a_higher_ranked_one_is_dropped(self):
+        assert self._build(["london", "greater_london", "paris"]) == ["london", "paris"]
+
+    def test_higher_ranked_entry_wins(self):
+        assert self._build(["greater_london", "london", "paris"]) == ["greater_london", "paris"]
+
+    def test_nearby_town_beyond_the_radius_is_kept(self):
+        assert self._build(["london", "croydon"]) == ["london", "croydon"]
+
+    def test_entries_without_coordinates_are_kept(self):
+        assert self._build(["london", "no_coords"]) == ["london", "no_coords"]
+
+    def test_dropped_entries_do_not_count_towards_the_limit(self):
+        assert self._build(["london", "greater_london", "paris"], limit=2) == ["london", "paris"]
+
+    def test_preapproved_padding_is_deduped_too(self):
+        london = MagicMock(id="london")
+        london.model_dump.return_value = self.META["london"]
+        assert self._build(["greater_london"], preapproved=[london]) == ["greater_london"]
 
 
 if __name__ == "__main__":

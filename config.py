@@ -77,6 +77,12 @@ POPULARITY_MAX_LOCATIONS = int(os.getenv("POPULARITY_MAX_LOCATIONS", "500"))
 # Croydon, Birmingham and Coventry all rank and display separately. This is NOT
 # the data-sharing radius — see METRO_CACHE_SNAP_KM for that.
 SAME_LOCATION_RADIUS_KM = float(os.getenv("SAME_LOCATION_RADIUS_KM", "2.0"))
+# Display dedup for GET /v1/locations/popular: an entry within this distance of
+# a higher-ranked entry is left out of the list, so a GPS fix labelled
+# "Greater London" doesn't sit beside London. Popularity counting is unchanged
+# (each keeps its own bucket); this only shapes what the list shows. Kept under
+# the ~15 km from central London to Croydon so neighbouring towns still list.
+POPULAR_DEDUP_RADIUS_KM = float(os.getenv("POPULAR_DEDUP_RADIUS_KM", "12.0"))
 # Metro-area cache snapping: the single data-sharing radius. Distinct places
 # within this radius of each other share one Redis temperature record for faster
 # cache hits and fewer upstream fetches. TempHist is a temperature-history app
