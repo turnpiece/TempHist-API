@@ -375,12 +375,15 @@ class TestAnalyticsEndpoint:
         assert data["status"] == "success"
 
 
-class TestAnalyticsRetrievalEndpoints:
-    """Test analytics data retrieval endpoints"""
+RETRIEVAL_PATHS = ["/analytics/summary", "/analytics/recent", "/analytics/session/test-session-123"]
 
-    def test_analytics_summary(self, client):
+
+class TestAnalyticsRetrievalEndpoints:
+    """Test analytics data retrieval endpoints (admin-only)"""
+
+    def test_analytics_summary(self, client, admin_key):
         """Test analytics summary endpoint"""
-        response = client.get("/analytics/summary")
+        response = client.get("/analytics/summary", headers=admin_key)
         assert response.status_code == 200
 
         data = response.json()
@@ -389,9 +392,9 @@ class TestAnalyticsRetrievalEndpoints:
         assert "avg_session_duration" in data["data"]
         assert "avg_failure_rate" in data["data"]
 
-    def test_analytics_recent(self, client):
+    def test_analytics_recent(self, client, admin_key):
         """Test analytics recent endpoint"""
-        response = client.get("/analytics/recent")
+        response = client.get("/analytics/recent", headers=admin_key)
         assert response.status_code == 200
 
         data = response.json()
@@ -399,9 +402,9 @@ class TestAnalyticsRetrievalEndpoints:
         assert "data" in data
         assert isinstance(data["data"], list)
 
-    def test_analytics_recent_with_limit(self, client):
+    def test_analytics_recent_with_limit(self, client, admin_key):
         """Test analytics recent endpoint with limit parameter"""
-        response = client.get("/analytics/recent?limit=10")
+        response = client.get("/analytics/recent?limit=10", headers=admin_key)
         assert response.status_code == 200
 
         data = response.json()
@@ -410,15 +413,75 @@ class TestAnalyticsRetrievalEndpoints:
         assert isinstance(data["data"], list)
         assert len(data["data"]) <= 10
 
-    def test_analytics_session(self, client):
+    def test_analytics_session(self, client, admin_key):
         """Test analytics session endpoint"""
-        response = client.get("/analytics/session/test-session-123")
+        response = client.get("/analytics/session/test-session-123", headers=admin_key)
         assert response.status_code == 200
 
         data = response.json()
         assert "status" in data
         assert "data" in data
         assert isinstance(data["data"], list)
+
+
+class TestAnalyticsRetrievalAuth:
+    """The GET endpoints expose session records, so they must not be public (P1-192)."""
+
+    @pytest.mark.parametrize("path", RETRIEVAL_PATHS)
+    def test_rejects_missing_key(self, client, admin_key, path):
+        response = client.get(path)
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize("path", RETRIEVAL_PATHS)
+    def test_rejects_wrong_key(self, client, admin_key, path):
+        response = client.get(path, headers={"X-Admin-Key": "wrong"})
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize("path", RETRIEVAL_PATHS)
+    def test_rejects_firebase_and_service_tokens(self, client, admin_key, path):
+        response = client.get(path, headers={"Authorization": "Bearer firebase-id-token"})
+        assert response.status_code == 401
+        response = client.get(path, headers={"Authorization": "Bearer test_api_token"})
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize("path", RETRIEVAL_PATHS)
+    def test_unconfigured_admin_key_still_denies(self, client, path):
+        with patch("config.ADMIN_API_KEY", None):
+            with patch("utils.admin_auth.ADMIN_API_KEY", None):
+                with patch("main.ADMIN_API_KEY", None):
+                    response = client.get(path, headers={"X-Admin-Key": "any"})
+        assert response.status_code == 503
+
+    def test_unknown_path_under_analytics_defaults_to_protected(self, client, admin_key):
+        assert client.get("/analytics/anything-new").status_code == 401
+
+    def test_post_stays_public_without_credentials(self, client, admin_key):
+        """Failure reports are sent before sign-in succeeds, so POST takes no Authorization header."""
+        payload = {
+            "session_duration": 1,
+            "api_calls": 1,
+            "api_failure_rate": "0%",
+            "retry_attempts": 0,
+            "location_failures": 0,
+            "error_count": 0,
+            "recent_errors": [],
+        }
+        response = client.post("/analytics", json=payload)
+        assert response.status_code == 200
+
+    def test_blacklisted_ip_can_post_but_not_read(self, client, admin_key):
+        payload = {
+            "session_duration": 1,
+            "api_calls": 1,
+            "api_failure_rate": "0%",
+            "retry_attempts": 0,
+            "location_failures": 0,
+            "error_count": 0,
+            "recent_errors": [],
+        }
+        with patch("main.is_ip_blacklisted", return_value=True):
+            assert client.post("/analytics", json=payload).status_code == 200
+            assert client.get("/analytics/summary", headers=admin_key).status_code == 403
 
 
 class TestAnalyticsEndpointIntegration:
@@ -518,7 +581,7 @@ class TestAnalyticsPerformanceFields:
         response = client.post("/analytics", json=data)
         assert response.status_code == 422
 
-    def test_analytics_summary_has_response_times(self, client):
+    def test_analytics_summary_has_response_times(self, client, admin_key):
         """After submitting a record with response_time_ms the summary should include response_times."""
         payload = {
             "session_duration": 60,
@@ -535,7 +598,7 @@ class TestAnalyticsPerformanceFields:
         post_resp = client.post("/analytics", json=payload)
         assert post_resp.status_code == 200
 
-        summary_resp = client.get("/analytics/summary")
+        summary_resp = client.get("/analytics/summary", headers=admin_key)
         assert summary_resp.status_code == 200
         summary = summary_resp.json()
         assert "data" in summary

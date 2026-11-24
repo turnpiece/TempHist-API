@@ -1,0 +1,7 @@
+$kind: http-request
+description: Rate-limiting stats across all monitored clients — suspicious, whitelisted and blacklisted IPs, with per-IP request and location stats. Admin only.
+url: "{{baseURL}}/rate-limit-stats"
+method: GET
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
+order: 6000

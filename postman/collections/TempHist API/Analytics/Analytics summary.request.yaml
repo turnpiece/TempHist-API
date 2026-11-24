@@ -1,4 +1,7 @@
 $kind: http-request
 url: "{{baseURL}}/analytics/summary"
 method: GET
+description: Aggregated totals — sessions, API calls, errors, average session duration and failure rate, platform and error-type breakdowns. Admin only.
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 order: 2000

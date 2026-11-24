@@ -1,0 +1,24 @@
+$kind: http-request
+description: Validation check — negative session_duration and an unknown selection_method should both be rejected.
+url: "{{baseURL}}/analytics"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "session_duration": -5,
+      "api_calls": 3,
+      "api_failure_rate": "0%",
+      "retry_attempts": 0,
+      "location_failures": 0,
+      "error_count": 0,
+      "selection_method": "teleport"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Rejected with 422', () => pm.response.to.have.status(422));
+order: 1700
