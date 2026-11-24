@@ -32,11 +32,13 @@ from config import (
     MAPBOX_TOKEN,
     OPEN_METEO_API_KEY,
     OPEN_METEO_GEOCODING_URL,
+    POPULAR_DEDUP_RADIUS_KM,
     POPULARITY_MAX_LOCATIONS,
     POPULARITY_WINDOW_DAYS,
     SAME_LOCATION_RADIUS_KM,
 )
 from routers._responses import error_responses
+from utils.share_store import _haversine_km
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1111,6 +1113,10 @@ def _build_popular_locations(limit: int) -> List[dict]:
     locations always pad the list so there are at least as many results as
     the preapproved list contains.  Falls back to preapproved (alphabetical)
     only when the usage tracker is unavailable.
+
+    An entry within POPULAR_DEDUP_RADIUS_KM of a higher-ranked entry is left
+    out (e.g. "Greater London" below London). Entries without coordinates are
+    always kept.
     """
     tracker = get_usage_tracker()
     loc_by_id = {loc.id: loc for loc in locations_data}
@@ -1118,17 +1124,27 @@ def _build_popular_locations(limit: int) -> List[dict]:
     if tracker is None:
         return [loc.model_dump() for loc in locations_data[:limit]]
 
+    result: List[dict] = []
+    kept_points: List[Tuple[float, float]] = []
+
+    def add(loc: dict) -> None:
+        lat, lon = loc.get("latitude"), loc.get("longitude")
+        if lat is not None and lon is not None:
+            if any(_haversine_km(lat, lon, k_lat, k_lon) <= POPULAR_DEDUP_RADIUS_KM for k_lat, k_lon in kept_points):
+                return
+            kept_points.append((lat, lon))
+        result.append(loc)
+
     # Fetch extra to cover IDs that may not be in the preapproved list
     ranked = tracker.get_popular_from_selections(limit=limit * 2, days=POPULARITY_WINDOW_DAYS)
 
-    result: List[dict] = []
     for location_id, _score in ranked:
         if location_id in loc_by_id:
-            result.append(loc_by_id[location_id].model_dump())
+            add(loc_by_id[location_id].model_dump())
         else:
             meta = tracker.get_location_metadata(location_id)
             if meta:
-                result.append(meta)
+                add(meta)
         if len(result) >= limit:
             break
 
@@ -1137,7 +1153,7 @@ def _build_popular_locations(limit: int) -> List[dict]:
         seen_ids = {loc["id"] for loc in result}
         for loc in locations_data:
             if loc.id not in seen_ids:
-                result.append(loc.model_dump())
+                add(loc.model_dump())
             if len(result) >= limit:
                 break
 

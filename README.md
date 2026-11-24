@@ -1237,6 +1237,7 @@ The popular locations endpoint surfaces locations ranked by how often users sele
 1. Locations are ranked by total `POST /v1/locations/selections` calls within the rolling `POPULARITY_WINDOW_DAYS` window (default 30 days), most-selected first.
 2. Preapproved locations always pad the result so there are at minimum as many entries as the preapproved list contains.
 3. When no selection signal exists at all (fresh deployment), the result is the preapproved list in alphabetical order.
+4. An entry within `POPULAR_DEDUP_RADIUS_KM` (default 12 km) of a higher-ranked entry is left out, so a GPS fix labelled "Greater London" doesn't list beside London. Counting is unaffected; entries without coordinates are always kept.
 
 Note: because `LocationItem` objects require full metadata (coordinates, images, etc.), only locations that exist in the preapproved list can appear in this endpoint's response. Non-preapproved popular locations are returned by `/v1/locations/popular/display-strings` and used directly by the cache prewarmer.
 
@@ -1787,6 +1788,7 @@ USAGE_RETENTION_DAYS=7                             # Days to retain usage data (
 ```bash
 POPULARITY_WINDOW_DAYS=30                          # Rolling window for selection aggregation (default: 30)
 POPULARITY_MAX_LOCATIONS=500                       # Default limit for /v1/locations/popular when ?limit= is omitted (default: 500)
+POPULAR_DEDUP_RADIUS_KM=12                         # Leave out popular entries this close to a higher-ranked one (default: 12)
                                                    # Use ?limit=N in requests to get fewer results
 ```
 
