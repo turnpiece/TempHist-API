@@ -1202,61 +1202,52 @@ async def get_popular_locations(
     if limit and not validate_limit(limit):
         raise HTTPException(status_code=400, detail=f"Invalid limit. Must be between 1 and {MAX_LIMIT}")
 
-    if_none_match = request.headers.get("if-none-match")
-    if if_none_match and if_none_match == locations_etag:
-        return Response(status_code=304)
-
-    if_modified_since = request.headers.get("if-modified-since")
-    if if_modified_since and if_modified_since == locations_last_modified:
-        return Response(status_code=304)
-
     # Cache always stores full location data (with images); strip at response time.
     cache_key = get_popular_cache_key(cache_country_key, tier)
-    cached_response = await get_cached_response(cache_key)
+    full_data = await get_cached_response(cache_key)
 
-    if cached_response:
-        response.headers["Cache-Control"] = LOCATIONS_CACHE_CONTROL_HEADER
-        response.headers["ETag"] = locations_etag
-        response.headers["Last-Modified"] = locations_last_modified
-        if not include_images:
-            for loc in cached_response.get("locations", []):
-                for field in _IMAGE_FIELDS:
-                    loc.pop(field, None)
-        return cached_response
+    if not full_data:
+        # Build ranked list (popularity order preserved), then apply filters.
+        # _build_popular_locations returns dicts (mixed preapproved + non-preapproved),
+        # so we filter inline rather than via filter_locations (which expects LocationItem).
+        popular = _build_popular_locations(limit or POPULARITY_MAX_LOCATIONS)
+        filtered: List[dict] = popular
+        if resolved_country:
+            if isinstance(resolved_country, frozenset):
+                filtered = [loc for loc in filtered if loc.get("country_code") in resolved_country]
+            else:
+                filtered = [loc for loc in filtered if loc.get("country_code") == resolved_country]
+        if tier:
+            filtered = [loc for loc in filtered if loc.get("tier") == tier]
+        if limit:
+            filtered = filtered[:limit]
 
-    # Build ranked list (popularity order preserved), then apply filters.
-    # _build_popular_locations returns dicts (mixed preapproved + non-preapproved),
-    # so we filter inline rather than via filter_locations (which expects LocationItem).
-    popular = _build_popular_locations(limit or POPULARITY_MAX_LOCATIONS)
-    filtered: List[dict] = popular
-    if resolved_country:
-        if isinstance(resolved_country, frozenset):
-            filtered = [loc for loc in filtered if loc.get("country_code") in resolved_country]
-        else:
-            filtered = [loc for loc in filtered if loc.get("country_code") == resolved_country]
-    if tier:
-        filtered = [loc for loc in filtered if loc.get("tier") == tier]
-    if limit:
-        filtered = filtered[:limit]
-
-    # Cache stores full data (images present for preapproved; absent for non-preapproved)
-    full_data = {
-        "version": 1,
-        "count": len(filtered),
-        "generated_at": datetime.now().isoformat(),
-        "locations": filtered,
-    }
-    await set_cached_response(cache_key, full_data, ttl=POPULAR_CACHE_TTL)
-
-    response.headers["Cache-Control"] = LOCATIONS_CACHE_CONTROL_HEADER
-    response.headers["ETag"] = locations_etag
-    response.headers["Last-Modified"] = locations_last_modified
+        # Cache stores full data (images present for preapproved; absent for non-preapproved)
+        full_data = {
+            "version": 1,
+            "count": len(filtered),
+            "generated_at": datetime.now().isoformat(),
+            "locations": filtered,
+        }
+        await set_cached_response(cache_key, full_data, ttl=POPULAR_CACHE_TTL)
 
     if include_images:
-        return full_data
+        body = full_data
+    else:
+        slim_locs = [{k: v for k, v in loc.items() if k not in _IMAGE_FIELDS} for loc in full_data.get("locations", [])]
+        body = {**full_data, "locations": slim_locs}
 
-    slim_locs = [{k: v for k, v in loc.items() if k not in _IMAGE_FIELDS} for loc in filtered]
-    return {**full_data, "locations": slim_locs}
+    # The ranking changes with usage, so the ETag must come from the list actually served, not from the
+    # preapproved file. generated_at is left out so an unchanged list keeps its ETag across hourly rebuilds.
+    # No Last-Modified: there is no meaningful date for a ranking, and the file mtime would never change.
+    etag = generate_etag(json.dumps(body["locations"], sort_keys=True, default=str))
+    response.headers["Cache-Control"] = LOCATIONS_CACHE_CONTROL_HEADER
+    response.headers["ETag"] = etag
+
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": LOCATIONS_CACHE_CONTROL_HEADER})
+
+    return body
 
 
 @router.get("/v1/locations/popular/status", responses={200: {"model": LocationsStatusResponse}})
