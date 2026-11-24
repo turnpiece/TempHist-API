@@ -11,6 +11,9 @@ def is_admin_path(path: str, method: str) -> bool:
     """Return True if the path is an admin-only route (X-Admin-Key required)."""
     if path.startswith("/admin/"):
         return True
+    # Only POST /analytics (client telemetry) is public; reads and anything added later are admin-only.
+    if path.startswith("/analytics") and not (path == "/analytics" and method == "POST"):
+        return True
     if path.startswith("/usage-stats"):
         return True
     if path.startswith("/cache-stats"):

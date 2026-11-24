@@ -1,0 +1,41 @@
+$kind: http-request
+description: Public. Sends a session with failures, so error_types and failure-rate figures appear in Analytics summary. Uses every field the API accepts. selection_method must be one of own_location, carousel, recent, popular, search.
+url: "{{baseURL}}/analytics"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "session_duration": 340,
+      "api_calls": 12,
+      "api_failure_rate": "17%",
+      "retry_attempts": 3,
+      "location_failures": 1,
+      "error_count": 2,
+      "recent_errors": [
+        {
+          "timestamp": "{{$isoTimestamp}}",
+          "error_type": "api",
+          "message": "Upstream timeout",
+          "location": "London, England, United Kingdom",
+          "endpoint": "/v1/records/daily/London, England, United Kingdom/10-31",
+          "status_code": 504
+        },
+        {
+          "timestamp": "{{$isoTimestamp}}",
+          "error_type": "network",
+          "message": "Connection reset"
+        }
+      ],
+      "app_version": "1.2.30",
+      "platform": "Android",
+      "session_id": "test-session-002",
+      "response_time_ms": 2350,
+      "cache_hit": false,
+      "requested_location": "london",
+      "canonical_location": "London, England, United Kingdom",
+      "selection_method": "search"
+    }
+order: 1500

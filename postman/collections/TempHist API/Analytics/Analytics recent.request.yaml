@@ -1,6 +1,9 @@
 $kind: http-request
 url: "{{baseURL}}/analytics/recent"
 method: GET
+description: Most recent client analytics records, newest first (limit 1–1000, default 100). Admin only.
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
 queryParams:
   limit: "50"
 order: 3000

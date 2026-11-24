@@ -81,12 +81,14 @@ async def root():
             "/cache/invalidate/expired",
             "/cache/clear",
         ],
-        "analytics_endpoints": [
-            "/analytics",
-            "/analytics/summary",
-            "/analytics/recent",
-            "/analytics/session/{session_id}",
-        ],
+        "analytics_endpoints": {
+            "public": ["POST /analytics"],
+            "admin (X-Admin-Key)": [
+                "GET /analytics/summary",
+                "GET /analytics/recent",
+                "GET /analytics/session/{session_id}",
+            ],
+        },
     }
 
 

@@ -979,10 +979,16 @@ The analytics system collects **client-reported** session data submitted by the 
 
 | Endpoint | Description | Auth |
 | -------- | ----------- | ---- |
-| `POST /analytics` | Submit a client session analytics record | Public (rate-limited: 100/hour per IP) |
-| `GET /analytics/summary` | Aggregated totals across all submitted sessions | Public |
-| `GET /analytics/recent` | Most recent submitted records (query param: `limit`, 1–1000, default 100) | Public |
-| `GET /analytics/session/{session_id}` | All records for a specific session ID | Public |
+| `POST /analytics` | Submit a client session analytics record | Public (rate-limited per IP, `ANALYTICS_RATE_LIMIT`, default 1000/hour) |
+| `GET /analytics/summary` | Aggregated totals across all submitted sessions | Admin (`X-Admin-Key`) |
+| `GET /analytics/recent` | Most recent submitted records (query param: `limit`, 1–1000, default 100) | Admin (`X-Admin-Key`) |
+| `GET /analytics/session/{session_id}` | All records for a specific session ID | Admin (`X-Admin-Key`) |
+
+Only `POST /analytics` is public, because clients report telemetry before sign-in has succeeded. The three GET endpoints return session records, so they require the `X-Admin-Key` header (the same `ADMIN_API_KEY` used by the other operational endpoints) and answer `401` without it, or `503` if `ADMIN_API_KEY` is not configured. Any new route under `/analytics` is admin-only by default.
+
+```bash
+curl -H "X-Admin-Key: $ADMIN_API_KEY" "https://<api-host>/analytics/summary"
+```
 
 The submitting client's IP address is used only for the per-IP rate limit (a short-lived counter in Redis). It is not stored in analytics records, returned by these endpoints, or written to the application logs.
 
@@ -1237,6 +1243,7 @@ The popular locations endpoint surfaces locations ranked by how often users sele
 1. Locations are ranked by total `POST /v1/locations/selections` calls within the rolling `POPULARITY_WINDOW_DAYS` window (default 30 days), most-selected first.
 2. Preapproved locations always pad the result so there are at minimum as many entries as the preapproved list contains.
 3. When no selection signal exists at all (fresh deployment), the result is the preapproved list in alphabetical order.
+4. An entry within `POPULAR_DEDUP_RADIUS_KM` (default 12 km) of a higher-ranked entry is left out, so a GPS fix labelled "Greater London" doesn't list beside London. Counting is unaffected; entries without coordinates are always kept.
 
 Note: because `LocationItem` objects require full metadata (coordinates, images, etc.), only locations that exist in the preapproved list can appear in this endpoint's response. Non-preapproved popular locations are returned by `/v1/locations/popular/display-strings` and used directly by the cache prewarmer.
 
@@ -1787,6 +1794,7 @@ USAGE_RETENTION_DAYS=7                             # Days to retain usage data (
 ```bash
 POPULARITY_WINDOW_DAYS=30                          # Rolling window for selection aggregation (default: 30)
 POPULARITY_MAX_LOCATIONS=500                       # Default limit for /v1/locations/popular when ?limit= is omitted (default: 500)
+POPULAR_DEDUP_RADIUS_KM=12                         # Leave out popular entries this close to a higher-ranked one (default: 12)
                                                    # Use ?limit=N in requests to get fewer results
 ```
 

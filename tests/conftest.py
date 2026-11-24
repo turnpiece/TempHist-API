@@ -57,3 +57,15 @@ def close_module_http_clients():
             loop.run_until_complete(_close_all())
         finally:
             loop.close()
+
+
+@pytest.fixture
+def admin_key():
+    """Configure a known ADMIN_API_KEY and return the matching X-Admin-Key header."""
+    from unittest.mock import patch
+
+    key = "test-admin-key"
+    with patch("config.ADMIN_API_KEY", key):
+        with patch("utils.admin_auth.ADMIN_API_KEY", key):
+            with patch("main.ADMIN_API_KEY", key):
+                yield {"X-Admin-Key": key}

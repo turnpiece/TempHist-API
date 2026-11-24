@@ -1,0 +1,7 @@
+$kind: http-request
+description: Selections and popularity rank for one canonical location_id (the last path segment). Get real IDs from Monitoring → Usage stats. Returns status "not_found" if that location has no selections in the window. Admin only.
+url: "{{baseURL}}/usage-stats/london"
+method: GET
+headers:
+  X-Admin-Key: "{{ADMIN_API_KEY}}"
+order: 5000

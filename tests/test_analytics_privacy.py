@@ -116,14 +116,14 @@ def clear_test_ip_rate_limit():
     _clear()
 
 
-def test_submitted_ip_is_not_served_by_the_analytics_endpoints(client):
+def test_submitted_ip_is_not_served_by_the_analytics_endpoints(client, admin_key):
     headers = {"X-Forwarded-For": TEST_IP}
 
     submit = client.post("/analytics", json=VALID_PAYLOAD, headers=headers)
     assert submit.status_code == 200
 
     for path in ("/analytics/recent?limit=50", "/analytics/session/privacy-test-session", "/analytics/summary"):
-        response = client.get(path, headers=headers)
+        response = client.get(path, headers={**headers, **admin_key})
         assert response.status_code == 200
         assert TEST_IP not in response.text, path
         assert "client_ip" not in response.text, path

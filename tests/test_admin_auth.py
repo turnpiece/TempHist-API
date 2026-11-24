@@ -39,6 +39,9 @@ def admin_key_env():
         ("/cache-stats", "GET"),
         ("/rate-limit-stats", "GET"),
         ("/cache/clear", "DELETE"),
+        ("/analytics/summary", "GET"),
+        ("/analytics/recent", "GET"),
+        ("/analytics/session/abc", "GET"),
     ],
 )
 def test_admin_endpoints_reject_missing_key(client, admin_key_env, path, method):
@@ -110,6 +113,10 @@ def test_admin_endpoint_returns_503_when_not_configured(client):
         ("/cache/clear", True),
         ("/cache/invalidate/pattern", True),
         ("/admin/clear-job-queue", True),
+        ("/analytics/summary", True),
+        ("/analytics/recent", True),
+        ("/analytics/session/abc", True),
+        ("/analytics/anything-new", True),
         ("/v1/records/daily/london/06-09", False),
         ("/rate-limit-status", False),
         ("/health", False),
@@ -120,3 +127,18 @@ def test_is_admin_path(path, expected):
 
     method = "DELETE" if path == "/cache/clear" else "GET"
     assert is_admin_path(path, method) is expected
+
+
+def test_only_post_analytics_is_public():
+    from main import is_public_route
+    from utils.admin_auth import is_admin_path
+
+    assert is_public_route("/analytics", "POST")
+    assert not is_admin_path("/analytics", "POST")
+    for method in ("GET", "PUT", "DELETE"):
+        assert not is_public_route("/analytics", method)
+        assert is_admin_path("/analytics", method)
+    for path in ("/analytics/summary", "/analytics/recent", "/analytics/session/abc", "/analytics/new"):
+        for method in ("GET", "POST"):
+            assert not is_public_route(path, method)
+            assert is_admin_path(path, method)
