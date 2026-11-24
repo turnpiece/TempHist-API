@@ -493,11 +493,16 @@ app.middleware("http")(add_security_headers)
 app.middleware("http")(request_size_middleware)
 
 
+def _is_analytics_submission(path: str, method: str) -> bool:
+    """Return True for the one public analytics route: clients POST telemetry, even before sign-in."""
+    return path == "/analytics" and method == "POST"
+
+
 def _check_ip_blacklist(request: Request, client_ip: str) -> Optional[JSONResponse]:
-    """Block blacklisted IPs except for health and analytics endpoints."""
+    """Block blacklisted IPs except for health checks and analytics submissions."""
     if not is_ip_blacklisted(client_ip):
         return None
-    if request.url.path in ("/health",) or request.url.path.startswith("/analytics"):
+    if request.url.path == "/health" or _is_analytics_submission(request.url.path, request.method):
         return None
     if DEBUG:
         logger.warning(f"🚫 BLACKLISTED IP BLOCKED: {request.method} {request.url.path}")
@@ -512,18 +517,23 @@ _PUBLIC_PATHS = frozenset([
     "/test-cors",
     "/test-redis",
     "/rate-limit-status",
-    "/analytics",
     "/health",
     "/health/detailed",
     "/v1/jobs/diagnostics/worker-status",
 ])
 
-_PUBLIC_PREFIXES = ("/static", "/analytics", "/data", "/v1/shares/", "/v1/og/")
+_PUBLIC_PREFIXES = ("/static", "/data", "/v1/shares/", "/v1/og/")
 
 
 def is_public_route(path: str, method: str) -> bool:
-    """Return True for routes that require no auth or rate limiting."""
+    """Return True for routes that require no auth or rate limiting.
+
+    /analytics is deliberately not a public prefix: only the POST is public, and everything else
+    under it is admin-only (see utils.admin_auth.is_admin_path).
+    """
     if path == "/v1/shares" and method == "GET":
+        return True
+    if _is_analytics_submission(path, method):
         return True
     return path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES)
 

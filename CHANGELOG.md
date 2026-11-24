@@ -2,6 +2,23 @@
 
 All notable changes, improvements, and fixes to the TempHist API.
 
+## [2026-10-31] - Analytics Reads Require the Admin Key (unreleased)
+
+P1-192 (#167). `GET /analytics/summary`, `/analytics/recent` and `/analytics/session/{id}` were public and unauthenticated: anyone could read up to 1000 recent session records (user agent, app version, platform, locations, session IDs, error details, response times). Only `POST /analytics` needs to be public, since the apps send it even when sign-in has failed.
+
+### Changed
+
+- **The three GET endpoints now require `X-Admin-Key`** (the existing `ADMIN_API_KEY`) and return `401` without it, or `503` when `ADMIN_API_KEY` is not set. Firebase and `API_ACCESS_TOKEN` credentials do not grant access.
+- **`POST /analytics` is the only public analytics route.** The blanket `/analytics` prefix is gone from the public list, so any new route under it is admin-only by default. Its per-IP rate limit is unchanged.
+- **Blacklisted IPs can still `POST /analytics`** but can no longer reach the GET endpoints.
+- `GET /` lists the analytics endpoints as public and admin. The README table is corrected, including the POST rate limit, which is `ANALYTICS_RATE_LIMIT` (default 1000/hour), not 100.
+
+### Note
+
+Anything reading these endpoints without credentials must now send `X-Admin-Key`. No web, mobile, poster or social client does.
+
+---
+
 ## [2026-10-23] - Incomplete Year Sets Are Rejected (unreleased)
 
 P1-190 (#163). Some yearly share images showed bars for only a handful of years (every fourth year for Taito, Japan) while weekly shares for the same place were fine. The bars were real data: a partial set of per-year records had been cached as a bundle, and the OG image route drew whatever non-empty set it found.

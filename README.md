@@ -979,10 +979,16 @@ The analytics system collects **client-reported** session data submitted by the 
 
 | Endpoint | Description | Auth |
 | -------- | ----------- | ---- |
-| `POST /analytics` | Submit a client session analytics record | Public (rate-limited: 100/hour per IP) |
-| `GET /analytics/summary` | Aggregated totals across all submitted sessions | Public |
-| `GET /analytics/recent` | Most recent submitted records (query param: `limit`, 1–1000, default 100) | Public |
-| `GET /analytics/session/{session_id}` | All records for a specific session ID | Public |
+| `POST /analytics` | Submit a client session analytics record | Public (rate-limited per IP, `ANALYTICS_RATE_LIMIT`, default 1000/hour) |
+| `GET /analytics/summary` | Aggregated totals across all submitted sessions | Admin (`X-Admin-Key`) |
+| `GET /analytics/recent` | Most recent submitted records (query param: `limit`, 1–1000, default 100) | Admin (`X-Admin-Key`) |
+| `GET /analytics/session/{session_id}` | All records for a specific session ID | Admin (`X-Admin-Key`) |
+
+Only `POST /analytics` is public, because clients report telemetry before sign-in has succeeded. The three GET endpoints return session records, so they require the `X-Admin-Key` header (the same `ADMIN_API_KEY` used by the other operational endpoints) and answer `401` without it, or `503` if `ADMIN_API_KEY` is not configured. Any new route under `/analytics` is admin-only by default.
+
+```bash
+curl -H "X-Admin-Key: $ADMIN_API_KEY" "https://<api-host>/analytics/summary"
+```
 
 The submitting client's IP address is used only for the per-IP rate limit (a short-lived counter in Redis). It is not stored in analytics records, returned by these endpoints, or written to the application logs.
 
