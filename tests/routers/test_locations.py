@@ -144,6 +144,20 @@ def mock_redis():
     return mock_redis
 
 
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    """Clear the in-process per-IP rate limiter so each test starts with a full allowance.
+
+    Every TestClient request comes from the same IP, so without this the tests late in the file
+    get 429s once the file as a whole exceeds RATE_LIMIT_REQUESTS per window.
+    """
+    from routers.locations import rate_limit_requests
+
+    rate_limit_requests.clear()
+    yield
+    rate_limit_requests.clear()
+
+
 @pytest.fixture
 def sample_locations():
     """Sample location data for testing."""
@@ -760,6 +774,42 @@ class TestPopularLocationsEndpoint:
         for loc in response.json()["locations"]:
             assert "imageUrl" in loc
             assert "imageAlt" in loc
+
+    def test_etag_round_trip_returns_304(self, client, mock_locations_data):
+        """Revalidating with the ETag just served returns 304 while the list is unchanged."""
+        first = client.get("/v1/locations/popular")
+        etag = first.headers["ETag"]
+
+        second = client.get("/v1/locations/popular", headers={"If-None-Match": etag})
+        assert second.status_code == 304
+        assert second.headers["ETag"] == etag
+
+    def test_etag_is_not_the_preapproved_file_etag(self, client, mock_locations_data):
+        """A client holding the preapproved-file ETag (served before this fix) gets the list, not a 304."""
+        response = client.get("/v1/locations/popular", headers={"If-None-Match": '"test-etag"'})
+        assert response.status_code == 200
+        assert response.headers["ETag"] != '"test-etag"'
+        assert "Last-Modified" not in response.headers
+
+    def test_etag_changes_when_ranking_changes(self, client, mock_locations_data):
+        """When the popular list changes, an old ETag no longer matches, so clients receive the new list."""
+        list_a = [{"id": "london", "name": "London", "country_code": "GB", "tier": "global"}]
+        list_b = [{"id": "paris", "name": "Paris", "country_code": "FR", "tier": "global"}]
+
+        with patch("routers.locations._build_popular_locations", return_value=list_a):
+            etag_a = client.get("/v1/locations/popular").headers["ETag"]
+        with patch("routers.locations._build_popular_locations", return_value=list_b):
+            response = client.get("/v1/locations/popular", headers={"If-None-Match": etag_a})
+
+        assert response.status_code == 200
+        assert response.headers["ETag"] != etag_a
+        assert [loc["id"] for loc in response.json()["locations"]] == ["paris"]
+
+    def test_etag_differs_with_include_images(self, client, mock_locations_data):
+        """The slim and image-bearing representations have different ETags."""
+        slim = client.get("/v1/locations/popular").headers["ETag"]
+        full = client.get("/v1/locations/popular?include_images=true").headers["ETag"]
+        assert slim != full
 
 
 class TestPopularStatusEndpoint:
